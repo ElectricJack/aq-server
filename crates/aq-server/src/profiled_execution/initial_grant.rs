@@ -356,6 +356,21 @@ async fn locked(
         return Err(refused());
     }
     let graph_spec = graph::Input::spec(tx, request.binding.attempt_id).await?;
+    #[cfg(feature = "project_environments")]
+    if old.is_none()
+        && aq_machine_control::task_needs::blocks_observation(
+            &mut **tx,
+            (
+                view.project_id,
+                graph_spec.task.task_id,
+                i64::try_from(graph_spec.task.version).map_err(|_| refused())?,
+            ),
+        )
+        .await
+        .map_err(db)?
+    {
+        return Err(refused());
+    }
     let mut graph_context = None;
     let mut expected = Vec::new();
     let mut ceiling = plan

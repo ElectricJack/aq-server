@@ -17,7 +17,7 @@ pub(super) async fn writable(
         "SELECT a.attempt_id,h.report_id,hot.state#>>'{stop,kind}'
          FROM execution_attempts a LEFT JOIN profiled_result_heads h USING(attempt_id)
          LEFT JOIN profiled_authority_hot hot USING(attempt_id)
-         WHERE a.task_id=$1 AND (a.holds_task OR h.report_id IS NOT NULL
+         WHERE a.task_id=$1 AND (h.report_id IS NOT NULL
            OR NOT (COALESCE(hot.state,a.state)->>'status' IN ('offered','preparing','declined','never_granted')
             AND COALESCE(jsonb_typeof(COALESCE(hot.state,a.state)->'grant'),'null')='null'))
          ORDER BY COALESCE((a.state#>>'{offer,binding,assignment_generation}')::bigint,
@@ -27,6 +27,17 @@ pub(super) async fn writable(
     let Some((attempt, report, stop)) = latest else {
         return Ok(true);
     };
+    let other_hold: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE task_id=$1 AND attempt_id<>$2 AND holds_task)",
+    )
+    .bind(task)
+    .bind(attempt)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(crate::error::db)?;
+    if !direct || other_hold {
+        return Ok(false);
+    }
     let owner: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users u CROSS JOIN project_execution_bindings p
            WHERE u.id=$1 AND u.role='owner' AND p.project_id=$2 AND p.revision=$3
@@ -38,7 +49,7 @@ pub(super) async fn writable(
     .fetch_one(&mut **tx)
     .await
     .map_err(crate::error::db)?;
-    if !direct || !owner {
+    if !owner {
         return Ok(false);
     }
     let (Some(report), Some("stopped")) = (report, stop.as_deref()) else {

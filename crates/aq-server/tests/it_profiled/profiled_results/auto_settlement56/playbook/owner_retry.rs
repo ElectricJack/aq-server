@@ -736,7 +736,10 @@ async fn successor_needs_requires_an_exact_quiescent_predecessor() {
     let blocked = set_needs().await;
     assert_eq!(blocked["data"]["disposition"], "rejected", "{blocked}");
     sqlx::query("DELETE FROM playbook_host_operations WHERE operation_id=$1")
-        .bind(running).execute(&h.pool).await.unwrap();
+        .bind(running)
+        .execute(&h.pool)
+        .await
+        .unwrap();
 
     let accepted = set_needs().await;
     assert_eq!(accepted["data"]["disposition"], "confirmed", "{accepted}");
@@ -748,16 +751,25 @@ async fn successor_needs_requires_an_exact_quiescent_predecessor() {
     .await
     .unwrap();
     let patch: Value = serde_json::from_slice(&raw).unwrap();
-    assert_eq!(patch["operations"][0]["expected_version"], env.expected_version);
-    assert_eq!(patch["operations"][0]["patch"]["metadata"]["aq:needs"], json!(["terminal-test"]));
+    assert_eq!(
+        patch["operations"][0]["expected_version"],
+        env.expected_version
+    );
+    assert_eq!(
+        patch["operations"][0]["patch"]["metadata"]["aq:needs"],
+        json!(["terminal-test"])
+    );
     assert!(env.holds_task().await);
     let mut db = h.pool.acquire().await.unwrap();
     let observed = env.expected_version as i64;
     for (revision, blocks) in [(observed, true), (observed + 1, false)] {
         assert_eq!(
-            aq_machine_control::task_needs::blocks_observation(&mut db, (project, h.task, revision))
-                .await
-                .unwrap(),
+            aq_machine_control::task_needs::blocks_observation(
+                &mut db,
+                (project, h.task, revision)
+            )
+            .await
+            .unwrap(),
             blocks
         );
     }

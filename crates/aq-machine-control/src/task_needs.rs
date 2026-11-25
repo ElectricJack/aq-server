@@ -16,10 +16,11 @@ pub async fn blocks_observation(
     sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM dashboard_graph_intents i JOIN dashboard_operations d USING(operation_id)
          WHERE i.project_id=$1 AND d.kind='task.needs.set'
+           AND d.disposition IN ('pending','unknown','confirmed')
            AND d.response#>>'{subject_refs,0,id}'=$2::uuid::text
            AND (d.disposition IN ('pending','unknown') OR (d.disposition='confirmed'
              AND d.response#>>'{subject_refs,0,revision}' ~ '^[1-9][0-9]{0,18}$'
-             AND (d.response#>>'{subject_refs,0,revision}')::numeric >= $3)))",
+             AND (d.response#>>'{subject_refs,0,revision}')::numeric >= $3::bigint)))",
     )
     .bind(project).bind(task).bind(version)
     .fetch_one(db).await

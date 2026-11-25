@@ -57,6 +57,20 @@ async fn issue_prepared_grant(
         observed,
         current,
     } = &mut preflight;
+    #[cfg(feature = "project_environments")]
+    if aq_machine_control::task_needs::blocks_observation(
+        &mut tx,
+        (
+            after.input.spec.lifecycle.project_id,
+            after.input.spec.task.task_id,
+            i64::try_from(after.input.spec.task.version).map_err(|_| refused())?,
+        ),
+    )
+    .await
+    .map_err(db)?
+    {
+        return Err(refused());
+    }
     let counts = lock_unissued_lineage(&mut tx, after).await?;
     let issued = now(state)?;
     observed.validate_for(&after.input, issued)?;
