@@ -45,7 +45,6 @@ fn detail(report: &ResultReport, revision: &str, profile: bool) -> String {
     )
 }
 
-<<<<<<< HEAD
 fn assert_source_metadata(item: &Value, retained: &Value, report: &ResultReport) {
     assert_eq!(item["origin"], ORIGIN);
     assert_eq!(
@@ -107,7 +106,8 @@ async fn assert_paginated_sources(f: &terminal::Prepared, retained: &Value, repo
     for item in [&first["items"][0], &second["items"][0]] {
         assert_source_metadata(item, retained, report);
     }
-=======
+}
+
 #[tokio::test]
 async fn a_project_supervisor_discovers_native_results_in_both_reads() {
     let (f, report) = Box::pin(ready()).await;
@@ -224,7 +224,6 @@ async fn a_project_supervisor_discovers_native_results_in_both_reads() {
     .await;
     assert_eq!(status, StatusCode::OK, "{empty}");
     assert_eq!(empty["data"]["items"], serde_json::json!([]), "{empty}");
->>>>>>> refs/remotes/central/main
 }
 
 #[tokio::test]

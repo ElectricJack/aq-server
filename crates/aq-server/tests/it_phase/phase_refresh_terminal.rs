@@ -384,12 +384,6 @@ fn synthetic_suppressed_closure(
     execution: &phase::ExecutionReceipt,
 ) -> wire::ClosureRequest {
     use aq_admission::granted_closure as closure;
-<<<<<<< HEAD
-=======
-    let f = Box::pin(terminal::prepared_terminal()).await;
-    let execution = terminal::issue(&f).await;
-    assert_eq!(terminal_reservations(&f).await, 1);
->>>>>>> refs/remotes/central/main
     let fixtures: Value = serde_json::from_str(include_str!(
         "../../../aq-phase-terminal-protocol/artifacts/refresh-v1/fixtures.json"
     ))
@@ -437,6 +431,7 @@ fn synthetic_suppressed_closure(
 async fn no_started_refresh_closure_revokes_permission_retains_holds_and_replays_exact_ack() {
     let f = Box::pin(terminal::prepared_terminal()).await;
     let execution = terminal::issue(&f).await;
+    assert_eq!(terminal_reservations(&f).await, 1);
     let q = synthetic_suppressed_closure(&f, &execution);
     let bytes = serde_json::to_vec(&q).unwrap();
     let (status, encoded) = post(&f, "launch-closure", bytes.clone(), None).await;
