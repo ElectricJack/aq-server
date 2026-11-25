@@ -25,6 +25,7 @@ use aq_admission::{
 };
 use aq_machine_control::holds;
 use aq_profiled_state::git_author::PollDelivery;
+use aq_role_settings::refusals::SlotResources as Slot;
 use aq_routing::Placement;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
@@ -958,11 +959,13 @@ async fn offers(
             {
                 return Err(refused());
             }
-            let limits = &built.native.offered.offer.manifest.resources;
-            if limits.memory_bytes > request.available.memory_bytes
-                || limits.cpu_millis > request.available.cpu_millis
-                || fact.bundle_bytes() > request.available.disk_bytes
-            {
+            let need = &built.native.offered.offer.manifest.resources;
+            let need = Slot::new(need.cpu_millis, need.memory_bytes, fact.bundle_bytes());
+            let have = &request.available;
+            let have = Slot::new(have.cpu_millis, have.memory_bytes, have.disk_bytes);
+            if let Some(short) = need.short_on(have, auth.id()) {
+                crate::role_settings::offer_refused(state, task.task_id, policy.project_id, &short)
+                    .await;
                 return Err(refused());
             }
             let inspection =
