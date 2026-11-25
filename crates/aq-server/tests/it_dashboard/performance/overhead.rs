@@ -1,6 +1,6 @@
 //! Opt-in local benchmark. Supply the diagnostics switch outside the test
 //! process so the production startup path controls capture in both arms.
-use crate::common::native_offer::{poll_offered, setup};
+use crate::common::native_offer::setup;
 use aq_admission::{
     control::{ControlReply, NativePollPage, decode_reply},
     transport::Poll,
@@ -52,14 +52,6 @@ async fn writes(pool: &PgPool) -> (i64, i64) {
 async fn poll_diagnostics_overhead() {
     let case = setup().await;
     let pool = &case.env.env.pool;
-    let (status, body) = poll_offered(&case).await;
-    assert!(status.is_success(), "{body}");
-    let ControlReply::Poll(first) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-    else {
-        panic!("{body}");
-    };
-    let expected_offer = first.offers[0].offered.offer.binding.clone();
-    assert_eq!(first.offers.len(), 1);
     let worker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let worker_origin = format!("http://{}", worker.local_addr().unwrap());
     let admin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -81,6 +73,20 @@ async fn poll_diagnostics_overhead() {
         .unwrap()
         .error_for_status()
         .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let page = poll(&http, &endpoint, &case.env.env.credential, &case.request).await;
+            if !page.offers.is_empty() {
+                break page;
+            }
+            tokio::time::sleep(CADENCE).await;
+        }
+    })
+    .await
+    .expect("one new offer on the same authenticated fixture in both arms");
+    assert_eq!(first.offers.len(), 1);
+    let expected_offer = first.offers[0].offered.offer.binding.clone();
+    tokio::time::sleep(Duration::from_millis(6_100)).await;
     let (before_total, before_diagnostics) = writes(pool).await;
     let mut latencies = Vec::with_capacity(POLLS);
     let mut empty = 0;
@@ -141,7 +147,8 @@ async fn poll_diagnostics_overhead() {
             "enabled": enabled, "polls": POLLS, "elapsed_s": elapsed.as_secs_f64(),
             "throughput": POLLS as f64 / elapsed.as_secs_f64(),
             "p50_us": latencies[POLLS.div_ceil(2) - 1], "p95_us": latencies[(POLLS * 95).div_ceil(100) - 1],
-            "empty": empty, "redeliveries": redeliveries, "captures": captures, "drops": drops,
+            "empty": empty, "redeliveries": redeliveries, "claims": claims,
+        "captures": captures, "drops": drops,
             "total_tuple_writes": after_total - before_total,
             "diagnostic_tuple_writes": after_diagnostics - before_diagnostics,
         })
