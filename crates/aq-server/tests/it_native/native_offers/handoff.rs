@@ -491,6 +491,8 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
     use super::environments::{TEMPLATE, definition_of, on_web, ready, republish};
     use crate::common::roles;
     use aq_profiles::roles::Kind;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
 
     let mut c = native_offer::setup().await;
     on_web(&mut c).await;
@@ -546,6 +548,14 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
         successor.offered.offer.manifest.bindings.task_id,
         first.offered.offer.manifest.bindings.task_id
     );
+    assert_eq!(
+        successor.offered.offer.manifest.agent_profile,
+        first.offered.offer.manifest.agent_profile
+    );
+    assert_eq!(
+        successor.offered.offer.manifest.execution_profile,
+        first.offered.offer.manifest.execution_profile
+    );
     let attempt = successor.offered.offer.binding.attempt_id;
     assert_ne!(attempt, first.offered.offer.binding.attempt_id);
     let scope: Value =
@@ -558,9 +568,25 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
 
     let (_, plan, request, _) = native_offer::prepare_request(&mut c, &successor).await;
     let nonce = Uuid::new_v4();
-    let delivery = initial_grant::prepare(&c.env.env.state, &auth(&c).await, &request, nonce)
+    let response = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/prepare")
+                .header("authorization", format!("Bearer {}", c.env.env.credential))
+                .header("content-type", "application/json")
+                .header("aq-delivery-nonce", nonce.to_string())
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&request).unwrap(),
+                ))
+                .unwrap(),
+        )
         .await
         .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let ControlReply::InitialGrant(delivery) = decode_reply(&bytes).unwrap() else {
+        panic!("expected initial grant");
+    };
     delivery
         .validate_for(&request, &plan, &successor, nonce)
         .unwrap();
