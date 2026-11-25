@@ -3,7 +3,7 @@ use crate::AppState;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::{Value, json};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgPool, Row};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
@@ -16,7 +16,7 @@ pub(crate) use sampler::spawn;
 const MINUTE: i64 = 60_000;
 const DAY: i64 = 1_440 * MINUTE;
 
-#[derive(sqlx::FromRow, Serialize)]
+#[derive(Serialize)]
 struct FleetMinute {
     minute_ms: i64,
     #[serde(skip)]
@@ -27,7 +27,7 @@ struct FleetMinute {
     accuracy: String,
 }
 
-#[derive(sqlx::FromRow, Serialize)]
+#[derive(Serialize)]
 struct MachineMinute {
     minute_ms: i64,
     #[serde(skip)]
@@ -79,22 +79,43 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
     // The active minute is included when observed; all rows use the same grid.
     let first = cutoff.div_euclid(MINUTE) * MINUTE - DAY + MINUTE;
     let mut tx = read_snapshot(pool).await?;
-    let ready: Vec<FleetMinute> = sqlx::query_as(
+    let ready = sqlx::query(
         "SELECT minute_ms,observed_at_ms,inventory_complete,ready_count AS count,ready_accuracy AS accuracy
          FROM performance_fleet_minutes WHERE minute_ms >= $1 AND observed_at_ms <= $2
          ORDER BY minute_ms",
     )
     .bind(first)
     .bind(cutoff)
+    .try_map(|row| {
+        Ok(FleetMinute {
+            minute_ms: row.try_get("minute_ms")?,
+            observed_at_ms: row.try_get("observed_at_ms")?,
+            inventory_complete: row.try_get("inventory_complete")?,
+            count: row.try_get("count")?,
+            accuracy: row.try_get("accuracy")?,
+        })
+    })
     .fetch_all(&mut *tx)
     .await?;
-    let samples: Vec<MachineMinute> = sqlx::query_as(
+    let samples = sqlx::query(
         "SELECT m.* FROM performance_machine_minutes m JOIN performance_fleet_minutes f USING(minute_ms)
          WHERE m.minute_ms >= $1 AND f.observed_at_ms <= $2
          ORDER BY m.minute_ms,m.machine_id",
     )
     .bind(first)
     .bind(cutoff)
+    .try_map(|row| {
+        Ok(MachineMinute {
+            minute_ms: row.try_get("minute_ms")?,
+            machine_id: row.try_get("machine_id")?,
+            label: row.try_get("label")?,
+            state: row.try_get("state")?,
+            enabled_slots: row.try_get("enabled_slots")?,
+            occupied_slots: row.try_get("occupied_slots")?,
+            free_slots: row.try_get("free_slots")?,
+            enabled_occupied_slots: row.try_get("enabled_occupied_slots")?,
+        })
+    })
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -112,8 +133,10 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
             .push(sample);
     }
     let mut machines: Vec<Value> = Vec::new();
+    let mut partial = false;
     for (id, samples) in grouped {
         let label = &samples[samples.len() - 1].label;
+        partial |= samples.iter().any(|sample| sample.state == "partial");
         let (enabled, occupied) = samples
             .iter()
             .filter(|sample| sample.state == "online")
@@ -139,14 +162,7 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
         .count() as i64;
     let (state, reason) = if ready.is_empty() {
         ("unavailable", Some("No sampled minutes in this window"))
-    } else if observed < expected
-        || ready.iter().any(|tick| tick.accuracy != "exact")
-        || machines.iter().any(|machine| {
-            machine["samples"]
-                .as_array()
-                .is_some_and(|samples| samples.iter().any(|sample| sample["state"] == "partial"))
-        })
-    {
+    } else if observed < expected || ready.iter().any(|tick| tick.accuracy != "exact") || partial {
         (
             "partial",
             Some("Some inventory minutes or Graph ready counts are incomplete"),

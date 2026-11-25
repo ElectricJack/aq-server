@@ -147,7 +147,6 @@ async fn ready(state: &AppState) -> Ready {
     }
 }
 
-#[derive(sqlx::FromRow)]
 struct NodeFact {
     id: Uuid,
     name: String,
@@ -196,7 +195,7 @@ async fn inventory(
     now: DateTime<Utc>,
 ) -> Result<(bool, BTreeMap<String, Machine>)> {
     let mut tx = read_snapshot(&state.store.pool).await?;
-    let nodes: Vec<NodeFact> = sqlx::query_as(
+    let nodes = sqlx::query(
         "SELECT n.id,n.name,n.machine_key,n.last_seen_at,
                 r.report#>>'{machine,key}' AS reported_key,r.report#>>'{machine,label}' AS reported_label
          FROM nodes n LEFT JOIN node_machine_reports r ON r.node_id=n.id
@@ -205,6 +204,16 @@ async fn inventory(
          ORDER BY n.name,n.id LIMIT $1",
     )
     .bind((MAX_NODES + 1) as i64)
+    .try_map(|row| {
+        Ok(NodeFact {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            machine_key: row.try_get("machine_key")?,
+            last_seen_at: row.try_get("last_seen_at")?,
+            reported_key: row.try_get("reported_key")?,
+            reported_label: row.try_get("reported_label")?,
+        })
+    })
     .fetch_all(&mut *tx)
     .await?;
     if nodes.len() > MAX_NODES {
