@@ -46,6 +46,10 @@ For a local server and dashboard from separate checkouts, build the dashboard wi
 
 ## Retained source and delivery
 
+The Docker-local worker setting `max_workspace_bytes` limits the combined
+size of the home and sibling source trees. The worker checks that total before
+staging the sources into the sandbox.
+
 A fresh worker can fetch a pinned commit after its branch moves. AQ first
 tries the normal Git checkout. When the commit is absent, AQ serves a retained
 bundle for that repository, binding generation and commit. Repeated downloads
