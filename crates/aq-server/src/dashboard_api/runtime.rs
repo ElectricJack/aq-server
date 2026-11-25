@@ -80,7 +80,7 @@ pub struct Runtime {
     pub pool: PgPool,
     pub gate: Semaphore,
     pub quota: super::quota::Collector,
-    codec: CursorCodec,
+    pub(super) codec: CursorCodec,
     snapshots: Mutex<BTreeMap<Uuid, Snapshot>>,
 }
 impl Runtime {
