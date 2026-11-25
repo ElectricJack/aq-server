@@ -2,10 +2,9 @@
 //! provisioned by the node once the target policy and fresh attempt agree.
 use super::*;
 use crate::project_bindings::workspace::{Caller, RequestBody, apply};
-const REQUEST: &str = "/v1/agent/workspace/request";
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route(REQUEST, post(request))
+        .route("/v1/agent/workspace/request", post(request))
         .layer(DefaultBodyLimit::max(4096))
 }
 async fn request(
