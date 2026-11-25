@@ -475,6 +475,16 @@ fn byte_range(value: &str, total: usize) -> Option<std::ops::Range<usize>> {
 mod range_tests {
     use super::*;
 
+    /// `files::Root::open` requires an owner-only (0700) directory, which
+    /// `tempfile::tempdir()` does not guarantee under a 022 umask.
+    fn private_media_dir() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
+
     fn content(
         root: &Arc<super::super::files::Root>,
         artifact: Uuid,
@@ -518,7 +528,7 @@ mod range_tests {
     #[tokio::test]
     async fn content_ranges_keep_reader_and_admission_guards_until_frames_drop() {
         use http_body_util::BodyExt;
-        let directory = tempfile::tempdir().unwrap();
+        let directory = private_media_dir();
         let root = super::super::files::Root::open(directory.path(), Uuid::new_v4()).unwrap();
         let artifact = Uuid::new_v4();
         for (mime, range, status, expected) in [
@@ -572,7 +582,7 @@ mod range_tests {
 
     #[test]
     fn dropping_unread_content_releases_reader_and_admission_guards() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = private_media_dir();
         let root = super::super::files::Root::open(directory.path(), Uuid::new_v4()).unwrap();
         let artifact = Uuid::new_v4();
         let budget = Arc::new(Semaphore::new(1));
