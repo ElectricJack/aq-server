@@ -27,7 +27,11 @@ LEFT JOIN intelligence_attempt_selections s USING(attempt_id)
 LEFT JOIN profiled_authority_hot head USING(attempt_id)
 WHERE ($1::uuid IS NULL OR so.project_id=$1)
   AND ($2::uuid IS NULL OR a.task_id=$2)
-  AND coalesce((s.selection->>'selected_at_ms')::bigint, 0)<=$4
+  AND coalesce(
+      (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::bigint,
+      (s.selection->>'selected_at_ms')::bigint,
+      0
+  )<=$4
 GROUP BY a.attempt_id, s.selection#>>'{choice,model}', head.state->>'status'
 ORDER BY a.attempt_id
 LIMIT $5;

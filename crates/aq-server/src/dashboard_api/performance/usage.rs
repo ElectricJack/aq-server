@@ -128,6 +128,7 @@ struct Report {
     models: Models,
     attempts: BTreeMap<Uuid, Attempt>,
     truncated: bool,
+    cutoff: i64,
 }
 
 impl Report {
@@ -150,6 +151,8 @@ impl Report {
             },
             "truncated": self.truncated || self.models.len() > MAX_MODELS,
             "window_basis": "first_canonical_receipt",
+            "window_start_ms": self.cutoff.saturating_sub(WEEK_MS),
+            "window_cutoff_ms": self.cutoff,
             "coverage": {
                 "expected_attempts": expected, "complete_attempts": complete,
                 "canonical_calls": self.totals.tokens.canonical_calls,
@@ -204,6 +207,7 @@ async fn load(
         models: Models::new(),
         attempts: BTreeMap::new(),
         truncated: calls.len() > MAX_CALLS || attempts.len() > max_attempts,
+        cutoff,
     };
     for row in attempts.into_iter().take(max_attempts) {
         report.attempts.insert(
