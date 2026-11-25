@@ -1,0 +1,770 @@
+{
+  "populated": {
+    "summary": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "outcomes": {
+        "confirmed_completions": 12,
+        "verified_merges": 5,
+        "completions_with_unknown_date": 0,
+        "first_pass_acceptance": {
+          "numerator": 7,
+          "denominator": 8,
+          "value": 0.875,
+          "unknown": 4
+        },
+        "completion_timing": {
+          "median_ms": 4800000,
+          "p90_ms": 4800000,
+          "covered": 2,
+          "total": 12
+        },
+        "merge_timing": {
+          "median_ms": 3600000,
+          "p90_ms": 3600000,
+          "covered": 1,
+          "total": 5
+        },
+        "delivery": {
+          "state": "not_tracked",
+          "delivered_tasks": null,
+          "definitions": [],
+          "timing": {
+            "median_ms": null,
+            "p90_ms": null,
+            "covered": 0,
+            "total": 0
+          },
+          "unknown_definitions": 12,
+          "unknown_required_pr_sets": 0
+        },
+        "tasks": [
+          {
+            "task_id": "00000000-0000-0000-0000-000000000102",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "work_class": null,
+            "definition": null,
+            "definition_revision": null,
+            "definition_work_class": null,
+            "first_ready_at_ms": 1793437200000,
+            "completion_at_ms": 1793442000000,
+            "merge_at_ms": 1793440800000,
+            "delivery_at_ms": null,
+            "first_pass": "accepted",
+            "disposition": "completed",
+            "delivery_evidence": null
+          }
+        ]
+      },
+      "usage": {
+        "status": "partial",
+        "models": [
+          {
+            "model": "codex-mini",
+            "harness": "codex",
+            "calls": 1,
+            "missing_prices": 0,
+            "incomplete_calls": 0,
+            "tokens": {
+              "input": 120000,
+              "output": 16000,
+              "cache_read": 90000,
+              "cache_write": 0,
+              "reasoning": 2400
+            },
+            "costs": [
+              {
+                "currency": "USD",
+                "basis": "token_rates",
+                "microunits": 100000
+              }
+            ]
+          },
+          {
+            "model": "claude-sonnet",
+            "harness": "claude",
+            "calls": 2,
+            "missing_prices": 0,
+            "incomplete_calls": 1,
+            "tokens": {
+              "input": 140000,
+              "output": 41000,
+              "cache_read": 80000,
+              "cache_write": 12000,
+              "reasoning": null
+            },
+            "costs": [
+              {
+                "currency": "USD",
+                "basis": "token_rates",
+                "microunits": 400000
+              }
+            ]
+          }
+        ],
+        "costs": [
+          {
+            "currency": "USD",
+            "basis": "token_rates",
+            "microunits": 500000
+          }
+        ],
+        "truncated": false,
+        "window_basis": "first_canonical_receipt",
+        "coverage": {
+          "expected_attempts": 3,
+          "complete_attempts": 2,
+          "canonical_calls": 3,
+          "priced_calls": 3,
+          "unresolved_events": 1
+        }
+      }
+    },
+    "machines": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "machines": {
+        "state": "partial",
+        "reason": "Some inventory minutes or Graph ready counts are incomplete",
+        "observed_at_ms": 1793448000000,
+        "coverage": {
+          "observed_minutes": 30,
+          "expected_minutes": 1440
+        },
+        "machines": [
+          {
+            "id": "fixture-a",
+            "label": "Desktop worker",
+            "samples": [
+              {"minute_ms": 1793374800000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793374860000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793374920000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793374980000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375040000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375100000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375160000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375220000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375280000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375340000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793426700000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426760000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426820000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426880000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426940000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427000000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427060000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427120000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427180000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427240000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793447400000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793447460000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793447520000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793447580000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793447640000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793447700000, "state": "stale", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793447760000, "state": "stale", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793447820000, "state": "stale", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793447880000, "state": "stale", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793447940000, "state": "stale", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0}
+            ],
+            "detail_complete": true,
+            "idle_with_queue": [],
+            "utilization": {
+              "occupied_slot_minutes": 45,
+              "enabled_slot_minutes": 100,
+              "value": 0.45
+            }
+          },
+          {
+            "id": "fixture-b",
+            "label": "Lab worker",
+            "samples": [
+              {"minute_ms": 1793374800000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793374860000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793374920000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793374980000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375040000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375100000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375160000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375220000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375280000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375340000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793426700000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426760000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426820000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426880000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426940000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427000000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427060000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427120000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427180000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427240000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447400000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447460000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447520000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447580000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447640000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447700000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447760000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447820000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447880000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793447940000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2}
+            ],
+            "detail_complete": true,
+            "idle_with_queue": [
+              {
+                "start_ms": 1793426700000,
+                "end_ms": 1793427300000
+              },
+              {
+                "start_ms": 1793447400000,
+                "end_ms": 1793448000000
+              }
+            ],
+            "utilization": {
+              "occupied_slot_minutes": 0,
+              "enabled_slot_minutes": 40,
+              "value": 0.0
+            }
+          }
+        ],
+        "ready": [
+          {"minute_ms": 1793374800000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793374860000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793374920000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793374980000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375040000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375100000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375160000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375220000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375280000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375340000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793426700000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426760000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426820000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426880000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426940000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427000000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427060000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427120000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427180000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427240000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793447400000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447460000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447520000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447580000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447640000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447700000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447760000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447820000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447880000, "count": 3, "accuracy": "lower_bound"},
+          {"minute_ms": 1793447940000, "count": 3, "accuracy": "lower_bound"}
+        ]
+      },
+      "scheduling": {
+        "reason_counts": [
+          {
+            "reason": "no_available_slots",
+            "count": 6
+          },
+          {
+            "reason": "no_compatible_route",
+            "count": 2
+          }
+        ],
+        "examples": [
+          {
+            "task_id": "00000000-0000-0000-0000-000000000102",
+            "reason": "no_compatible_route",
+            "observed_at_ms": 1793437500000
+          }
+        ],
+        "claims": 5,
+        "covered_claims": 2,
+        "p50_eligible_to_claim_ms": 180000,
+        "p95_eligible_to_claim_ms": 250000,
+        "dropped_observations": 1
+      }
+    },
+    "holds": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "holds": {
+        "state": "complete",
+        "reason": null,
+        "observed_at_ms": 1793448000000,
+        "count": 2,
+        "oldest_age_ms": 5400000,
+        "missed_checks": 1,
+        "rows": [
+          {
+            "task_id": "00000000-0000-0000-0000-000000000104",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "reason": "Awaiting review",
+            "since_ms": 1793442600000,
+            "age_ms": 5400000,
+            "responsible_party": "project_owner",
+            "next_check_at_ms": 1793446200000
+          }
+        ],
+        "next_cursor": "fixture-next-hold"
+      }
+    },
+    "holds_page_two": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "holds": {
+        "state": "complete",
+        "reason": null,
+        "observed_at_ms": 1793448000000,
+        "count": 2,
+        "oldest_age_ms": 5400000,
+        "missed_checks": 1,
+        "rows": [
+          {
+            "task_id": "00000000-0000-0000-0000-000000000102",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "reason": "Awaiting release window",
+            "since_ms": 1793445300000,
+            "age_ms": 2700000,
+            "responsible_party": null,
+            "next_check_at_ms": null
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    "task": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "usage": {
+        "status": "partial",
+        "models": [
+          {
+            "model": "codex-mini",
+            "harness": "codex",
+            "calls": 1,
+            "missing_prices": 0,
+            "incomplete_calls": 0,
+            "tokens": {
+              "input": 120000,
+              "output": 16000,
+              "cache_read": 90000,
+              "cache_write": 0,
+              "reasoning": 2400
+            },
+            "costs": [
+              {
+                "currency": "USD",
+                "basis": "token_rates",
+                "microunits": 100000
+              }
+            ]
+          },
+          {
+            "model": "claude-sonnet",
+            "harness": "claude",
+            "calls": 2,
+            "missing_prices": 0,
+            "incomplete_calls": 1,
+            "tokens": {
+              "input": 140000,
+              "output": 41000,
+              "cache_read": 80000,
+              "cache_write": 12000,
+              "reasoning": null
+            },
+            "costs": [
+              {
+                "currency": "USD",
+                "basis": "token_rates",
+                "microunits": 400000
+              }
+            ]
+          }
+        ],
+        "costs": [
+          {
+            "currency": "USD",
+            "basis": "token_rates",
+            "microunits": 500000
+          }
+        ],
+        "truncated": false,
+        "window_basis": "first_canonical_receipt",
+        "coverage": {
+          "expected_attempts": 3,
+          "complete_attempts": 2,
+          "canonical_calls": 3,
+          "priced_calls": 3,
+          "unresolved_events": 1
+        },
+        "first_route": {
+          "attempt_id": "00000000-0000-0000-0000-000000000301",
+          "candidate": "fixture-candidate",
+          "intended_model": "codex-mini",
+          "policy_revision": 4,
+          "registry_revision": 2,
+          "recorded_at_ms": 1793437380000
+        },
+        "attempts": [
+          {
+            "attempt_id": "00000000-0000-0000-0000-000000000301",
+            "status": "observed",
+            "attempt_status": "failed",
+            "intended_model": "codex-mini",
+            "models": [
+              {
+                "model": "codex-mini",
+                "harness": "codex",
+                "calls": 1,
+                "missing_prices": 0,
+                "incomplete_calls": 0,
+                "tokens": {
+                  "input": 120000,
+                  "output": 16000,
+                  "cache_read": 90000,
+                  "cache_write": 0,
+                  "reasoning": 2400
+                },
+                "costs": [
+                  {
+                    "currency": "USD",
+                    "basis": "token_rates",
+                    "microunits": 100000
+                  }
+                ]
+              }
+            ],
+            "costs": [
+              {
+                "currency": "USD",
+                "basis": "token_rates",
+                "microunits": 100000
+              }
+            ],
+            "unresolved_events": 0
+          },
+          {
+            "attempt_id": "00000000-0000-0000-0000-000000000302",
+            "status": "partial",
+            "attempt_status": "completed",
+            "intended_model": "claude-sonnet",
+            "models": [
+              {
+                "model": "claude-sonnet",
+                "harness": "claude",
+                "calls": 2,
+                "missing_prices": 0,
+                "incomplete_calls": 1,
+                "tokens": {
+                  "input": 140000,
+                  "output": 41000,
+                  "cache_read": 80000,
+                  "cache_write": 12000,
+                  "reasoning": null
+                },
+                "costs": [
+                  {
+                    "currency": "USD",
+                    "basis": "token_rates",
+                    "microunits": 400000
+                  }
+                ]
+              }
+            ],
+            "costs": [
+              {
+                "currency": "USD",
+                "basis": "token_rates",
+                "microunits": 400000
+              }
+            ],
+            "unresolved_events": 1
+          }
+        ]
+      },
+      "first_pass": {
+        "task_id": "00000000-0000-0000-0000-000000000102",
+        "project_id": "00000000-0000-0000-0000-000000000001",
+        "work_class": null,
+        "definition": null,
+        "definition_revision": null,
+        "definition_work_class": null,
+        "first_ready_at_ms": 1793437200000,
+        "completion_at_ms": 1793442000000,
+        "merge_at_ms": 1793440800000,
+        "delivery_at_ms": null,
+        "first_pass": "accepted",
+        "disposition": "completed",
+        "delivery_evidence": null
+      }
+    }
+  },
+  "empty": {
+    "summary": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "outcomes": {
+        "confirmed_completions": 0,
+        "verified_merges": 0,
+        "completions_with_unknown_date": 0,
+        "first_pass_acceptance": {
+          "numerator": 0,
+          "denominator": 0,
+          "value": null,
+          "unknown": 0
+        },
+        "completion_timing": {
+          "median_ms": null,
+          "p90_ms": null,
+          "covered": 0,
+          "total": 0
+        },
+        "merge_timing": {
+          "median_ms": null,
+          "p90_ms": null,
+          "covered": 0,
+          "total": 0
+        },
+        "delivery": {
+          "state": "not_tracked",
+          "delivered_tasks": null,
+          "definitions": [],
+          "timing": {
+            "median_ms": null,
+            "p90_ms": null,
+            "covered": 0,
+            "total": 0
+          },
+          "unknown_definitions": 0,
+          "unknown_required_pr_sets": 0
+        },
+        "tasks": []
+      },
+      "usage": {
+        "status": "no_events",
+        "models": [],
+        "costs": [],
+        "truncated": false,
+        "window_basis": "first_canonical_receipt",
+        "coverage": {
+          "expected_attempts": 0,
+          "complete_attempts": 0,
+          "canonical_calls": 0,
+          "priced_calls": 0,
+          "unresolved_events": 0
+        }
+      }
+    },
+    "machines": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "machines": {
+        "state": "unavailable",
+        "reason": "No sampled minutes in this window"
+      },
+      "scheduling": {
+        "reason_counts": [],
+        "examples": [],
+        "claims": 0,
+        "covered_claims": 0,
+        "p50_eligible_to_claim_ms": null,
+        "p95_eligible_to_claim_ms": null,
+        "dropped_observations": 0
+      }
+    },
+    "holds": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "holds": {
+        "state": "complete",
+        "reason": null,
+        "observed_at_ms": 1793448000000,
+        "count": 0,
+        "oldest_age_ms": null,
+        "missed_checks": 0,
+        "rows": [],
+        "next_cursor": null
+      }
+    }
+  },
+  "partial": {
+    "summary": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "outcomes": {
+        "confirmed_completions": 12,
+        "verified_merges": 5,
+        "completions_with_unknown_date": 0,
+        "first_pass_acceptance": {
+          "numerator": 7,
+          "denominator": 8,
+          "value": 0.875,
+          "unknown": 4
+        },
+        "completion_timing": {
+          "median_ms": 4800000,
+          "p90_ms": 4800000,
+          "covered": 2,
+          "total": 12
+        },
+        "merge_timing": {
+          "median_ms": 3600000,
+          "p90_ms": 3600000,
+          "covered": 1,
+          "total": 5
+        },
+        "delivery": {
+          "state": "not_tracked",
+          "delivered_tasks": null,
+          "definitions": [],
+          "timing": {
+            "median_ms": null,
+            "p90_ms": null,
+            "covered": 0,
+            "total": 0
+          },
+          "unknown_definitions": 12,
+          "unknown_required_pr_sets": 0
+        },
+        "tasks": [
+          {
+            "task_id": "00000000-0000-0000-0000-000000000102",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "work_class": null,
+            "definition": null,
+            "definition_revision": null,
+            "definition_work_class": null,
+            "first_ready_at_ms": 1793437200000,
+            "completion_at_ms": 1793442000000,
+            "merge_at_ms": 1793440800000,
+            "delivery_at_ms": null,
+            "first_pass": "accepted",
+            "disposition": "completed",
+            "delivery_evidence": null
+          }
+        ]
+      },
+      "usage": {
+        "state": "unavailable",
+        "reason": "source_unavailable"
+      }
+    }
+  },
+  "stale": {
+    "machines": {
+      "cutoff_ms": 1793448000000,
+      "definition_version": 1,
+      "machines": {
+        "state": "partial",
+        "reason": "Sampling is behind",
+        "observed_at_ms": 1793427240000,
+        "coverage": {
+          "observed_minutes": 20,
+          "expected_minutes": 1440
+        },
+        "machines": [
+          {
+            "id": "fixture-a",
+            "label": "Desktop worker",
+            "samples": [
+              {"minute_ms": 1793374800000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793374860000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793374920000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793374980000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375040000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375100000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375160000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375220000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375280000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793375340000, "state": "online", "enabled_slots": 4, "occupied_slots": 3, "free_slots": 1},
+              {"minute_ms": 1793426700000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426760000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426820000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426880000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793426940000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427000000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427060000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427120000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427180000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3},
+              {"minute_ms": 1793427240000, "state": "online", "enabled_slots": 4, "occupied_slots": 1, "free_slots": 3}
+            ],
+            "detail_complete": true,
+            "idle_with_queue": [],
+            "utilization": {
+              "occupied_slot_minutes": 40,
+              "enabled_slot_minutes": 80,
+              "value": 0.5
+            }
+          },
+          {
+            "id": "fixture-b",
+            "label": "Lab worker",
+            "samples": [
+              {"minute_ms": 1793374800000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793374860000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793374920000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793374980000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375040000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375100000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375160000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375220000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375280000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793375340000, "state": "offline", "enabled_slots": 0, "occupied_slots": 0, "free_slots": 0},
+              {"minute_ms": 1793426700000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426760000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426820000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426880000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793426940000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427000000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427060000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427120000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427180000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2},
+              {"minute_ms": 1793427240000, "state": "online", "enabled_slots": 2, "occupied_slots": 0, "free_slots": 2}
+            ],
+            "detail_complete": true,
+            "idle_with_queue": [],
+            "utilization": {
+              "occupied_slot_minutes": 0,
+              "enabled_slot_minutes": 20,
+              "value": 0.0
+            }
+          }
+        ],
+        "ready": [
+          {"minute_ms": 1793374800000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793374860000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793374920000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793374980000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375040000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375100000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375160000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375220000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375280000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793375340000, "count": 0, "accuracy": "exact"},
+          {"minute_ms": 1793426700000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426760000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426820000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426880000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793426940000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427000000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427060000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427120000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427180000, "count": 2, "accuracy": "exact"},
+          {"minute_ms": 1793427240000, "count": 2, "accuracy": "exact"}
+        ]
+      },
+      "scheduling": {
+        "state": "unavailable",
+        "reason": "source_unavailable"
+      }
+    }
+  },
+  "forbidden": {
+    "request_id": "performance-fixture",
+    "code": "forbidden",
+    "message": "Performance requires project inspection access",
+    "retryable": false
+  }
+}

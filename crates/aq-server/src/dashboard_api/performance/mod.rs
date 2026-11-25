@@ -66,8 +66,15 @@ async fn task(r: DashboardRequest, ReportQuery(q): ReportQuery, Path(id): Path<U
     report(r, q, Report::Task(id)).await
 }
 
-fn section(value: anyhow::Result<Value>) -> Value {
-    value.unwrap_or_else(|_| json!({"state":"unavailable","reason":"source_unavailable"}))
+async fn section(read: impl std::future::Future<Output = anyhow::Result<Value>>) -> Value {
+    match tokio::time::timeout(Duration::from_secs(4), read).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "performance source read failed");
+            json!({"state":"unavailable","reason":"source_unavailable"})
+        }
+        Err(_) => json!({"state":"unavailable","reason":"source_timeout"}),
+    }
 }
 
 async fn report(r: DashboardRequest, q: Filters, kind: Report) -> Reply {
@@ -101,35 +108,36 @@ async fn read(r: &DashboardRequest, q: Filters, kind: Report) -> Result<Envelope
             project_id,
         });
     let mut view = state.clone();
-    view.store.pool = runtime.pool.clone();
+    let pool = &runtime.performance_pool;
+    view.store.observation_pool = pool.clone();
     let mut data = json!({"definition_version":1,"cutoff_ms":cutoff});
     match kind {
         Report::Summary => {
             let (outcomes, usage) = tokio::join!(
-                outcomes::summary(&runtime.pool, q.project_id, cutoff),
-                usage::summary(&view, q.project_id, cutoff)
+                section(outcomes::summary(pool, q.project_id, cutoff)),
+                section(usage::summary(&view, q.project_id, cutoff))
             );
-            data["outcomes"] = section(outcomes);
-            data["usage"] = section(usage);
+            data["outcomes"] = outcomes;
+            data["usage"] = usage;
         }
         Report::Machines => {
             let (machines, scheduling) = tokio::join!(
-                capacity::machines(&runtime.pool, cutoff),
-                scheduling::diagnostics(&runtime.pool, cutoff)
+                section(capacity::machines(pool, cutoff)),
+                section(scheduling::diagnostics(pool, cutoff))
             );
-            data["machines"] = section(machines);
-            data["scheduling"] = section(scheduling);
+            data["machines"] = machines;
+            data["scheduling"] = scheduling;
         }
         Report::Task(id) => {
             if id.is_nil() {
                 return Err(Error::Invalid);
             }
             let (usage, first_pass) = tokio::join!(
-                usage::task(&view, q.project_id, id, cutoff),
-                outcomes::first_pass(&runtime.pool, q.project_id, id, cutoff)
+                section(usage::task(&view, q.project_id, id, cutoff)),
+                section(outcomes::first_pass(pool, q.project_id, id, cutoff))
             );
-            data["usage"] = section(usage);
-            data["first_pass"] = section(first_pass);
+            data["usage"] = usage;
+            data["first_pass"] = first_pass;
             if data["usage"].is_null() && data["first_pass"].is_null() {
                 return Err(AppError::NotFound("task usage not found".into()).into());
             }
@@ -162,7 +170,7 @@ async fn read(r: &DashboardRequest, q: Filters, kind: Report) -> Result<Envelope
                 return Err(Error::Invalid);
             }
             let mut holds =
-                section(capacity::holds(&runtime.pool, q.project_id, now, position, limit).await);
+                section(capacity::holds(pool, q.project_id, now, position, limit)).await;
             if let Some(next) = holds["next_cursor"].as_str() {
                 let token = runtime
                     .codec
