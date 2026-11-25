@@ -540,7 +540,6 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     let task = h.task;
     let report = h.result;
     let attempt = h.attempt;
-    settlement_owner39::initial_project(&env.f).await;
     super::super::replacement::seed_native_offer_clock(&h.pool, attempt).await;
     let project = env.f.selection.lineage.project_id;
     let version = env.expected_version.to_string();
