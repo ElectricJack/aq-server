@@ -52,6 +52,11 @@ reuse the bundle. The source-retention settings `max_bundle_bytes` and
 reservations. These bundles currently have no automatic eviction. Capacity
 exhaustion can delay tasks that need a new bundle.
 
+Before rolling a worker back to a build that predates workspaces, let it finish
+its outstanding workspace attempts and reconcile their journal records. The
+new worker can read earlier reservations. Older workers reject reservations
+that declare `workspace_required`. Preserve the journal if recovery is needed.
+
 After an attempt returns changes, inspect the retained heads for the home
 project and its siblings. The owner can record a combined test run and verify
 delivery against each changed project's policy. See the
