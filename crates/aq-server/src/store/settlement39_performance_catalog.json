@@ -1,0 +1,30 @@
+[
+  {
+    "body": {
+      "set": false,
+      "args": "",
+      "body": "\nBEGIN\n    INSERT INTO performance_pilot_completion_times\n        VALUES (NEW.operation_id, (extract(epoch FROM clock_timestamp()) * 1000)::bigint);\n    RETURN NULL;\nEND ",
+      "kind": "f",
+      "config": null,
+      "strict": false,
+      "returns": "trigger",
+      "language": "plpgsql",
+      "parallel": "u",
+      "volatility": "v",
+      "security_definer": false
+    },
+    "kind": "function",
+    "name": "performance_pilot_completion_clock"
+  },
+  {
+    "body": {
+      "type": 17,
+      "enabled": "O",
+      "deferred": false,
+      "deferrable": false,
+      "definition": "CREATE TRIGGER performance_pilot_completion_clock AFTER UPDATE OF state ON public.profiled_task_completions FOR EACH ROW WHEN (((old.state <> 'confirmed'::text) AND (new.state = 'confirmed'::text))) EXECUTE FUNCTION performance_pilot_completion_clock()"
+    },
+    "kind": "trigger",
+    "name": "profiled_task_completions.performance_pilot_completion_clock"
+  }
+]

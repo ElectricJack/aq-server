@@ -6,6 +6,7 @@ use aq_admission::{
     preparation_v2::ExecutionReceipt,
 };
 use aq_phase_terminal_protocol as wire;
+use aq_server::profiled_execution::closure::settlement::{self, ClosureSettlement};
 use aq_server::profiled_execution::{
     config::ProfiledConfig,
     definitions::Definition,
@@ -115,6 +116,12 @@ fn synthetic_proof(
         revision: prepared.revision + 2,
         digest: Digest::of(b"synthetic terminal journal, not physical persistence"),
     };
+    bind_synthetic_evidence(r, &prepared);
+    q.validate_for(&context).unwrap();
+    q
+}
+
+fn bind_synthetic_evidence(r: &mut original::Request, prepared: &original::JournalCheckpoint) {
     match &mut r.evidence {
         original::Evidence::Suppressed {
             record,
@@ -151,9 +158,8 @@ fn synthetic_proof(
             *proof_digest = proof.digest().unwrap();
         }
     }
-    q.validate_for(&context).unwrap();
-    q
 }
+
 async fn snapshot(f: &Prepared) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('hot',(SELECT to_jsonb(h) FROM profiled_authority_hot h LIMIT 1),'attempt',(SELECT to_jsonb(a) FROM execution_attempts a LIMIT 1),'journal',(SELECT to_jsonb(j) FROM profiled_owner_journals j LIMIT 1),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY lease_id) FROM admission_material_leases l),'bindings',(SELECT jsonb_agg(to_jsonb(b) ORDER BY attempt_id) FROM agent_launch_bindings b),'closures',(SELECT count(*) FROM profiled_launch_closures),'capacity',(SELECT jsonb_agg(to_jsonb(c) ORDER BY attempt_id) FROM profiled_phase_terminal_capacity c))")
         .fetch_one(&f.c.env.env.pool).await.unwrap()
@@ -170,6 +176,14 @@ async fn assert_closed_held(f: &Prepared, q: &wire::ClosureRequest, ack: &wire::
     let counts:(i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_started_receipts),(SELECT count(*) FROM profiled_stopped_receipts),(SELECT count(*) FROM profiled_result_reports),(SELECT count(*) FROM profiled_verified_releases),(SELECT count(*) FROM profiled_execution_receipts WHERE kind='prepare')")
         .fetch_one(&f.c.env.env.pool).await.unwrap();
     assert_eq!(counts, (0, 0, 0, 0, 0));
+    assert_retained_closure(f, q, ack).await;
+}
+
+async fn assert_retained_closure(
+    f: &Prepared,
+    q: &wire::ClosureRequest,
+    ack: &wire::ClosureReceipt,
+) {
     let row = sqlx::query("SELECT initial_authority_kind,initial_authority_receipt_digest,phase_request_digest,phase_envelope_bytes,phase_ack_bytes,context_bytes,legacy_origin_operation_id,phase_origin_operation_id FROM profiled_launch_closures")
         .fetch_one(&f.c.env.env.pool).await.unwrap();
     assert_eq!(
@@ -344,13 +358,88 @@ async fn failed_closure_insert_rolls_back_permission_revocation_and_retains_retr
     assert_eq!(snapshot(&f).await, before);
 }
 
+async fn assert_suppression_history_fences(f: &Prepared, attempt: Uuid, before: &Value) {
+    let state = &f.c.env.env.state;
+    // Held while any execution history or AQ effect exists for it.
+    let pool = &f.c.env.env.pool;
+    let replica = |sql: &'static str| async move {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL session_replication_role=replica")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query(sql)
+            .bind(attempt)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    };
+    replica("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,retained_bytes) SELECT gen_random_uuid(),$1,node_id,'{}','0','{}','{}','{}','queued',1,1 FROM execution_attempts WHERE attempt_id=$1").await;
+    assert_eq!(
+        settlement::settle(state, attempt, None).await.unwrap(),
+        ClosureSettlement::Held("closure_effects_present")
+    );
+    replica("DELETE FROM agent_graph_operations WHERE attempt_id=$1").await;
+    replica("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest) SELECT gen_random_uuid(),$1,node_id,gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}' FROM execution_attempts WHERE attempt_id=$1").await;
+    assert_eq!(
+        settlement::settle(state, attempt, None).await.unwrap(),
+        ClosureSettlement::Held("closure_has_execution_history")
+    );
+    replica("DELETE FROM source_transfers WHERE attempt_id=$1").await;
+    assert_eq!(&snapshot(f).await, before, "held cases change nothing");
+}
+
+async fn assert_settled_held(f: &Prepared, q: &wire::ClosureRequest, before: &Value) {
+    let state = &f.c.env.env.state;
+    let attempt = q.original.binding.attempt_id;
+    let after = snapshot(f).await;
+    let hot = &after["hot"]["state"];
+    assert_eq!(hot["status"], "finished");
+    assert_eq!(hot["stop"]["kind"], "not_started");
+    assert_eq!(
+        hot["stop"]["receipt"]["id"],
+        format!("aq.launch-closure/{}", q.original.operation_id)
+    );
+    let receipt_digest: String =
+        sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures")
+            .fetch_one(&f.c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(hot["stop"]["receipt"]["digest"], json!(receipt_digest));
+    assert_eq!(hot["retention"]["kind"], "retained");
+    assert!(
+        hot["retention"]["receipt"]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("aq.source-export/")
+    );
+    assert_eq!(hot["effects"]["kind"], "quiescent");
+    assert_eq!(
+        after["attempt"]["holds_task"], true,
+        "B4 releases, not this"
+    );
+    assert_eq!(after["leases"], before["leases"]);
+    assert_eq!(after["bindings"], before["bindings"]);
+    // Idempotent, and no longer awaiting settlement.
+    assert_eq!(
+        settlement::settle(state, attempt, None).await.unwrap(),
+        ClosureSettlement::Unchanged
+    );
+    // Still listed until B4 releases its claim (settle_and_release).
+    assert_eq!(
+        settlement::awaiting(state, None, 8).await.unwrap(),
+        vec![attempt]
+    );
+    assert_eq!(snapshot(f).await, after);
+}
+
 /// B5b/AQ-08 closure settlement: a host stop that had a pane is never settled
 /// as not started; a suppression settles from server-owned facts only (no
 /// Started/Stopped/result/transfer history, no AQ effect, the attempt's own
 /// verified central export) and leaves the claim held for B4 to release.
 #[tokio::test]
 async fn closed_launch_settles_only_a_proven_nonstart_and_keeps_the_claim() {
-    use aq_server::profiled_execution::closure::settlement::{self, ClosureSettlement};
     // 1: paned host stop; 2: paneless host stop whose root ran (status 0, 2
     // reaped); 3: host stopped before any process ran (aq-ms1d variant);
     // 0: durable suppression.
@@ -368,34 +457,7 @@ async fn closed_launch_settles_only_a_proven_nonstart_and_keeps_the_claim() {
             vec![attempt]
         );
         if kind == 0 {
-            // Held while any execution history or AQ effect exists for it.
-            let pool = &f.c.env.env.pool;
-            let replica = |sql: &'static str| async move {
-                let mut tx = pool.begin().await.unwrap();
-                sqlx::query("SET LOCAL session_replication_role=replica")
-                    .execute(&mut *tx)
-                    .await
-                    .unwrap();
-                sqlx::query(sql)
-                    .bind(attempt)
-                    .execute(&mut *tx)
-                    .await
-                    .unwrap();
-                tx.commit().await.unwrap();
-            };
-            replica("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,retained_bytes) SELECT gen_random_uuid(),$1,node_id,'{}','0','{}','{}','{}','queued',1,1 FROM execution_attempts WHERE attempt_id=$1").await;
-            assert_eq!(
-                settlement::settle(state, attempt, None).await.unwrap(),
-                ClosureSettlement::Held("closure_effects_present")
-            );
-            replica("DELETE FROM agent_graph_operations WHERE attempt_id=$1").await;
-            replica("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest) SELECT gen_random_uuid(),$1,node_id,gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}' FROM execution_attempts WHERE attempt_id=$1").await;
-            assert_eq!(
-                settlement::settle(state, attempt, None).await.unwrap(),
-                ClosureSettlement::Held("closure_has_execution_history")
-            );
-            replica("DELETE FROM source_transfers WHERE attempt_id=$1").await;
-            assert_eq!(snapshot(&f).await, before, "held cases change nothing");
+            assert_suppression_history_fences(&f, attempt, &before).await;
         }
         let outcome = settlement::settle(state, attempt, None).await.unwrap();
         if kind == 1 || kind == 2 {
@@ -411,45 +473,7 @@ async fn closed_launch_settles_only_a_proven_nonstart_and_keeps_the_claim() {
             continue;
         }
         assert_eq!(outcome, ClosureSettlement::Settled);
-        let after = snapshot(&f).await;
-        let hot = &after["hot"]["state"];
-        assert_eq!(hot["status"], "finished");
-        assert_eq!(hot["stop"]["kind"], "not_started");
-        assert_eq!(
-            hot["stop"]["receipt"]["id"],
-            format!("aq.launch-closure/{}", q.original.operation_id)
-        );
-        let receipt_digest: String =
-            sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures")
-                .fetch_one(&f.c.env.env.pool)
-                .await
-                .unwrap();
-        assert_eq!(hot["stop"]["receipt"]["digest"], json!(receipt_digest));
-        assert_eq!(hot["retention"]["kind"], "retained");
-        assert!(
-            hot["retention"]["receipt"]["id"]
-                .as_str()
-                .unwrap()
-                .starts_with("aq.source-export/")
-        );
-        assert_eq!(hot["effects"]["kind"], "quiescent");
-        assert_eq!(
-            after["attempt"]["holds_task"], true,
-            "B4 releases, not this"
-        );
-        assert_eq!(after["leases"], before["leases"]);
-        assert_eq!(after["bindings"], before["bindings"]);
-        // Idempotent, and no longer awaiting settlement.
-        assert_eq!(
-            settlement::settle(state, attempt, None).await.unwrap(),
-            ClosureSettlement::Unchanged
-        );
-        // Still listed until B4 releases its claim (settle_and_release).
-        assert_eq!(
-            settlement::awaiting(state, None, 8).await.unwrap(),
-            vec![attempt]
-        );
-        assert_eq!(snapshot(&f).await, after);
+        assert_settled_held(&f, &q, &before).await;
         // B4 eligibility of these facts is the pure `replacement::assess`
         // (closed_unstarted_attempt_is_replaceable); this schema-32 fixture has
         // no B4 tables.

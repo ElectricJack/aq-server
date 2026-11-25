@@ -2,6 +2,7 @@
 pub mod actions;
 mod aggregation;
 mod capacity;
+pub(crate) mod performance;
 pub mod contract {
     pub use aq_dashboard_contract::*;
 }
@@ -244,6 +245,7 @@ pub(crate) fn routes_with_reviews(
         .merge(actions::routes(Arc::new(actions::existing::registry(
             &state, reviews, playbooks,
         ))))
+        .merge(performance::routes())
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/overview", get(overview))
         .route("/api/v1/search", get(search::read))

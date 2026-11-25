@@ -2487,6 +2487,151 @@
     },
     {
       "cli": [
+        "performance",
+        "delivery",
+        "set"
+      ],
+      "grant": "project.admin",
+      "kind": "mutation",
+      "name": "performance.delivery.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:72fa186c948bd2d95cb967f8c5633ccfe190fa03b275e9a90436c0e5b0d66431",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "definition": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "not_tracked",
+                          "confirmed_completion"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "target_branch_merge"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "target_ref": {
+                        "maxLength": 255,
+                        "pattern": "^refs/heads/",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "repository_id",
+                      "target_ref"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "expected_revision": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "operation_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "work_class": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "operation_id",
+              "expected_revision",
+              "definition"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/settings/performance/delivery/{id}"
+          }
+        }
+      },
+      "summary": "Set a delivery reporting preference (single-PR milestone for target merges), or restore inheritance with a null definition",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "performance",
+        "delivery",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "performance.delivery.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:7abd34493e4af69f498446c32d11375297bf5864f06599dd23191497c4be6421",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "work_class": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/performance/delivery/{id}"
+          }
+        }
+      },
+      "summary": "Read the project default or work-class delivery reporting preference",
+      "target": {
+        "param": "project_id",
+        "rule": "project"
+      }
+    },
+    {
+      "cli": [
         "playbook",
         "activation",
         "activate"

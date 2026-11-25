@@ -312,6 +312,7 @@ async fn validate_storage(tx: &mut Transaction<'_, Postgres>, supported: u32) ->
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) scheduling_diagnostics: Option<crate::scheduling_diagnostics::Capture>,
     pub(crate) inventory_diagnostics: aq_swarm::inventory_diagnostics::Diagnostics,
     pub(crate) manual_runtime: aq_manual_sessions::Runtime,
     // Explicit constructor provenance, never inferred from missing SQL objects.
@@ -534,6 +535,7 @@ impl Store {
             Some("aq-terminal-data"),
         );
         Ok(Store {
+            scheduling_diagnostics: None,
             inventory_diagnostics: Default::default(),
             manual_runtime: Default::default(),
             #[cfg(feature = "test-support")]
