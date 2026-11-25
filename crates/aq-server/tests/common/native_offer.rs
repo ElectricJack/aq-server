@@ -31,7 +31,7 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
-    /// A second ready task of lower priority, listed only in mode 7 (and on a second page in mode 11). Mode 8 closes the task; mode 10 completes it.
+    /// A second ready task of lower priority, listed in modes 7 and 13 (and on a second page in mode 11). Mode 8 closes the task; mode 10 completes it.
     pub second_task: Uuid,
     /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
     pub metadata: Arc<std::sync::Mutex<Value>>,
@@ -190,7 +190,7 @@ async fn setup_with(additional: Option<aq_selection::TaskLineage>, secondary: bo
                 let behind = uri.query().is_some_and(|q| q.contains("cursor=page-2"));
                 let items = match mode {
                     3 => vec![],
-                    7 => vec![node, second],
+                    7 | 13 => vec![node, second],
                     11 if behind => vec![second],
                     _ => vec![node],
                 };
@@ -201,7 +201,7 @@ async fn setup_with(additional: Option<aq_selection::TaskLineage>, secondary: bo
                     None
                 } else if id == task.to_string() {
                     Some(node)
-                } else if id == second_task.to_string() && [7, 11].contains(&mode) {
+                } else if id == second_task.to_string() && [7, 11, 13].contains(&mode) {
                     Some(second)
                 } else {
                     None
@@ -437,8 +437,26 @@ async fn setup_with(additional: Option<aq_selection::TaskLineage>, secondary: bo
     >::new()));
     let export_clock = env.env.time.clone();
     let export_mode = mode.clone();
-    tasks.push(tokio::spawn(async move{use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};loop{let (stream,_)=listener.accept().await.unwrap();let root=root.clone();let retained=retained.clone();let export_clock=export_clock.clone();let export_mode=export_mode.clone();tokio::spawn(async move{
+    let retention_inspections = Arc::new(AtomicU8::new(0));
+    let inspection_entered = observation_entered.clone();
+    let inspection_resume = observation_resume.clone();
+    tasks.push(tokio::spawn(async move{use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};loop{let (stream,_)=listener.accept().await.unwrap();let root=root.clone();let retained=retained.clone();let export_clock=export_clock.clone();let export_mode=export_mode.clone();
+        let retention_inspections = retention_inspections.clone();
+        let inspection_entered = inspection_entered.clone();
+        let inspection_resume = inspection_resume.clone();
+        tokio::spawn(async move{
         let mut reader=BufReader::new(stream);let mut line=vec![];reader.read_until(b'\n',&mut line).await.unwrap();let r:Value=serde_json::from_slice(&line).unwrap();
+        // The first observation verifies the export; the second fences the
+        // assembled offer after its final selection and before publication.
+        if export_mode.load(Ordering::SeqCst) == 13
+            && r["operation"] == "retention.inspect"
+            && r["request_id"].as_str().is_some_and(|id| id.starts_with("profiled-retention-"))
+            && retention_inspections.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            inspection_entered.add_permits(1);
+            tokio::time::timeout(std::time::Duration::from_secs(4), inspection_resume.acquire())
+                .await.expect("resume final publication inspection").unwrap().forget();
+        }
         let result=match r["operation"].as_str().unwrap(){
             "repo.show"=>json!({"repository_id":repository,"binding_generation":1,"identity":"synthetic-native-repository","mode":"central","object_format":"sha1"}),
             "repo.retain_ref"=>json!({"ref":r["params"]["ref"],"head":{"algorithm":"sha1","hex":"a".repeat(40)},"retention_handle":handle,"synced_at_ms":export_clock.load(Ordering::SeqCst)}),

@@ -652,3 +652,36 @@ async fn provider_capacity_wait_does_not_charge_a_blocked_successor() {
     assert_eq!(successor.offered.offer.binding.assignment_generation, 2);
     assert_eq!(attempts(&c).await, 2);
 }
+
+#[tokio::test]
+async fn provider_capacity_lost_at_publication_leaves_the_rest_of_the_poll_eligible() {
+    use std::time::Duration;
+
+    let c = two_provider_capacity_case(false).await;
+    limits(&c, 1, 1).await;
+    c.mode.store(13, Ordering::SeqCst);
+    let fill = async {
+        tokio::time::timeout(Duration::from_secs(15), c.observation_entered.acquire())
+            .await
+            .expect("the first task reached its final retention inspection")
+            .unwrap()
+            .forget();
+        // This class can lose its provider slot while the second task's
+        // default class remains available.
+        limits(&c, 0, 1).await;
+        c.mode.store(7, Ordering::SeqCst);
+        c.observation_resume.add_permits(1);
+    };
+    let ((status, body), ()) = tokio::join!(poll(&c), fill);
+    assert_eq!(status, 200, "{body}");
+    // The request can return before its background assembler. Do not poll
+    // again: only continuation of this assembly can publish the second task.
+    assembled(&c).await;
+    let claimed: Vec<Uuid> = sqlx::query_scalar("SELECT task_id FROM execution_attempts")
+        .fetch_all(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(claimed, [c.second_task]);
+    assert_eq!(holds(&c).await, 0);
+    assert_eq!(skips(&c).await, 0);
+}
