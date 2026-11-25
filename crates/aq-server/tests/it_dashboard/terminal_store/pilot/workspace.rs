@@ -1,5 +1,6 @@
 //! Optional resource phase for a server candidate with workspace migrations.
 use super::*;
+use aq_admission::{ObjectFormat, ObjectId, SourceSelection};
 use aq_server::{
     build_admin_router,
     profiled_execution::config::ProjectPolicy,
@@ -14,12 +15,47 @@ use tower::ServiceExt;
 
 pub(super) struct Workspace {
     sibling: Uuid,
-    repository: Uuid,
-    commit: String,
-    retention: Uuid,
+    home_pin: Pin,
+    sibling_pin: Pin,
     socket: PathBuf,
     profile: Value,
     context: Value,
+}
+
+struct Pin {
+    repository: Uuid,
+    commit: String,
+    retention: Uuid,
+}
+
+impl Pin {
+    fn read(value: &Value) -> Self {
+        Self {
+            repository: serde_json::from_value(value["repository_id"].clone()).unwrap(),
+            commit: value["commit_oid"].as_str().unwrap().into(),
+            retention: serde_json::from_value(
+                value["retained_fixture"]["base_retention_handle"].clone(),
+            )
+            .unwrap(),
+        }
+    }
+
+    fn project_policy(&self, project_id: Uuid) -> ProjectPolicy {
+        ProjectPolicy {
+            project_id,
+            enabled: true,
+            priority: 0,
+            source: SourceSelection::Immutable {
+                object: ObjectId {
+                    format: ObjectFormat::Sha1,
+                    hex: self.commit.clone(),
+                },
+            },
+            retention_handle: self.retention,
+            placement: None,
+            agent_grants: None,
+        }
+    }
 }
 
 impl Workspace {
@@ -39,19 +75,14 @@ impl Workspace {
                 .file_type()
                 .is_socket()
         );
-        let repo = &inventory["aq-dashboard"];
         let api: Value = serde_json::from_str(include_str!(
             "../../../../../../protocol/agent-access/v1/fixtures/base.json"
         ))
         .unwrap();
         Some(Self {
             sibling: Uuid::new_v4(),
-            repository: serde_json::from_value(repo["repository_id"].clone()).unwrap(),
-            commit: repo["commit_oid"].as_str().unwrap().into(),
-            retention: serde_json::from_value(
-                repo["retained_fixture"]["base_retention_handle"].clone(),
-            )
-            .unwrap(),
+            home_pin: Pin::read(&inventory["aq-server"]),
+            sibling_pin: Pin::read(&inventory["aq-dashboard"]),
             socket,
             profile: api["context"]["profile"].clone(),
             context: api["context"]["context"].clone(),
@@ -59,6 +90,10 @@ impl Workspace {
     }
 
     pub(super) fn setup(&self, f: &mut Fixture, runtime: &std::path::Path) {
+        let source = &mut f.profiled.source;
+        source.repository_id = self.home_pin.repository;
+        source.base.hex.clone_from(&self.home_pin.commit);
+        source.logical_identity = "task-workspace-pilot/aq-server".into();
         let graph = &mut f.profiled.graph;
         graph.profile_id = self.profile["profile_id"].as_str().unwrap().into();
         graph.profile_revision = self.profile["revision"].as_str().unwrap().into();
@@ -100,12 +135,12 @@ impl Workspace {
         .unwrap();
         target["name"] = json!("Disposable dashboard repository");
         target["project_id"] = json!(self.sibling);
-        target["repository_id"] = json!(self.repository);
+        target["repository_id"] = json!(self.sibling_pin.repository);
         target["ceilings"]["permissions"] = json!([{
             "operation": "workspace.share.request",
             "scope_reference": format!("project:{home}"),
         }]);
-        observation["repository_id"] = json!(self.repository);
+        observation["repository_id"] = json!(self.sibling_pin.repository);
         sqlx::query(
             "INSERT INTO project_execution_bindings
              (project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,$3,$4)",
@@ -120,16 +155,10 @@ impl Workspace {
         let mut config = (*f.state.config).clone();
         Arc::make_mut(config.profiled_execution.as_mut().unwrap())
             .projects
-            .push(
-                serde_json::from_value::<ProjectPolicy>(json!({
-                    "project_id": self.sibling,
-                    "enabled": true,
-                    "priority": 0,
-                    "source": {"kind":"immutable","object":{"algorithm":"sha1","hex":self.commit}},
-                    "retention_handle": self.retention,
-                }))
-                .unwrap(),
-            );
+            .extend([
+                self.home_pin.project_policy(home),
+                self.sibling_pin.project_policy(self.sibling),
+            ]);
         f.state.config = Arc::new(config);
     }
 
@@ -261,7 +290,10 @@ impl Workspace {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(state, ("pending".to_owned(), self.commit.clone()));
+        assert_eq!(
+            state,
+            ("pending".to_owned(), self.sibling_pin.commit.clone())
+        );
         let checkpoint: String =
             sqlx::query_scalar("SELECT reason FROM attempt_handoffs WHERE attempt_id=$1")
                 .bind(attempt)
@@ -281,15 +313,17 @@ impl Workspace {
         let approval = |oid: &str| json!({"decision":"approved","project_revision":1,"commit_oid":oid,"access":"write"});
         let stale = "0".repeat(40);
         assert_eq!(post(&admin, &decision, None, approval(&stale)).await.0, 409);
-        let (status, response) = post(&admin, &decision, None, approval(&self.commit)).await;
+        let (status, response) =
+            post(&admin, &decision, None, approval(&self.sibling_pin.commit)).await;
         assert_eq!(status, 200, "{response}");
         assert_eq!(response["sources"][0]["state"], "approved");
         let owner = format!("/api/projects/{home}/tasks/{task}/workspace");
         let response = send(&admin, Request::get(&owner).body(Body::empty()).unwrap()).await;
         assert_eq!(response.0, 200, "{:?}", response.1);
         assert_eq!(response.1["services"], json!([{"service":"postgres"}]));
-        json!({"target_project_id":self.sibling,"repository_id":self.repository,
-               "pinned_commit":self.commit,"checkpoint_intent":checkpoint,
+        json!({"target_project_id":self.sibling,"repository_id":self.sibling_pin.repository,
+               "home_repository_id":self.home_pin.repository,
+               "pinned_commit":self.sibling_pin.commit,"checkpoint_intent":checkpoint,
                "postgres_requested":true,"approval":"approved"})
     }
 }
