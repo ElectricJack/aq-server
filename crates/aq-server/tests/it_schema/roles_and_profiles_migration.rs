@@ -245,6 +245,29 @@ async fn seed_attempt_history(pool: &PgPool, owner: Uuid, node: Uuid) -> Histori
             .await
             .unwrap();
     }
+    let attempts = HistoricalAttempts {
+        old_attempt,
+        supervisor,
+        renamed_supervisor,
+        stopped_supervisor,
+    };
+    seed_supervisors(&mut tx, owner, &digest, &attempts).await;
+    tx.commit().await.unwrap();
+    attempts
+}
+
+async fn seed_supervisors(
+    connection: &mut sqlx::PgConnection,
+    owner: Uuid,
+    digest: &str,
+    attempts: &HistoricalAttempts,
+) {
+    let HistoricalAttempts {
+        supervisor,
+        renamed_supervisor,
+        stopped_supervisor,
+        ..
+    } = *attempts;
     // Supervisors with a choice from the old catalog: two switched on (one
     // on a renamed class), one switched off.
     for (id, enabled, profile_id) in [
@@ -261,16 +284,9 @@ async fn seed_attempt_history(pool: &PgPool, owner: Uuid, node: Uuid) -> Histori
                 "reasoning": "medium", "reasoning_configuration_reference": "codex:medium",
                 "options": {"service_tier": "fast"}}))
             .bind(owner)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await
             .unwrap();
-    }
-    tx.commit().await.unwrap();
-    HistoricalAttempts {
-        old_attempt,
-        supervisor,
-        renamed_supervisor,
-        stopped_supervisor,
     }
 }
 

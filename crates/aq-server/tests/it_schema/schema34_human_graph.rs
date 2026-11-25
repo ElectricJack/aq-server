@@ -28,6 +28,30 @@ async fn rows(pool: &PgPool, table: &str) -> Value {
     .unwrap()
 }
 
+async fn snapshot_tables(pool: &PgPool, tables: &[&str]) -> Vec<Value> {
+    let mut snapshots = Vec::new();
+    for table in tables {
+        snapshots.push(rows(pool, table).await);
+    }
+    snapshots
+}
+
+async fn assert_tables_unchanged(
+    pool: &PgPool,
+    tables: &[&str],
+    before: Vec<Value>,
+    context: &str,
+) {
+    assert_eq!(tables.len(), before.len());
+    for (table, expected) in tables.iter().zip(before) {
+        assert_eq!(
+            rows(pool, table).await,
+            expected,
+            "{context} changed {table}"
+        );
+    }
+}
+
 async fn catalog(pool: &PgPool) -> Value {
     sqlx::query_scalar(
         "SELECT jsonb_build_object('table',to_regclass('human_graph_operations')::text, \
@@ -161,20 +185,10 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
         "execution_attempts",
         "source_transfers",
     ];
-    let mut before = Vec::new();
-    for table in preserved {
-        before.push(rows(&pool, table).await);
-    }
+    let before = snapshot_tables(&pool, &preserved).await;
     migrate(&pool).await.unwrap();
-    for (table, expected) in preserved.into_iter().zip(before) {
-        assert_eq!(
-            rows(&pool, table).await,
-            expected,
-            "upgrade changed {table}"
-        );
-    }
+    assert_tables_unchanged(&pool, &preserved, before, "upgrade").await;
     intent(&pool, actor, project).await;
-    let mut before = Vec::new();
     let protected = [
         "meta",
         "schema_migrations",
@@ -182,9 +196,7 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
         "execution_attempts",
         "source_transfers",
     ];
-    for table in protected {
-        before.push(rows(&pool, table).await);
-    }
+    let before = snapshot_tables(&pool, &protected).await;
     assert!(matches!(
         migrate_profile(&pool, 33).await,
         Err(StoreError::IncompatibleState {
@@ -192,13 +204,7 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
             supported: 33
         })
     ));
-    for (table, expected) in protected.into_iter().zip(before) {
-        assert_eq!(
-            rows(&pool, table).await,
-            expected,
-            "old reader changed {table}"
-        );
-    }
+    assert_tables_unchanged(&pool, &protected, before, "old reader").await;
 }
 
 async fn corruption_refused(sql: &str) {
