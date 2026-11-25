@@ -58,27 +58,30 @@ pub fn params(file: Option<&str>, pairs: &[String]) -> Result<Map<String, Value>
     };
     let mut seen = std::collections::BTreeSet::new();
     for pair in pairs {
-        let (key, value) = pair
-            .split_once('=')
-            .ok_or_else(|| invalid("--param takes KEY=VALUE or KEY:=JSON"))?;
-        let (key, value) = match key.strip_suffix(':') {
-            Some(key) => (key, unique(value.as_bytes())?),
-            None => (key, json!(value)),
-        };
-        if key.is_empty()
-            || key.len() > 64
-            || !key
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        {
-            return Err(invalid("A --param key is lowercase letters, digits and _"));
-        }
+        let (key, value) = parse_pair(pair)?;
         if !seen.insert(key.to_owned()) {
             return Err(invalid("A --param key is given twice"));
         }
         params.insert(key.to_owned(), value);
     }
     Ok(params)
+}
+fn parse_pair(pair: &str) -> Result<(&str, Value)> {
+    let (key, value) = pair
+        .split_once('=')
+        .ok_or_else(|| invalid("--param takes KEY=VALUE or KEY:=JSON"))?;
+    let (key, value) = match key.strip_suffix(':') {
+        Some(key) => (key, unique(value.as_bytes())?),
+        None => (key, json!(value)),
+    };
+    let valid_length = (1..=64).contains(&key.len());
+    let valid_chars = key
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !valid_length || !valid_chars {
+        return Err(invalid("A --param key is lowercase letters, digits and _"));
+    }
+    Ok((key, value))
 }
 /// `--subject TYPE:ID[:REVISION]`.
 pub fn subject(value: &str) -> Result<Value> {

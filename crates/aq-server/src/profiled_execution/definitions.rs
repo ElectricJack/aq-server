@@ -187,6 +187,50 @@ pub async fn retain_required(
     }
     Ok(receipts)
 }
+/// Spec 0017 §6.3: the boot config's definitions and template allowlist with
+/// the admitted environment versions, read through one catalog.
+#[cfg(feature = "project_environments")]
+pub async fn catalog<'e>(
+    state: &AppState,
+    db: impl sqlx::PgExecutor<'e>,
+) -> Result<aq_environments::Catalog<'_>, AppError> {
+    let bodies = (state.config.profiled_execution.as_deref()).map(|c| &c.definition_bodies[..]);
+    let defs = (bodies.unwrap_or_default().iter()).map(|d| (&d.artifact, d.body.as_str()));
+    let boot = aq_environments::BootEnvironments::new(defs, state.config.templates.as_deref());
+    // A historical test store, older than migration 0172, has no versions.
+    #[cfg(feature = "test-support")]
+    if state.store.fixture_profile.is_some_and(|v| v < 172) {
+        return Ok(aq_environments::Catalog::boot(&boot));
+    }
+    (aq_environments::Catalog::load(db, &boot).await).map_err(crate::error::db)
+}
+/// Spec 0017 §6.3: what a node's inventory lists, its configured harnesses
+/// and their admitted counterparts, written when the snapshot is stored.
+#[cfg(feature = "project_environments")]
+pub async fn listed(
+    state: &AppState,
+    conn: &mut sqlx::PgConnection,
+    node: Uuid,
+    configured: Vec<aq_selection::InstalledHarness>,
+) -> Result<Vec<aq_selection::InstalledHarness>, AppError> {
+    let catalog = catalog(state, &mut *conn).await?;
+    (aq_environments::listed(conn, &catalog, node, configured).await).map_err(crate::error::db)
+}
+/// The qualified harnesses the renewal and phase fences accept: the
+/// configured ones and, with `project_environments`, their counterparts for
+/// every admitted environment.
+#[cfg_attr(not(feature = "project_environments"), allow(unused_variables))]
+#[allow(clippy::needless_return)]
+pub async fn qualified(
+    state: &AppState,
+    conn: &mut sqlx::PgConnection,
+    configured: &[aq_selection::InstalledHarness],
+) -> Result<Vec<aq_selection::InstalledHarness>, AppError> {
+    #[cfg(feature = "project_environments")]
+    return Ok(catalog(state, conn).await?.qualified(configured));
+    #[cfg(not(feature = "project_environments"))]
+    Ok(configured.to_vec())
+}
 fn unavailable() -> AppError {
     AppError::Conflict("required public definition bytes unavailable".into())
 }

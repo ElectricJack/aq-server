@@ -84,6 +84,10 @@ pub enum Command {
     /// Inspect an operation by ID after an uncertain outcome.
     #[command(subcommand)]
     Operation(crate::typed::Operation),
+    /// Try an environment recipe of your project on a builder (spec 0017).
+    #[cfg(feature = "project_environments")]
+    #[command(subcommand)]
+    Environment(crate::environment::Environment),
     /// Your attempt's local result claim: submit, status (AQ_AGENT_RESULT_DIR;
     /// not a server command). Other `result …` tokens are registry commands.
     #[command(subcommand)]

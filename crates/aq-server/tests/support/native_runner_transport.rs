@@ -266,6 +266,93 @@ impl Transferred {
         Ok(self)
     }
 }
+/// Authenticate the sender before receiving any transferred descriptors.
+fn sender_witness(channel: &OwnedFd, wrapper_pid: u32) -> Result<(u32, OwnedFd)> {
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut size = std::mem::size_of_val(&credentials) as libc::socklen_t;
+    ensure!(
+        unsafe {
+            libc::getsockopt(
+                channel.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut size,
+            )
+        } == 0
+            && size as usize == std::mem::size_of_val(&credentials)
+            && credentials.uid == unsafe { libc::geteuid() }
+            && credentials.pid > 0
+            && ancestor(credentials.pid as u32, wrapper_pid)?,
+        "actual owned fixture sender required"
+    );
+    let pid = credentials.pid as u32;
+    let raw_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    ensure!(raw_pidfd >= 0, "live fixture sender witness");
+    let witness = unsafe { OwnedFd::from_raw_fd(raw_pidfd as i32) };
+    Ok((pid, witness))
+}
+
+/// Retain received rights through packet validation and metadata decoding.
+fn receive_packet(channel: &OwnedFd) -> Result<(ListenerInfo, Vec<OwnedFd>)> {
+    let mut data = vec![0u8; MAX_PACKET + 1];
+    let mut ancillary = [0usize; 64];
+    let mut vector = libc::iovec {
+        iov_base: data.as_mut_ptr().cast(),
+        iov_len: data.len(),
+    };
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut vector;
+    message.msg_iovlen = 1;
+    message.msg_control = ancillary.as_mut_ptr().cast();
+    message.msg_controllen = std::mem::size_of_val(&ancillary);
+    let got = unsafe { libc::recvmsg(channel.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) };
+    let mut descriptors = Vec::new();
+    let mut valid_ancillary = true;
+    if got >= 0 {
+        unsafe {
+            let mut item = libc::CMSG_FIRSTHDR(&message);
+            while !item.is_null() {
+                if (*item).cmsg_level == libc::SOL_SOCKET && (*item).cmsg_type == libc::SCM_RIGHTS {
+                    let base = libc::CMSG_LEN(0) as usize;
+                    let length = (*item).cmsg_len as usize;
+                    ensure!(
+                        length >= base
+                            && (length - base).is_multiple_of(std::mem::size_of::<i32>()),
+                        "fixture rights framing"
+                    );
+                    for index in 0..(length - base) / std::mem::size_of::<i32>() {
+                        descriptors.push(OwnedFd::from_raw_fd(
+                            *libc::CMSG_DATA(item).cast::<i32>().add(index),
+                        ));
+                    }
+                } else {
+                    valid_ancillary = false;
+                }
+                item = libc::CMSG_NXTHDR(&message, item);
+            }
+        }
+    }
+    ensure!(
+        got > 0
+            && got as usize <= MAX_PACKET
+            && message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) == 0
+            && valid_ancillary
+            && descriptors.len() == 3,
+        "bounded exact fixture handoff"
+    );
+    data.truncate(got as usize);
+    let info: ListenerInfo = serde_json::from_slice(&data)?;
+    ensure!(
+        info.schema_version == 1
+            && info.phase == "listeners"
+            && info.state_dir == Path::new(PRIVATE_STATE)
+            && info.state_free_bytes > MINIMUM_FREE,
+        "exact fixture handoff metadata"
+    );
+    Ok((info, descriptors))
+}
+
 pub struct ControlListener {
     fd: OwnedFd,
     path: PathBuf,
@@ -338,86 +425,8 @@ impl ControlListener {
         ensure!(raw >= 0, "bounded fixture accept");
         let channel = unsafe { OwnedFd::from_raw_fd(raw) };
         timeout(channel.as_raw_fd())?;
-        let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
-        let mut size = std::mem::size_of_val(&credentials) as libc::socklen_t;
-        ensure!(
-            unsafe {
-                libc::getsockopt(
-                    channel.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_PEERCRED,
-                    (&mut credentials as *mut libc::ucred).cast(),
-                    &mut size,
-                )
-            } == 0
-                && size as usize == std::mem::size_of_val(&credentials)
-                && credentials.uid == unsafe { libc::geteuid() }
-                && credentials.pid > 0
-                && ancestor(credentials.pid as u32, wrapper_pid)?,
-            "actual owned fixture sender required"
-        );
-        let pid = credentials.pid as u32;
-        let raw_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-        ensure!(raw_pidfd >= 0, "live fixture sender witness");
-        let witness = unsafe { OwnedFd::from_raw_fd(raw_pidfd as i32) };
-        let mut data = vec![0u8; MAX_PACKET + 1];
-        let mut ancillary = [0usize; 64];
-        let mut vector = libc::iovec {
-            iov_base: data.as_mut_ptr().cast(),
-            iov_len: data.len(),
-        };
-        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
-        message.msg_iov = &mut vector;
-        message.msg_iovlen = 1;
-        message.msg_control = ancillary.as_mut_ptr().cast();
-        message.msg_controllen = std::mem::size_of_val(&ancillary);
-        let got =
-            unsafe { libc::recvmsg(channel.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) };
-        let mut descriptors = Vec::new();
-        let mut valid_ancillary = true;
-        if got >= 0 {
-            unsafe {
-                let mut item = libc::CMSG_FIRSTHDR(&message);
-                while !item.is_null() {
-                    if (*item).cmsg_level == libc::SOL_SOCKET
-                        && (*item).cmsg_type == libc::SCM_RIGHTS
-                    {
-                        let base = libc::CMSG_LEN(0) as usize;
-                        let length = (*item).cmsg_len as usize;
-                        ensure!(
-                            length >= base
-                                && (length - base).is_multiple_of(std::mem::size_of::<i32>()),
-                            "fixture rights framing"
-                        );
-                        for index in 0..(length - base) / std::mem::size_of::<i32>() {
-                            descriptors.push(OwnedFd::from_raw_fd(
-                                *libc::CMSG_DATA(item).cast::<i32>().add(index),
-                            ));
-                        }
-                    } else {
-                        valid_ancillary = false;
-                    }
-                    item = libc::CMSG_NXTHDR(&message, item);
-                }
-            }
-        }
-        ensure!(
-            got > 0
-                && got as usize <= MAX_PACKET
-                && message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) == 0
-                && valid_ancillary
-                && descriptors.len() == 3,
-            "bounded exact fixture handoff"
-        );
-        data.truncate(got as usize);
-        let info: ListenerInfo = serde_json::from_slice(&data)?;
-        ensure!(
-            info.schema_version == 1
-                && info.phase == "listeners"
-                && info.state_dir == Path::new(PRIVATE_STATE)
-                && info.state_free_bytes > MINIMUM_FREE,
-            "exact fixture handoff metadata"
-        );
+        let (pid, witness) = sender_witness(&channel, wrapper_pid)?;
+        let (info, mut descriptors) = receive_packet(&channel)?;
         let pid_namespace = fs::read_link(format!("/proc/{pid}/ns/pid"))?;
         let net_namespace = fs::read_link(format!("/proc/{pid}/ns/net"))?;
         ensure!(
@@ -474,6 +483,118 @@ impl Drop for ControlListener {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn packet_channel(data: &[u8], descriptors: &[i32]) -> OwnedFd {
+        let mut pair = [-1; 2];
+        assert_eq!(
+            unsafe {
+                libc::socketpair(
+                    libc::AF_UNIX,
+                    libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+                    0,
+                    pair.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        let sender = unsafe { OwnedFd::from_raw_fd(pair[0]) };
+        let receiver = unsafe { OwnedFd::from_raw_fd(pair[1]) };
+        timeout(receiver.as_raw_fd()).unwrap();
+        let mut vector = libc::iovec {
+            iov_base: data.as_ptr().cast_mut().cast(),
+            iov_len: data.len(),
+        };
+        let mut ancillary = [0usize; 64];
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_iov = &mut vector;
+        message.msg_iovlen = 1;
+        if !descriptors.is_empty() {
+            let length = std::mem::size_of_val(descriptors) as u32;
+            message.msg_control = ancillary.as_mut_ptr().cast();
+            message.msg_controllen = unsafe { libc::CMSG_SPACE(length) } as usize;
+            assert!(message.msg_controllen <= std::mem::size_of_val(&ancillary));
+            unsafe {
+                let header = libc::CMSG_FIRSTHDR(&message);
+                (*header).cmsg_level = libc::SOL_SOCKET;
+                (*header).cmsg_type = libc::SCM_RIGHTS;
+                (*header).cmsg_len = libc::CMSG_LEN(length) as usize;
+                std::ptr::copy_nonoverlapping(
+                    descriptors.as_ptr(),
+                    libc::CMSG_DATA(header).cast::<i32>(),
+                    descriptors.len(),
+                );
+            }
+        }
+        assert_eq!(
+            unsafe { libc::sendmsg(sender.as_raw_fd(), &message, libc::MSG_NOSIGNAL) },
+            data.len() as isize
+        );
+        receiver
+    }
+
+    #[test]
+    fn packet_requires_exact_rights_and_bounded_closed_metadata() {
+        let file = tempfile::tempfile().unwrap();
+        let rights = [file.as_raw_fd(); 4];
+        let info = serde_json::json!({
+            "schema_version": 1, "phase": "listeners",
+            "control_origin": "http://127.0.0.1:1/",
+            "provider_origin": "http://127.0.0.1:2/",
+            "state_dir": PRIVATE_STATE, "state_free_bytes": MINIMUM_FREE + 1,
+            "private_pid_namespace": "/proc/fixture/ns/pid"
+        });
+        let bytes = serde_json::to_vec(&info).unwrap();
+        for count in [0, 2, 3, 4] {
+            let channel = packet_channel(&bytes, &rights[..count]);
+            let result = receive_packet(&channel);
+            if count == 3 {
+                let (received, descriptors) = result.unwrap();
+                assert_eq!(received.control_origin, info["control_origin"]);
+                assert_eq!(descriptors.len(), 3);
+                for descriptor in descriptors {
+                    assert_eq!(
+                        unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) }
+                            & libc::FD_CLOEXEC,
+                        libc::FD_CLOEXEC
+                    );
+                }
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        for (field, value) in [
+            ("schema_version", serde_json::json!(2)),
+            ("phase", serde_json::json!("other")),
+            ("state_dir", serde_json::json!("/other")),
+            ("state_free_bytes", serde_json::json!(MINIMUM_FREE)),
+            ("unknown", serde_json::json!(true)),
+        ] {
+            let mut changed = info.clone();
+            changed[field] = value;
+            let channel = packet_channel(&serde_json::to_vec(&changed).unwrap(), &rights[..3]);
+            assert!(receive_packet(&channel).is_err(), "{field}");
+        }
+        for bytes in [b"invalid JSON".to_vec(), vec![b' '; MAX_PACKET + 1]] {
+            let channel = packet_channel(&bytes, &rights[..3]);
+            assert!(receive_packet(&channel).is_err());
+        }
+    }
+
+    #[test]
+    fn sender_witness_requires_owned_ancestry_and_retains_live_pidfd() {
+        let channel = packet_channel(b"fixture", &[]);
+        let pid = std::process::id();
+        let (actual, witness) = sender_witness(&channel, pid).unwrap();
+        assert_eq!(actual, pid);
+        let mut event = libc::pollfd {
+            fd: witness.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(unsafe { libc::poll(&mut event, 1, 0) }, 0);
+        assert!(sender_witness(&channel, u32::MAX).is_err());
+    }
+
     #[test]
     fn listener_requires_an_actual_bound_tcp_origin_and_refuses_wrong_kind_or_origin() {
         let socket = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();

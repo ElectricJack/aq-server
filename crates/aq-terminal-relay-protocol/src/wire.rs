@@ -12,6 +12,26 @@ pub enum Peer {
     Central { authority_id: Uuid },
 }
 
+type WireResult = std::result::Result<(), ContractError>;
+
+fn exchange_header(version: u32, capability: &Text, exchange_id: Uuid) -> WireResult {
+    let known = [CAPABILITY, crate::epoch::CAPABILITY].contains(&capability.as_str());
+    let supported = version == VERSION && known;
+    if !supported || exchange_id.is_nil() {
+        Err(ContractError::Unsupported)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_epoch(capability: &Text, has_epoch_items: bool) -> WireResult {
+    if has_epoch_items && capability.as_str() != crate::epoch::CAPABILITY {
+        Err(ContractError::Unsupported)
+    } else {
+        Ok(())
+    }
+}
+
 impl Peer {
     pub fn matches(&self, t: &TerminalIdentity) -> bool {
         match (self, &t.session) {
@@ -35,6 +55,30 @@ impl Peer {
             _ => false,
         }
     }
+    fn check_target(&self, terminal: &TerminalIdentity) -> WireResult {
+        self.matches(terminal)
+            .then_some(())
+            .ok_or(ContractError::Stale)
+    }
+    fn check_batch<T: Validate>(
+        &self,
+        items: &[T],
+        terminal: impl Fn(&T) -> &TerminalIdentity,
+    ) -> WireResult {
+        for item in items {
+            item.validate()?;
+            self.check_target(terminal(item))?;
+        }
+        Ok(())
+    }
+    fn check_ack(&self, terminal: &TerminalIdentity, id: Uuid, sequence: u64) -> WireResult {
+        terminal.validate()?;
+        if id.is_nil() || sequence == 0 {
+            return Err(ContractError::Stale);
+        }
+        self.check_target(terminal)
+    }
+
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         if match self {
             Self::Remote { node_id, boot_id } => !node_id.is_nil() && !boot_id.is_nil(),
@@ -93,6 +137,40 @@ pub enum Effect {
     EpochInput(crate::epoch::Command),
 }
 
+impl Fence {
+    fn validate_controller(&self) -> WireResult {
+        if self.fence_id.is_nil() || self.generation == 0 {
+            return Err(ContractError::Stale);
+        }
+        if let Some(lease) = &self.controller {
+            lease.validate()?;
+            if (&lease.terminal, lease.generation) != (&self.terminal, self.generation) {
+                return Err(ContractError::Stale);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Capture {
+    fn validate_fields(&self) -> WireResult {
+        let ids = [
+            self.capture_request_id,
+            self.uncertain_operation_id,
+            self.lease_id,
+        ];
+        let counters = [
+            self.controller_generation,
+            self.after_ledger_revision,
+            self.expires_at_ms,
+        ];
+        if ids.iter().any(Uuid::is_nil) || counters.contains(&0) {
+            return Err(ContractError::Stale);
+        }
+        Ok(())
+    }
+}
+
 impl Effect {
     pub fn terminal(&self) -> &TerminalIdentity {
         match self {
@@ -107,31 +185,8 @@ impl Effect {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         self.terminal().validate()?;
         match self {
-            Self::Fence(v) => {
-                if v.fence_id.is_nil() || v.generation == 0 {
-                    return Err(ContractError::Stale);
-                }
-                if let Some(lease) = &v.controller {
-                    lease.validate()?;
-                    if lease.terminal != v.terminal || lease.generation != v.generation {
-                        return Err(ContractError::Stale);
-                    }
-                }
-                Ok(())
-            }
-            Self::Capture(v) => {
-                if v.capture_request_id.is_nil()
-                    || v.uncertain_operation_id.is_nil()
-                    || v.lease_id.is_nil()
-                    || v.controller_generation == 0
-                    || v.after_ledger_revision == 0
-                    || v.expires_at_ms == 0
-                {
-                    Err(ContractError::Stale)
-                } else {
-                    Ok(())
-                }
-            }
+            Self::Fence(v) => v.validate_controller(),
+            Self::Capture(v) => v.validate_fields(),
             Self::Input(v) => v.validate(),
             Self::Resize(v) => v.validate(),
             Self::Watch(v) => TerminalCommand::Watch(v.clone()).validate(),
@@ -156,26 +211,19 @@ pub struct Envelope {
 impl Envelope {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         self.peer.validate()?;
-        if self.version != VERSION
-            || ![CAPABILITY, crate::epoch::CAPABILITY].contains(&self.capability.as_str())
-            || self.exchange_id.is_nil()
-            || self.effects.len() > 64
-        {
+        exchange_header(self.version, &self.capability, self.exchange_id)?;
+        if self.effects.len() > 64 {
             return Err(ContractError::Unsupported);
         }
-        if self
-            .effects
-            .iter()
-            .any(|e| matches!(e, Effect::EpochInput(_)))
-            && self.capability.as_str() != crate::epoch::CAPABILITY
-        {
-            return Err(ContractError::Unsupported);
-        }
+        require_epoch(
+            &self.capability,
+            self.effects
+                .iter()
+                .any(|e| matches!(e, Effect::EpochInput(_))),
+        )?;
         for effect in &self.effects {
             effect.validate()?;
-            if !self.peer.matches(effect.terminal()) {
-                return Err(ContractError::Stale);
-            }
+            self.peer.check_target(effect.terminal())?;
         }
         wire_size(self)?;
         Ok(())
@@ -212,65 +260,48 @@ pub struct PeerUpload {
 impl PeerUpload {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         self.peer.validate()?;
-        if self.version != VERSION
-            || ![CAPABILITY, crate::epoch::CAPABILITY].contains(&self.capability.as_str())
-            || self.exchange_id.is_nil()
-            || self.receipts.len() > 64
-            || self.epoch_receipts.len() > 64
-            || self.resize_receipts.len() > 64
-            || self.fence_acks.len() > 64
-            || self.frames.len() > 64
-            || self.snapshots.len() > 32
-            || self.gaps.len() > 64
-        {
-            return Err(ContractError::Unsupported);
+        exchange_header(self.version, &self.capability, self.exchange_id)?;
+        self.check_batch_sizes()?;
+        require_epoch(&self.capability, !self.epoch_receipts.is_empty())?;
+        self.check_epoch_receipts()?;
+        self.peer.check_batch(&self.receipts, |v| &v.terminal)?;
+        self.peer.check_batch(&self.frames, |v| &v.terminal)?;
+        self.peer.check_batch(&self.snapshots, |v| &v.terminal)?;
+        self.peer.check_batch(&self.gaps, |v| &v.terminal)?;
+        for ack in &self.fence_acks {
+            self.peer
+                .check_ack(&ack.terminal, ack.fence_id, ack.generation)?;
         }
-        if !self.epoch_receipts.is_empty() && self.capability.as_str() != crate::epoch::CAPABILITY {
-            return Err(ContractError::Unsupported);
-        }
-        for v in &self.epoch_receipts {
-            v.receipt.validate()?;
-            if v.epoch_id.is_nil() || v.sequence == 0 || !self.peer.matches(&v.receipt.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
-        for v in &self.receipts {
-            v.validate()?;
-            if !self.peer.matches(&v.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
-        for v in &self.frames {
-            v.validate()?;
-            if !self.peer.matches(&v.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
-        for v in &self.snapshots {
-            v.validate()?;
-            if !self.peer.matches(&v.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
-        for v in &self.gaps {
-            v.validate()?;
-            if !self.peer.matches(&v.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
-        for v in &self.fence_acks {
-            v.terminal.validate()?;
-            if v.fence_id.is_nil() || v.generation == 0 || !self.peer.matches(&v.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
-        for v in &self.resize_receipts {
-            v.terminal.validate()?;
-            if v.operation_id.is_nil() || v.sequence == 0 || !self.peer.matches(&v.terminal) {
-                return Err(ContractError::Stale);
-            }
+        for receipt in &self.resize_receipts {
+            self.peer
+                .check_ack(&receipt.terminal, receipt.operation_id, receipt.sequence)?;
         }
         wire_size(self)?;
+        Ok(())
+    }
+    fn check_batch_sizes(&self) -> WireResult {
+        let counts = [
+            self.receipts.len(),
+            self.epoch_receipts.len(),
+            self.resize_receipts.len(),
+            self.fence_acks.len(),
+            self.frames.len(),
+            self.gaps.len(),
+        ];
+        if counts.into_iter().any(|count| count > 64) || self.snapshots.len() > 32 {
+            return Err(ContractError::Unsupported);
+        }
+        Ok(())
+    }
+
+    fn check_epoch_receipts(&self) -> WireResult {
+        for item in &self.epoch_receipts {
+            item.receipt.validate()?;
+            if item.epoch_id.is_nil() || item.sequence == 0 {
+                return Err(ContractError::Stale);
+            }
+            self.peer.check_target(&item.receipt.terminal)?;
+        }
         Ok(())
     }
 }
@@ -291,11 +322,9 @@ pub struct RelayPoll {
 impl RelayPoll {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         self.peer.validate()?;
-        if self.hold_ms > 20_000
-            || self.active_subscriptions > 32
-            || self.active_controllers > 32
-            || (self.hold_ms > 0 && self.active_subscriptions == 0 && self.active_controllers == 0)
-        {
+        let active = self.active_subscriptions.max(self.active_controllers);
+        let valid_hold = self.hold_ms <= 20_000 && (self.hold_ms == 0 || active > 0);
+        if !valid_hold || active > 32 {
             return Err(ContractError::Invalid("relay poll bound"));
         }
         if self.version != VERSION {
@@ -325,31 +354,19 @@ pub struct UploadAck {
 impl UploadAck {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         self.peer.validate()?;
-        if self.version != VERSION
-            || ![CAPABILITY, crate::epoch::CAPABILITY].contains(&self.capability.as_str())
-            || self.exchange_id.is_nil()
-            || self.retirements.len() > 64
-            || self.dropped_output.len() > 64
-        {
+        exchange_header(self.version, &self.capability, self.exchange_id)?;
+        if self.retirements.len() > 64 || self.dropped_output.len() > 64 {
             return Err(ContractError::Unsupported);
         }
-        if !self.retirements.is_empty() && self.capability.as_str() != crate::epoch::CAPABILITY {
-            return Err(ContractError::Unsupported);
-        }
-        for gap in &self.dropped_output {
-            gap.validate()?;
-            if !self.peer.matches(&gap.terminal) {
-                return Err(ContractError::Stale);
-            }
-        }
+        require_epoch(&self.capability, !self.retirements.is_empty())?;
+        self.peer
+            .check_batch(&self.dropped_output, |gap| &gap.terminal)?;
         for retirement in &self.retirements {
             retirement
                 .permit
                 .validate()
                 .map_err(|_| ContractError::Invalid("epoch retirement"))?;
-            if !self.peer.matches(&retirement.permit.terminal) {
-                return Err(ContractError::Stale);
-            }
+            self.peer.check_target(&retirement.permit.terminal)?;
         }
         wire_size(self)
     }
@@ -465,13 +482,13 @@ impl Register {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         self.peer.validate()?;
         self.terminal.validate()?;
-        if self.version != VERSION
-            || self.operation_id.is_nil()
-            || self.expected_authority_revision == 0
-            || !self.peer.matches(&self.terminal)
-        {
+        if self.version != VERSION || self.operation_id.is_nil() {
             return Err(ContractError::Stale);
         }
+        if self.expected_authority_revision == 0 {
+            return Err(ContractError::Stale);
+        }
+        self.peer.check_target(&self.terminal)?;
         match self.input_mode {
             InputMode::FiniteV1 => {
                 if self.capability.as_str() != CAPABILITY {

@@ -142,6 +142,23 @@ async fn receipt_journal_and_running_rollback_together_and_rotated_auth_cannot_r
         .unwrap();
     assert!(started::record(&f.state, &auth, &r).await.is_err());
 }
+/// Observe the real database barrier before advancing the fixture clock.
+async fn assert_owner_lock_wait(pool: &sqlx::PgPool) {
+    for _ in 0..200 {
+        let observed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT phase,revision,digest FROM profiled_owner_journals%')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if observed {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("actual owner lock wait must be observed");
+}
+
 #[tokio::test]
 async fn grant_expiring_while_waiting_for_owner_lock_cannot_become_running() {
     let (f, r) = setup(true).await;
@@ -156,15 +173,7 @@ async fn grant_expiring_while_waiting_for_owner_lock_cannot_become_running() {
     let app = f.state.clone();
     let request = r.clone();
     let call = tokio::spawn(async move { started::record(&app, &auth, &request).await });
-    let mut observed = false;
-    for _ in 0..200 {
-        observed=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT phase,revision,digest FROM profiled_owner_journals%')").fetch_one(&pool).await.unwrap();
-        if observed {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    assert!(observed, "actual owner lock wait must be observed");
+    assert_owner_lock_wait(&pool).await;
     f.time.store((NOW + 1_000) as i64, Ordering::SeqCst);
     held.commit().await.unwrap();
     assert!(call.await.unwrap().is_err());

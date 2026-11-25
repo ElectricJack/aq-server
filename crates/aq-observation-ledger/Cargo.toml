@@ -1,0 +1,16 @@
+[package]
+name = "aq-observation-ledger"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Transactional accounting for admitted observation batches"
+
+[dependencies]
+aq-accounting = { path = "../aq-accounting", version = "=0.1.0" }
+aq-stall-ladder = { path = "../aq-stall-ladder", version = "=0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

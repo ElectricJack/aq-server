@@ -3,7 +3,11 @@ use crate::validate::fresh;
 use crate::*;
 use aq_profiles::{FallbackReason, SelectionPolicy};
 use aq_session_protocol::require_capabilities;
-use std::collections::BTreeMap;
+mod composition;
+mod observations;
+use composition::Composition;
+use observations::availability;
+pub(crate) use observations::influencing_expiry;
 pub(crate) enum ObservationTarget {
     Worker {
         node_id: uuid::Uuid,
@@ -47,25 +51,10 @@ impl<'a> CoreProfile<'a> {
                 })
                 .collect(),
             harnesses: &launch.execution.harnesses,
-            #[cfg(not(feature = "project_environments"))]
-            environments: std::slice::from_ref(&launch.execution.environment),
-            // Spec 0017: none pinned is the environment the offer placed it in.
-            #[cfg(feature = "project_environments")]
-            environments: launch.execution.environment.as_slice(),
+            environments: launch.execution.pinned_environments(),
             credentials: &launch.execution.credentials,
             confinement: launch.execution.confinement.execution_confinement(),
         }
-    }
-}
-/// The credential profile an execution profile names for `harness` (spec
-/// 0014 §5.3: one per harness).
-fn credential_references(
-    by: &std::collections::BTreeMap<String, String>,
-    harness: &str,
-) -> Vec<String> {
-    match by.get(harness) {
-        Some(named) => vec![named.clone()],
-        None => vec!["unconfigured".to_string()],
     }
 }
 /// The candidates in preference order and where they may run.
@@ -117,509 +106,194 @@ pub(crate) struct CoreOutcome {
 pub(crate) fn profile_key(profile: &aq_session_protocol::ArtifactRef) -> String {
     format!("{}@{}", profile.id.as_str(), profile.version.as_str())
 }
-fn scope_matches(
-    scope: &ObservationScope,
-    credential: &AuthorizedCredential,
-    model: &str,
-    target: &ObservationTarget,
-) -> bool {
-    scope.provider == credential.provider
-        && scope.credential_profile == credential.profile
-        && scope.credential_revision == credential.revision
-        && scope.account_reference == credential.account_reference
-        && scope.endpoint_reference == credential.endpoint_reference
-        && scope.model.as_deref().is_none_or(|m| m == model)
-        && match (&scope.node_id, target) {
-            (None, _) => true,
-            (Some(id), ObservationTarget::Worker { node_id, .. }) => id == node_id,
-            _ => false,
-        }
+struct Evaluation<'a> {
+    profile: &'a CoreProfile<'a>,
+    policy: &'a SelectionPolicy,
+    input: &'a CoreInputs<'a>,
 }
-fn availability(
-    input: &CoreInputs<'_>,
-    credential: &AuthorizedCredential,
-    model: &str,
-    policy: &SelectionPolicy,
-) -> Result<(CandidateState, Vec<String>, Vec<uuid::Uuid>)> {
-    let mut groups = BTreeMap::<String, &AvailabilityObservation>::new();
-    for observation in input.observations {
-        if let ObservationSource::Worker {
-            node_id, boot_id, ..
-        } = &observation.source
-            && !matches!(&input.target,ObservationTarget::Worker{node_id:current_node,boot_id:current_boot} if current_node==node_id && current_boot==boot_id)
-        {
-            continue;
-        }
-        if !scope_matches(&observation.scope, credential, model, &input.target) {
-            continue;
-        }
-        let scope = digest(&(&observation.scope, &observation.source))?
-            .as_str()
-            .to_string();
-        let rank = |o: &AvailabilityObservation| (o.sequence, o.received_at_ms, o.observation_id);
-        if groups
-            .get(&scope)
-            .is_none_or(|old| rank(observation) > rank(old))
-        {
-            groups.insert(scope, observation);
-        }
-    }
-    let mut positive = false;
-    let mut ids = Vec::new();
-    let mut blocked = None;
-    for observation in groups.into_values() {
-        ids.push(observation.observation_id);
-        let timely = fresh(
-            observation.received_at_ms,
-            observation.expires_at_ms,
-            input.now_ms,
-        );
-        let cooldown = timely && observation.cooldown_until_ms > input.now_ms;
-        let observed =
-            timely && input.now_ms - observation.received_at_ms <= policy.observation_max_age_ms;
-        if !observed && !cooldown {
-            continue;
-        }
-        let state = match observation.state {
-            Availability::Available => {
-                positive = true;
-                continue;
-            }
-            Availability::AuthenticationFailed => CandidateState::MissingCredentials,
-            Availability::ModelUnsupported => CandidateState::Unsupported,
-            Availability::QuotaUnavailable | Availability::TemporaryUnavailable => {
-                CandidateState::Unavailable
-            }
-        };
-        // Stable, conservative precedence across independent matching scopes.
-        let priority = |s: CandidateState| match s {
-            CandidateState::MissingCredentials => 3,
-            CandidateState::Unsupported => 2,
-            _ => 1,
-        };
-        if blocked.is_none_or(|old| priority(state) > priority(old)) {
-            blocked = Some(state);
-        }
-    }
-    ids.sort();
-    if let Some(state) = blocked {
-        return Ok((
-            state,
-            vec![
-                match state {
-                    CandidateState::MissingCredentials => "provider_authentication_failed",
-                    CandidateState::Unsupported => "provider_model_unsupported",
-                    _ => "provider_cooldown_or_unavailable",
-                }
-                .into(),
-            ],
-            ids,
-        ));
-    }
-    if positive {
-        return Ok((
-            CandidateState::Eligible,
-            vec!["availability_observed".into()],
-            ids,
-        ));
-    }
-    if policy.allow_unknown_availability {
-        Ok((
-            CandidateState::Eligible,
-            vec!["unknown_availability_bounded_attempt".into()],
-            ids,
-        ))
-    } else {
-        Ok((
-            CandidateState::StaleUnknown,
-            vec!["availability_stale_or_unknown".into()],
-            ids,
-        ))
-    }
-}
-fn fallback(state: CandidateState) -> Option<FallbackReason> {
-    match state {
-        CandidateState::Eligible => None,
-        CandidateState::MissingCredentials => Some(FallbackReason::MissingCredentials),
-        CandidateState::Unavailable => Some(FallbackReason::Unavailable),
-        CandidateState::Unsupported => Some(FallbackReason::Unsupported),
-        CandidateState::StaleUnknown => Some(FallbackReason::StaleUnknown),
-        CandidateState::PolicyDenied => Some(FallbackReason::PolicyDenied),
-    }
-}
-fn trace(
-    id: String,
-    c: &CoreCandidate<'_>,
-    harness: &str,
-    environment: &str,
-    credential: Option<&AuthorizedCredential>,
-    state: CandidateState,
-    reason: &str,
-) -> CandidateTrace {
-    CandidateTrace {
-        candidate_id: id,
-        profile_candidate_id: c.id.clone(),
-        provider: c.provider.into(),
-        model: c.model.into(),
-        harness: harness.into(),
-        environment: environment.into(),
-        credential_profile: credential.map(|c| c.profile.clone()),
-        state,
-        reason_codes: vec![reason.into()],
-        observation_ids: vec![],
-    }
-}
+mod ranking;
+use ranking::{EvaluatedRow, rank};
+
 pub(crate) fn evaluate(
     profile: &CoreProfile<'_>,
     policy: &SelectionPolicy,
     input: &CoreInputs<'_>,
 ) -> Result<CoreOutcome> {
-    let execution = profile;
-    let global = input.global;
-    // The last field: the route excludes the row, recorded once where it is evaluated.
-    let mut rows: Vec<(CandidateTrace, Option<ConcreteChoice>, u64, bool)> = Vec::new();
+    let context = Evaluation {
+        input,
+        policy,
+        profile,
+    };
+    let mut rows = Vec::new();
     let mut harnesses: Vec<_> = input.installation.harnesses.iter().collect();
     harnesses.sort_by_key(|h| {
         (
             &h.harness,
-            h.environment.digest.clone(),
-            h.adapter.digest.clone(),
-            h.cli_version.clone(),
+            &h.environment.digest,
+            &h.adapter.digest,
+            &h.cli_version,
         )
     });
     for candidate in &profile.candidates {
+        context.candidate_rows(candidate, &harnesses, &mut rows)?;
+    }
+    Ok(rank(rows, input.route, policy))
+}
+
+impl Evaluation<'_> {
+    fn prepared_harness<'a>(
+        &'a self,
+        name: &str,
+        harness: &'a InstalledHarness,
+    ) -> Option<(&'a InstalledHarness, &'a CoreLaunch<'a>)> {
+        if harness.harness != name
+            || !self
+                .profile
+                .environments
+                .iter()
+                .any(|e| names_profile(e, &harness.environment))
+        {
+            return None;
+        }
+        let launch =
+            self.input.launches.iter().find(|l| {
+                l.harness == name && names_profile(l.environment, &harness.environment)
+            })?;
+        Some((harness, launch))
+    }
+    fn candidate_rows(
+        &self,
+        candidate: &CoreCandidate<'_>,
+        harnesses: &[&InstalledHarness],
+        rows: &mut Vec<EvaluatedRow>,
+    ) -> Result<()> {
         let before = rows.len();
-        for name in execution.harnesses {
-            if !candidate.harnesses.contains(name) {
+        for name in self
+            .profile
+            .harnesses
+            .iter()
+            .filter(|name| candidate.harnesses.contains(name))
+        {
+            let reference = self
+                .profile
+                .credentials
+                .get(name)
+                .map_or("unconfigured", String::as_str);
+            if self
+                .input
+                .credentials
+                .iter()
+                .any(|c| names_profile(reference, &c.profile) && c.provider != candidate.provider)
+            {
                 continue;
             }
-            for harness in harnesses.iter().filter(|h| {
-                &h.harness == name
-                    && (execution
-                        .environments
-                        .contains(&profile_key(&h.environment))
-                        || execution
-                            .environments
-                            .iter()
-                            .any(|e| e == h.environment.id.as_str()))
-            }) {
-                let Some(launch) = input.launches.iter().find(|c| {
-                    c.harness == name.as_str()
-                        && (c.environment == harness.environment.id.as_str()
-                            || c.environment == profile_key(&harness.environment))
-                }) else {
-                    continue;
+            let credential =
+                self.input.credentials.iter().find(|c| {
+                    names_profile(reference, &c.profile) && c.provider == candidate.provider
+                });
+            for (harness, launch) in harnesses
+                .iter()
+                .filter_map(|h| self.prepared_harness(name, h))
+            {
+                ensure(rows.len() < 128, "candidate fanout exceeds published bound")?;
+                let composition = Composition {
+                    candidate,
+                    harness,
+                    launch,
+                    credential,
                 };
-                for reference in credential_references(execution.credentials, name) {
-                    if input.credentials.iter().any(|c| {
-                        names_profile(&reference, &c.profile) && c.provider != candidate.provider
-                    }) {
-                        continue;
-                    }
-                    ensure(rows.len() < 128, "candidate fanout exceeds published bound")?;
-                    let credential = input.credentials.iter().find(|c| {
-                        names_profile(&reference, &c.profile) && c.provider == candidate.provider
-                    });
-                    let id = format!(
-                        "choice:{}",
-                        digest(&(
-                            candidate.id.as_str(),
-                            &harness.adapter,
-                            &harness.environment,
-                            &harness.cli_version,
-                            &reference
-                        ))?
-                        .as_str()
-                    );
-                    let mut row = trace(
-                        id,
-                        candidate,
-                        name,
-                        &profile_key(&harness.environment),
-                        credential,
-                        CandidateState::Eligible,
-                        "candidate_evaluated",
-                    );
-                    let mut choice = None;
-                    // A global refusal outranks the route, so such a row is not route-excluded.
-                    let excluded = (input.route)
-                        .filter(|_| global.is_none())
-                        .and_then(|r| crate::route::excludes(r, name, candidate.provider));
-                    let evaluated =
-                        (|| -> std::result::Result<(), (CandidateState, &'static str)> {
-                            if let Some(reason) = global {
-                                return Err((CandidateState::PolicyDenied, reason));
-                            }
-                            if let Some(reason) = excluded {
-                                return Err((CandidateState::PolicyDenied, reason));
-                            }
-                            if !input.allowed_environments.iter().any(|e| {
-                                e == harness.environment.id.as_str()
-                                    || e == &profile_key(&harness.environment)
-                            }) {
-                                return Err((
-                                    CandidateState::PolicyDenied,
-                                    input.environment_denied,
-                                ));
-                            }
-                            if !fresh(
-                                input.installation.observed_at_ms,
-                                input.installation.expires_at_ms,
-                                input.now_ms,
-                            ) {
-                                return Err((
-                                    CandidateState::StaleUnknown,
-                                    input.installation_stale,
-                                ));
-                            }
-                            if let Some(placement) = input.placement {
-                                crate::placement::check(placement, harness)?;
-                            }
-                            crate::placement::admit_confinement(
-                                input.placement,
-                                &execution.confinement,
-                                harness,
-                            )?;
-                            let credential = credential.ok_or((
-                                CandidateState::MissingCredentials,
-                                "credential_profile_unregistered",
-                            ))?;
-                            if !credential.enabled {
-                                return Err((
-                                    CandidateState::PolicyDenied,
-                                    "credential_profile_disabled",
-                                ));
-                            }
-                            credential_backend_policy(
-                                &credential.allowed_backends,
-                                input.backend_kind,
-                            )
-                            .map_err(|reason| (CandidateState::PolicyDenied, reason))?;
-                            if !credential.provisionable {
-                                return Err((
-                                    CandidateState::MissingCredentials,
-                                    "credential_not_provisionable",
-                                ));
-                            }
-                            let missing = if credential.material_owner.is_some() {
-                                "credential_preparation_missing_or_stale"
-                            } else {
-                                "installed_credential_missing_or_stale"
-                            };
-                            let delivery = (input.delivery)(credential)
-                                .ok_or((CandidateState::MissingCredentials, missing))?;
-                            require_capabilities(
-                                &policy.required_capabilities,
-                                &harness.capabilities,
-                            )
-                            .map_err(|_| {
-                                (
-                                    CandidateState::Unsupported,
-                                    "required_capability_unsupported",
-                                )
-                            })?;
-                            // The candidate's stated reasoning, as stated, when the
-                            // harness accepts it; never a substitute.
-                            let native_reasoning = aq_profiles::roles::harness_supports(
-                                &harness.harness,
-                                candidate.reasoning,
-                            )
-                            .then(|| candidate.reasoning.to_string())
-                            .ok_or((
-                                CandidateState::Unsupported,
-                                "model_or_reasoning_unsupported",
-                            ))?;
-                            let limits = &harness.limits;
-                            if limits.context_bytes == 0
-                                || limits.wall_time_ms == 0
-                                || limits.memory_bytes == 0
-                                || limits.cpu_millis == 0
-                                || limits.process_limit == 0
-                                || limits.max_output_tokens < policy.max_output_tokens
-                            {
-                                return Err((
-                                    CandidateState::Unsupported,
-                                    "required_native_limit_unsupported",
-                                ));
-                            }
-                            let mut resources = input.ceilings.clone();
-                            resources.context_bytes = resources
-                                .context_bytes
-                                .min(limits.context_bytes)
-                                .min(launch.context_limit_bytes);
-                            resources.wall_time_ms =
-                                resources.wall_time_ms.min(limits.wall_time_ms);
-                            resources.memory_bytes =
-                                resources.memory_bytes.min(limits.memory_bytes);
-                            resources.cpu_millis = resources.cpu_millis.min(limits.cpu_millis);
-                            resources.process_limit =
-                                resources.process_limit.min(limits.process_limit);
-                            let bytes = launch.startup_bytes;
-                            if bytes > resources.context_bytes {
-                                return Err((
-                                    CandidateState::Unsupported,
-                                    "required_context_limit_unsupported",
-                                ));
-                            }
-                            let estimate = input.estimates.iter().find(|e| {
-                                e.credential_profile == credential.profile
-                                    && e.provider == candidate.provider
-                                    && e.model == candidate.model
-                            });
-                            (input.cost)(harness, estimate)?;
-                            let (state, reasons, ids) =
-                                availability(input, credential, candidate.model, policy).map_err(
-                                    |_| (CandidateState::PolicyDenied, "observation_invalid"),
-                                )?;
-                            row.state = state;
-                            row.reason_codes = reasons;
-                            row.observation_ids = ids;
-                            if state != CandidateState::Eligible {
-                                return Ok(());
-                            }
-                            if delivery.is_some() {
-                                row.reason_codes
-                                    .push("material_preparation_required".into());
-                            }
-                            choice = Some(ConcreteChoice {
-                                candidate_id: row.candidate_id.clone(),
-                                profile_candidate_id: candidate.id.clone(),
-                                provider: candidate.provider.into(),
-                                model: candidate.model.into(),
-                                native_reasoning,
-                                harness: harness.harness.clone(),
-                                cli_version: harness.cli_version.clone(),
-                                adapter: harness.adapter.clone(),
-                                environment: harness.environment.clone(),
-                                qualification: harness.qualification.clone(),
-                                failure_classifier: harness.failure_classifier.clone(),
-                                credential_profile: credential.profile.clone(),
-                                credential_delivery: delivery,
-                                account_reference: credential.account_reference.clone(),
-                                endpoint_reference: credential.endpoint_reference.clone(),
-                                launch_digest: launch.digest.clone(),
-                                resources,
-                                max_output_tokens: policy.max_output_tokens,
-                                estimate: estimate.cloned(),
-                            });
-                            Ok(())
-                        })();
-                    if let Err((state, reason)) = evaluated {
-                        row.state = state;
-                        row.reason_codes = vec![reason.into()];
-                    }
-                    let revision = credential.map_or(0, |c| c.revision);
-                    rows.push((row, choice, revision, excluded.is_some()));
-                }
+                rows.push(composition.row(self, reference)?);
             }
         }
         if before == rows.len() {
             ensure(rows.len() < 128, "candidate fanout exceeds published bound")?;
-            let id = format!(
-                "choice:{}",
-                digest(&(&candidate.id, "no-compatible-composition"))?.as_str()
-            );
-            // Its harness is unknown: only the route's provider allowlist applies.
-            let excluded =
-                (input.route).and_then(|r| crate::route::excludes_provider(r, candidate.provider));
-            let (state, reason) = match excluded {
-                Some(reason) => (CandidateState::PolicyDenied, reason),
-                None => (
-                    CandidateState::Unsupported,
-                    "compatible_installed_composition_unavailable",
-                ),
-            };
-            let row = trace(
-                id,
-                candidate,
-                "unavailable",
-                "unavailable",
-                None,
-                state,
-                reason,
-            );
-            rows.push((row, None, 0, excluded.is_some()));
+            rows.push(candidate.unavailable(self.input.route)?);
         }
+        Ok(())
     }
-    // Spec 0011 §4: a pinned route's provider is the first one it allows, in profile order.
-    let pinned = (input.route.is_some_and(|r| r.pinned))
-        .then(|| rows.iter().find(|r| !r.3).map(|r| r.0.provider.clone()))
-        .flatten();
-    if let Some(route) = input.route {
-        crate::route::preferred_first(route, &mut rows, |(t, _, _, _)| &t.harness);
-    }
-    let mut blocked = false;
-    let mut selected = None;
-    let mut pin_refused = false;
-    for (index, (row, choice, _, excluded)) in rows.iter_mut().enumerate() {
-        if selected.is_some() {
-            continue;
-        }
-        // A candidate the route excludes is not a fallback: it neither blocks nor pins.
-        if *excluded {
-            continue;
-        }
-        if blocked {
-            row.state = CandidateState::PolicyDenied;
-            row.reason_codes.push("fallback_not_permitted".into());
-            continue;
-        }
-        if pinned.as_ref().is_some_and(|p| *p != row.provider) {
-            row.state = CandidateState::PolicyDenied;
-            row.reason_codes.push("route_provider_pinned".into());
-            pin_refused = true;
-            continue;
-        }
-        if row.state == CandidateState::Eligible && choice.is_some() {
-            selected = Some(index);
-        } else if fallback(row.state).is_some_and(|reason| !policy.fallback_on.contains(&reason)) {
-            blocked = true;
-        }
-    }
-    let traces: Vec<_> = rows.iter().map(|(trace, ..)| trace.clone()).collect();
-    let resolved = selected.map(|index| (rows[index].1.clone().unwrap(), rows[index].2, index));
-    Ok(CoreOutcome {
-        reason_codes: if resolved.is_some() {
-            vec![]
-        } else if pin_refused {
-            vec!["route_provider_pinned".into()]
-        } else if blocked {
-            vec!["no_permitted_fallback".into()]
-        } else {
-            vec!["no_eligible_candidate".into()]
-        },
-        selected: resolved,
-        traces,
-    })
 }
-/// Expiration of every influencing observation may only shorten a decision.
-pub(crate) fn influencing_expiry(
-    observations: &[AvailabilityObservation],
-    now_ms: u64,
-    policy: &SelectionPolicy,
-    traces: &[CandidateTrace],
-    index: usize,
-    mut expires: u64,
-) -> u64 {
-    for id in traces
-        .iter()
-        .take(index + 1)
-        .flat_map(|t| &t.observation_ids)
-    {
-        if let Some(o) = observations.iter().find(|o| &o.observation_id == id) {
-            if o.expires_at_ms > now_ms {
-                expires = expires.min(o.expires_at_ms);
-            }
-            let age = o
-                .received_at_ms
-                .saturating_add(policy.observation_max_age_ms)
-                .saturating_add(1);
-            if age > now_ms {
-                expires = expires.min(age);
-            } else if o.cooldown_until_ms > now_ms {
-                expires = expires.min(o.cooldown_until_ms);
-            }
+
+impl CoreCandidate<'_> {
+    fn trace(&self, id: String, harness: &str, environment: String) -> CandidateTrace {
+        CandidateTrace {
+            candidate_id: id,
+            profile_candidate_id: self.id.clone(),
+            provider: self.provider.into(),
+            model: self.model.into(),
+            harness: harness.into(),
+            environment,
+            credential_profile: None,
+            state: CandidateState::Eligible,
+            reason_codes: vec!["candidate_evaluated".into()],
+            observation_ids: vec![],
         }
     }
-    expires
+    fn unavailable(&self, route: Option<&RouteLimits>) -> Result<EvaluatedRow> {
+        let id = format!(
+            "choice:{}",
+            digest(&(&self.id, "no-compatible-composition"))?.as_str()
+        );
+        // When the harness is unknown, only the route's provider allowlist applies.
+        let excluded = route.and_then(|r| crate::route::excludes_provider(r, self.provider));
+        let (state, reason) = match excluded {
+            Some(reason) => (CandidateState::PolicyDenied, reason),
+            None => (
+                CandidateState::Unsupported,
+                "compatible_installed_composition_unavailable",
+            ),
+        };
+        let mut trace = self.trace(id, "unavailable", "unavailable".into());
+        trace.state = state;
+        trace.reason_codes = vec![reason.into()];
+        Ok(EvaluatedRow {
+            trace,
+            choice: None,
+            revision: 0,
+            excluded: excluded.is_some(),
+        })
+    }
+}
+
+impl Composition<'_> {
+    fn row(&self, context: &Evaluation<'_>, reference: &str) -> Result<EvaluatedRow> {
+        let Self {
+            candidate,
+            harness,
+            credential,
+            ..
+        } = *self;
+        let id = format!(
+            "choice:{}",
+            digest(&(
+                candidate.id.as_str(),
+                &harness.adapter,
+                &harness.environment,
+                &harness.cli_version,
+                reference
+            ))?
+            .as_str()
+        );
+        let mut trace = candidate.trace(id, &harness.harness, profile_key(&harness.environment));
+        trace.credential_profile = credential.map(|c| c.profile.clone());
+        // A global refusal outranks route exclusion.
+        let input = context.input;
+        let excluded = input
+            .route
+            .filter(|_| input.global.is_none())
+            .and_then(|r| crate::route::excludes(r, &harness.harness, candidate.provider));
+        let choice = match self.check(context, input.global.or(excluded), &mut trace) {
+            Ok(choice) => choice,
+            Err((state, reason)) => {
+                trace.state = state;
+                trace.reason_codes = vec![reason.into()];
+                None
+            }
+        };
+        Ok(EvaluatedRow {
+            trace,
+            choice,
+            revision: credential.map_or(0, |c| c.revision),
+            excluded: excluded.is_some(),
+        })
+    }
 }

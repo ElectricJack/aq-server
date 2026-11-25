@@ -98,28 +98,8 @@ async fn write(pool: &PgPool, record: &SourceRecord, markdown: Option<&str>) -> 
     .bind(&record.id)
     .fetch_optional(&mut *tx)
     .await?;
-    let revision = match row {
-        None => 1,
-        Some(row) => {
-            let stored = decode(&row)?;
-            if stored.kind != record.kind {
-                return Err(kind_taken(record));
-            }
-            let text: Option<String> = row.try_get("markdown")?;
-            let deleted: Option<i64> = row.try_get("deleted_at_ms")?;
-            // The old binding would stay live in the engine with nothing to
-            // stop it: a source keeps its binding for as long as it exists.
-            if stored.binding != record.binding && deleted.is_none() {
-                return Err(Error::Conflict(format!(
-                    "{} is bound to {}; a source's binding cannot be changed",
-                    record.id, stored.binding
-                )));
-            }
-            if stored.same_as(record) && text.as_deref() == markdown && deleted.is_none() {
-                return Ok(());
-            }
-            stored.revision + 1
-        }
+    let Some(revision) = next_revision(row.as_ref(), record, markdown)? else {
+        return Ok(());
     };
     let used: Option<String> =
         sqlx::query_scalar("SELECT id FROM playbook_sources WHERE binding=$1 AND id<>$2")
@@ -133,6 +113,33 @@ async fn write(pool: &PgPool, record: &SourceRecord, markdown: Option<&str>) -> 
     upsert(&mut tx, record, markdown, revision).await?;
     tx.commit().await?;
     Ok(())
+}
+
+fn next_revision(
+    row: Option<&PgRow>,
+    record: &SourceRecord,
+    markdown: Option<&str>,
+) -> Result<Option<u64>> {
+    let Some(row) = row else { return Ok(Some(1)) };
+    let stored = decode(row)?;
+    if stored.kind != record.kind {
+        return Err(kind_taken(record));
+    }
+    let text: Option<String> = row.try_get("markdown")?;
+    let deleted: Option<i64> = row.try_get("deleted_at_ms")?;
+    // The old binding would stay live in the engine with nothing to
+    // stop it: a source keeps its binding for as long as it exists.
+    if stored.binding != record.binding && deleted.is_none() {
+        return Err(Error::Conflict(format!(
+            "{} is bound to {}; a source's binding cannot be changed",
+            record.id, stored.binding
+        )));
+    }
+    let unchanged = stored.same_as(record) && text.as_deref() == markdown;
+    if unchanged && deleted.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(stored.revision + 1))
 }
 
 async fn upsert(

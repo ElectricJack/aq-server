@@ -249,9 +249,12 @@ async fn binding_role_defaults_are_checked_and_protect_what_they_name() {
     // A note is bounded by the role store's document byte limit, a Setting.
     let mut limits = aq_role_settings::StoreLimits::default();
     limits.documents.max_document_bytes = 4096;
-    aq_role_settings::save_limits(&env.pool, owner, &limits, 0, Uuid::new_v4(), 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_limits(
+        aq_role_settings::Writer::new(&env.pool, owner, 1).edit(0, Uuid::new_v4()),
+        &limits,
+    )
+    .await
+    .unwrap();
     let (status, body) = put(1, json!({"role_notes":{"reviewer":"n".repeat(4097)}})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(

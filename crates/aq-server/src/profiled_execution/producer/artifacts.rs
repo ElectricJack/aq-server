@@ -4,7 +4,9 @@ use crate::{
     error::AppError,
     profiled_execution::artifacts::{self, OwnerKind},
 };
-use aq_admission::{ArtifactKind, ArtifactRef, Digest, RetainedArtifact, Text};
+use aq_admission::{ArtifactRef, Digest, RetainedArtifact, Text};
+use aq_profiled_state::inline_artifact::offer::Admission;
+pub(super) use aq_profiled_state::inline_artifact::offer::ArtifactBody;
 use serde::Serialize;
 use uuid::Uuid;
 pub fn canonical(value: &impl Serialize) -> Result<Vec<u8>, AppError> {
@@ -24,6 +26,7 @@ pub struct RetainedSet {
     pub entries: Vec<(Uuid, RetainedArtifact)>,
     pub project: Uuid,
     pub until: u64,
+    pub stage: Option<Uuid>,
 }
 impl RetainedSet {
     pub fn new(project: Uuid, until: u64) -> Self {
@@ -31,50 +34,30 @@ impl RetainedSet {
             entries: vec![],
             project,
             until,
+            stage: None,
         }
     }
     pub async fn retain(
         &mut self,
         state: &AppState,
         owner: OwnerKind,
-        kind: ArtifactKind,
-        artifact: ArtifactRef,
-        bytes: &[u8],
+        body: ArtifactBody<'_>,
     ) -> Result<RetainedArtifact, AppError> {
-        if artifact.digest != Digest::of(bytes) {
-            return Err(refused());
+        match body.admission(&self.entries) {
+            Admission::New => {}
+            Admission::Replay(old) => return Ok(old.clone()),
+            Admission::Refused => return Err(refused()),
         }
-        if let Some((_, old)) = self
-            .entries
-            .iter()
-            .find(|(_, r)| r.artifact.id == artifact.id && r.artifact.version == artifact.version)
-        {
-            if old.artifact != artifact || old.kind != kind || old.bytes != bytes.len() as u64 {
-                return Err(refused());
-            }
-            return Ok(old.clone());
-        }
-        if self
-            .entries
-            .iter()
-            .any(|(_, old)| old.artifact.digest == artifact.digest)
-            || self
-                .entries
-                .iter()
-                .try_fold(bytes.len() as u64, |sum, (_, r)| sum.checked_add(r.bytes))
-                .is_none_or(|n| n > 16_777_216)
-        {
-            return Err(refused());
-        }
-        // Two Prepare slots remain for the separately hydrated Git manifest/bundle.
-        if self.entries.len() >= 126 {
-            return Err(refused());
-        }
+        let ArtifactBody {
+            kind,
+            artifact,
+            bytes,
+        } = body;
         let id = Uuid::new_v5(
             &Uuid::from_bytes(*b"aq-offer-retain!"),
             &canonical(&(self.project, &artifact, kind, self.until))?,
         );
-        let retained = artifacts::retain(
+        let retained = artifacts::retain_for(
             state,
             artifacts::Retain {
                 artifact_id: id,
@@ -85,6 +68,7 @@ impl RetainedSet {
                 bytes,
                 retain_until_ms: self.until,
             },
+            self.stage,
         )
         .await?;
         self.entries.push((id, retained.clone()));

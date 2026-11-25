@@ -62,11 +62,9 @@ pub struct CatalogQuery {
     pub metadata_revision: Option<String>,
 }
 fn decimal(value: &str) -> Result<u64> {
-    if value.is_empty()
-        || value.len() > 19
-        || value.starts_with('0')
-        || !value.bytes().all(|b| b.is_ascii_digit())
-    {
+    let digits = value.bytes().all(|b| b.is_ascii_digit());
+    let canonical = (1..=19).contains(&value.len()) && !value.starts_with('0');
+    if !digits || !canonical {
         return Err(Error::Invalid);
     }
     value
@@ -276,20 +274,7 @@ pub fn public_page(
     raw: runner::CatalogPage,
     time: i64,
 ) -> Result<CatalogPage> {
-    if raw.api_version != component::CATALOG_VERSION
-        || raw.stamp.namespace != namespace.engine_namespace()
-        || raw.stamp.kind != kind.into()
-        || raw.items.len() > query.limit
-        || raw.stamp.incarnation == 0
-        || raw.stamp.incarnation > i64::MAX as u64
-        || raw.stamp.metadata_revision == 0
-        || raw.stamp.metadata_revision > raw.state_revision
-        || raw.state_revision > i64::MAX as u64
-        || query
-            .expected
-            .as_ref()
-            .is_some_and(|expected| expected != &raw.stamp)
-    {
+    if !valid_stamp(namespace, kind, query, &raw) {
         return Err(Error::Conflict);
     }
     // Re-apply the component's closed bounds/order/exact-key/stamp validation at
@@ -309,7 +294,7 @@ pub fn public_page(
     {
         return Err(Error::Unknown);
     }
-    let mut page = CatalogPage {
+    let page = CatalogPage {
         api_version: VERSION,
         component_api_version: component::CATALOG_VERSION,
         source: "current_namespace_state",
@@ -327,16 +312,41 @@ pub fn public_page(
             .collect::<Result<_>>()?,
         next_cursor: raw.next_cursor,
     };
-    // AQ adds namespace/source framing. Shorten only this bounded in-memory
-    // metadata page; every dropped item remains reachable through the cursor.
-    while serde_json::to_vec(&page).map_err(|_| Error::Unknown)?.len() > MAX_BYTES {
-        if page.items.len() <= 1 {
-            return Err(Error::Overloaded);
+    page.bounded()
+}
+
+fn valid_stamp(
+    namespace: &Namespace,
+    kind: Kind,
+    query: &runner::CatalogQuery,
+    raw: &runner::CatalogPage,
+) -> bool {
+    let source = raw.api_version == component::CATALOG_VERSION
+        && raw.stamp.namespace == namespace.engine_namespace()
+        && raw.stamp.kind == kind.into();
+    let revision = (1..=i64::MAX as u64).contains(&raw.stamp.incarnation)
+        && raw.state_revision <= i64::MAX as u64
+        && (1..=raw.state_revision).contains(&raw.stamp.metadata_revision);
+    let requested = raw.items.len() <= query.limit
+        && query
+            .expected
+            .as_ref()
+            .is_none_or(|stamp| stamp == &raw.stamp);
+    source && revision && requested
+}
+impl CatalogPage {
+    fn bounded(mut self) -> Result<Self> {
+        // AQ adds namespace/source framing. Shorten only this bounded in-memory
+        // metadata page; every dropped item remains reachable through the cursor.
+        while serde_json::to_vec(&self).map_err(|_| Error::Unknown)?.len() > MAX_BYTES {
+            if self.items.len() <= 1 {
+                return Err(Error::Overloaded);
+            }
+            self.items.pop();
+            self.next_cursor = self.items.last().map(|item| item.key.clone());
         }
-        page.items.pop();
-        page.next_cursor = page.items.last().map(|item| item.key.clone());
+        Ok(self)
     }
-    Ok(page)
 }
 
 #[cfg(test)]

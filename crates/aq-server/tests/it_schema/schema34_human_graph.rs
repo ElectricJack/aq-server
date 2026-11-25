@@ -28,6 +28,30 @@ async fn rows(pool: &PgPool, table: &str) -> Value {
     .unwrap()
 }
 
+async fn snapshot_tables(pool: &PgPool, tables: &[&str]) -> Vec<Value> {
+    let mut snapshots = Vec::new();
+    for table in tables {
+        snapshots.push(rows(pool, table).await);
+    }
+    snapshots
+}
+
+async fn assert_tables_unchanged(
+    pool: &PgPool,
+    tables: &[&str],
+    before: Vec<Value>,
+    context: &str,
+) {
+    assert_eq!(tables.len(), before.len());
+    for (table, expected) in tables.iter().zip(before) {
+        assert_eq!(
+            rows(pool, table).await,
+            expected,
+            "{context} changed {table}"
+        );
+    }
+}
+
 async fn catalog(pool: &PgPool) -> Value {
     sqlx::query_scalar(
         "SELECT jsonb_build_object('table',to_regclass('human_graph_operations')::text, \
@@ -72,6 +96,60 @@ fn rejected(error: sqlx::Error, code: &str, reason: &str) {
     assert!(database.message().contains(reason), "{database}");
 }
 
+async fn reject_assignment(
+    pool: &PgPool,
+    operation: Uuid,
+    assignment: &str,
+    code: &str,
+    reason: &str,
+) {
+    let error = sqlx::query(&format!(
+        "UPDATE human_graph_operations SET {assignment} WHERE operation_id=$1"
+    ))
+    .bind(operation)
+    .execute(pool)
+    .await
+    .unwrap_err();
+    rejected(error, code, reason);
+}
+
+async fn assert_terminal_rows_immutable(pool: &PgPool, actor: Uuid, project: Uuid) {
+    for state in ["confirmed", "conflict", "rejected"] {
+        let id = intent(pool, actor, project).await;
+        sqlx::query(
+            "UPDATE human_graph_operations SET status=$2,raw_receipt=$3 WHERE operation_id=$1",
+        )
+        .bind(id)
+        .bind(json!({"state":state}))
+        .bind((state == "confirmed").then(|| json!({"receipt":"actual fixture"})))
+        .execute(pool)
+        .await
+        .unwrap();
+        let before = rows(pool, "human_graph_operations").await;
+        // Exact replay remains harmless, but every durable terminal fact is frozen.
+        sqlx::query("UPDATE human_graph_operations SET status=status WHERE operation_id=$1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        for assignment in [
+            "status='{\"state\":\"pending\"}',raw_receipt=NULL",
+            "stop_reason='changed'",
+            "dispatch_count=1",
+        ] {
+            reject_assignment(
+                pool,
+                id,
+                assignment,
+                "P0001",
+                "terminal operation is immutable",
+            )
+            .await;
+        }
+        assert_eq!(rows(pool, "human_graph_operations").await, before);
+    }
+}
+
 #[tokio::test]
 async fn fresh34_is_complete_and_idempotent() {
     let (_db, pool) = database(34).await;
@@ -107,20 +185,10 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
         "execution_attempts",
         "source_transfers",
     ];
-    let mut before = Vec::new();
-    for table in preserved {
-        before.push(rows(&pool, table).await);
-    }
+    let before = snapshot_tables(&pool, &preserved).await;
     migrate(&pool).await.unwrap();
-    for (table, expected) in preserved.into_iter().zip(before) {
-        assert_eq!(
-            rows(&pool, table).await,
-            expected,
-            "upgrade changed {table}"
-        );
-    }
+    assert_tables_unchanged(&pool, &preserved, before, "upgrade").await;
     intent(&pool, actor, project).await;
-    let mut before = Vec::new();
     let protected = [
         "meta",
         "schema_migrations",
@@ -128,9 +196,7 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
         "execution_attempts",
         "source_transfers",
     ];
-    for table in protected {
-        before.push(rows(&pool, table).await);
-    }
+    let before = snapshot_tables(&pool, &protected).await;
     assert!(matches!(
         migrate_profile(&pool, 33).await,
         Err(StoreError::IncompatibleState {
@@ -138,13 +204,7 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
             supported: 33
         })
     ));
-    for (table, expected) in protected.into_iter().zip(before) {
-        assert_eq!(
-            rows(&pool, table).await,
-            expected,
-            "old reader changed {table}"
-        );
-    }
+    assert_tables_unchanged(&pool, &protected, before, "old reader").await;
 }
 
 async fn corruption_refused(sql: &str) {
@@ -219,14 +279,14 @@ async fn intent_identity_is_immutable_and_dispatch_count_cannot_decrease() {
         "retained_bytes=3".into(),
     ];
     for assignment in assignments {
-        let error = sqlx::query(&format!(
-            "UPDATE human_graph_operations SET {assignment} WHERE operation_id=$1"
-        ))
-        .bind(operation)
-        .execute(&pool)
-        .await
-        .unwrap_err();
-        rejected(error, "P0001", "identity is immutable");
+        reject_assignment(
+            &pool,
+            operation,
+            &assignment,
+            "P0001",
+            "identity is immutable",
+        )
+        .await;
         assert_eq!(
             rows(&pool, "human_graph_operations").await,
             before,
@@ -260,49 +320,9 @@ async fn status_shape_terminal_rows_and_destructive_history_guards() {
         "status='{\"state\":\"confirmed\"}',raw_receipt='[]'",
         "raw_receipt='{}'",
     ] {
-        let error = sqlx::query(&format!(
-            "UPDATE human_graph_operations SET {assignment} WHERE operation_id=$1"
-        ))
-        .bind(operation)
-        .execute(&pool)
-        .await
-        .unwrap_err();
-        rejected(error, "23514", "check constraint");
+        reject_assignment(&pool, operation, assignment, "23514", "check constraint").await;
     }
-    for state in ["confirmed", "conflict", "rejected"] {
-        let id = intent(&pool, actor, project).await;
-        sqlx::query(
-            "UPDATE human_graph_operations SET status=$2,raw_receipt=$3 WHERE operation_id=$1",
-        )
-        .bind(id)
-        .bind(json!({"state":state}))
-        .bind((state == "confirmed").then(|| json!({"receipt":"actual fixture"})))
-        .execute(&pool)
-        .await
-        .unwrap();
-        let before = rows(&pool, "human_graph_operations").await;
-        // Exact replay remains harmless, but every durable terminal fact is frozen.
-        sqlx::query("UPDATE human_graph_operations SET status=status WHERE operation_id=$1")
-            .bind(id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        for assignment in [
-            "status='{\"state\":\"pending\"}',raw_receipt=NULL",
-            "stop_reason='changed'",
-            "dispatch_count=1",
-        ] {
-            let error = sqlx::query(&format!(
-                "UPDATE human_graph_operations SET {assignment} WHERE operation_id=$1"
-            ))
-            .bind(id)
-            .execute(&pool)
-            .await
-            .unwrap_err();
-            rejected(error, "P0001", "terminal operation is immutable");
-        }
-        assert_eq!(rows(&pool, "human_graph_operations").await, before);
-    }
+    assert_terminal_rows_immutable(&pool, actor, project).await;
     let before = rows(&pool, "human_graph_operations").await;
     for sql in [
         "DELETE FROM human_graph_operations",

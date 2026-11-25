@@ -110,6 +110,10 @@ async fn negotiated_author_is_sealed_and_replayed_from_the_attempt() {
     .await
     .unwrap();
     assert_eq!(original["native_offer"]["git_author"], json!(author()));
+    assert_eq!(
+        original["native_offer"]["offered"]["clock"]["server_time_ms"],
+        delivered.native.offered.clock.server_time_ms
+    );
 
     // Perturb the upstream fixture on the isolated database. Any re-read
     // instead of replay would now drop the author.
