@@ -191,6 +191,33 @@ pub(super) async fn publish(
         .as_ref()
         .ok_or_else(|| refused())?;
     sqlx::query("INSERT INTO intelligence_attempt_selections(attempt_id,selection_digest,selection) VALUES($1,$2,$3)").bind(binding.attempt_id).bind(aq_selection::digest(selection).map_err(|_|AppError::Internal)?.as_str()).bind(serde_json::to_value(selection).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
+    sqlx::query(
+        "INSERT INTO performance_first_routes
+         (project_id,workspace_id,task_id,attempt_id,candidate,intended_model,
+          policy_revision,registry_revision,recorded_at_ms)
+         SELECT $1,$2,$3,$4,$5,$6,d.authority_policy_revision,$7,$8
+         FROM intelligence_decisions d WHERE d.decision_id=$9
+         AND NOT EXISTS (
+             SELECT 1 FROM execution_attempts a
+             LEFT JOIN profiled_launches l USING(attempt_id)
+             LEFT JOIN admission_source_observations so USING(source_observation_id)
+             WHERE a.task_id=$3 AND a.attempt_id<>$4
+               AND (so.project_id IS NULL OR so.project_id=$1)
+         )
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(selection.lineage.project_id)
+    .bind(selection.lineage.workspace_id)
+    .bind(selection.lineage.task_id)
+    .bind(binding.attempt_id)
+    .bind(&selection.choice.candidate_id)
+    .bind(&selection.choice.model)
+    .bind(selection.registry_revision as i64)
+    .bind(time as i64)
+    .bind(built.decision.decision_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(db)?;
     // Spec 0014 §7.1: what the attempt ran with is part of its record, and
     // its snapshot stays while the record does.
     if crate::role_settings::tables(state) {
