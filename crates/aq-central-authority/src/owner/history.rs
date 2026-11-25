@@ -6,6 +6,7 @@ pub(super) async fn fence(
     tx: &mut Transaction<'_, Postgres>,
     h: &Head,
     plan: &CentralPlan,
+    verifier: &impl EvidenceVerifier,
 ) -> OwnerResult<MailHistoryFence> {
     let rows = sqlx::query("SELECT * FROM central_session_generations WHERE actor_id=$1 ORDER BY generation LIMIT 1025")
         .bind(h.actor).fetch_all(&mut **tx).await?;
@@ -26,11 +27,22 @@ pub(super) async fn fence(
         ));
         states.push(s.run);
     }
+    // Only a stopped generation that handed off mail this plan reuses is asked.
+    let mut released = Vec::with_capacity(states.len());
+    for run in &states {
+        let reused = run.plan().batch.messages.iter().any(|m| {
+            (plan.batch.messages.iter())
+                .any(|n| n.message_id == m.message_id || n.cursor == m.cursor)
+        });
+        let handed_off = matches!(run.dispatch(), DispatchState::Resolved { evidence } if evidence.disposition == HandoffDisposition::HandedOff);
+        let stopped = run.phase() == Phase::StoppedReported;
+        released.push(reused && handed_off && stopped && verifier.released(tx, run).await?);
+    }
     let entries = plan
         .batch
         .messages
         .iter()
-        .map(|message| message_history(message, &states))
+        .map(|message| message_history(message, &states, &released))
         .collect::<OwnerResult<Vec<_>>>()?;
     let operations = unused_operations(plan, &states)?;
     let bytes = serde_json::to_vec(&pins).map_err(|_| OwnerError::Storage)?;
@@ -49,9 +61,13 @@ pub(super) async fn fence(
     })
 }
 
-fn message_history(message: &MailRef, states: &[Run]) -> OwnerResult<MessageHistory> {
+fn message_history(
+    message: &MailRef,
+    states: &[Run],
+    released: &[bool],
+) -> OwnerResult<MessageHistory> {
     let mut disposition = HistoryDisposition::NoPriorDispatch;
-    for run in states {
+    for (run, released) in states.iter().zip(released) {
         let matching = run.plan().batch.messages.iter().filter(|previous| {
             previous.message_id == message.message_id || previous.cursor == message.cursor
         });
@@ -59,7 +75,7 @@ fn message_history(message: &MailRef, states: &[Run]) -> OwnerResult<MessageHist
             if previous != message {
                 return Err(OwnerError::Conflict);
             }
-            if let Some(next) = dispatch_disposition(run)?
+            if let Some(next) = dispatch_disposition(run, *released)?
                 && !matches!(disposition, HistoryDisposition::Held { .. })
             {
                 disposition = next;
@@ -71,7 +87,7 @@ fn message_history(message: &MailRef, states: &[Run]) -> OwnerResult<MessageHist
         disposition,
     })
 }
-fn dispatch_disposition(run: &Run) -> OwnerResult<Option<HistoryDisposition>> {
+fn dispatch_disposition(run: &Run, released: bool) -> OwnerResult<Option<HistoryDisposition>> {
     Ok(Some(match run.dispatch() {
         DispatchState::NotAttempted => return Ok(None),
         DispatchState::IntentCommitted => HistoryDisposition::Held {
@@ -83,7 +99,7 @@ fn dispatch_disposition(run: &Run) -> OwnerResult<Option<HistoryDisposition>> {
             reason: MailHoldReason::Unknown,
         },
         DispatchState::Resolved { evidence }
-            if evidence.disposition == HandoffDisposition::NotHandedOff =>
+            if evidence.disposition == HandoffDisposition::NotHandedOff || released =>
         {
             HistoryDisposition::Retryable {
                 evidence: *evidence.clone(),
