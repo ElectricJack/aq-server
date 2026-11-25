@@ -64,6 +64,19 @@ pub(super) async fn writable(
     {
         return Ok(false);
     }
+    let finishing: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_settlement_evaluations
+           WHERE attempt_id=$1 AND disposition IN ('accepted','needs_reconciliation'))
+         OR EXISTS(SELECT 1 FROM profiled_auto_settlements WHERE attempt_id=$1
+           AND disposition IN ('prepared','possible','confirmed'))",
+    )
+    .bind(attempt)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(crate::error::db)?;
+    if finishing {
+        return Ok(false);
+    }
     let reworked: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements WHERE report_id=$1
            AND attempt_id=$2 AND disposition='rework_required')
