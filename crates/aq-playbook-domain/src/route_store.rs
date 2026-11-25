@@ -8,7 +8,7 @@ pub struct RouteCandidate {
     task: Uuid,
     pub emission: host9::Emission,
     since: Option<i64>,
-    project: Option<Uuid>,
+    pub project: Option<Uuid>,
 }
 
 impl RouteCandidate {

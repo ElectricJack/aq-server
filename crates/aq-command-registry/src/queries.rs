@@ -92,7 +92,189 @@ const RESULT_LIMIT: QueryParam = opt(
     "limit",
     r#"{"type":"integer","minimum":1,"maximum":100,"default":20}"#,
 );
-const RESULT_PROFILE: QueryParam = opt("profile", r#"{"enum":["recorded_native_v2"]}"#);
+const RESULT_PROFILE: QueryParam = opt(
+    "profile",
+    r#"{"enum":["recorded_native_v2","recorded_legacy_native_only"]}"#,
+);
+
+const TASK_GRAPH: &[QueryParam] = &[opt(
+    "limit",
+    r#"{"type":"integer","minimum":1,"maximum":63,"default":63}"#,
+)];
+
+const TASK_COMMENTS: &[QueryParam] = &[
+    opt("cursor", CURSOR),
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":100,"default":50}"#,
+    ),
+];
+
+const RECORD_REVISION: &[QueryParam] = &[opt(
+    "revision",
+    r#"{"type":"integer","minimum":1,"description":"An earlier revision; the current one when omitted"}"#,
+)];
+
+const TASK_OVERVIEW: &[QueryParam] = &[
+    PROJECT,
+    opt(
+        "project_limit",
+        r#"{"type":"integer","minimum":1,"maximum":8,"default":4}"#,
+    ),
+    opt(
+        "task_limit",
+        r#"{"type":"integer","minimum":1,"maximum":32,"default":16}"#,
+    ),
+    opt(
+        "after",
+        r#"{"type":"string","format":"uuid","description":"The last project of the previous page; not with project_id"}"#,
+    ),
+];
+
+const CONVERSATION_HISTORY: &[QueryParam] = &[
+    opt(
+        "before",
+        r#"{"type":"string","pattern":"^[1-9][0-9]*(\\.[1-9][0-9]*)?$","description":"A message position; not with after"}"#,
+    ),
+    opt(
+        "after",
+        r#"{"type":"string","pattern":"^(0|[1-9][0-9]*(\\.[1-9][0-9]*)?)$","description":"A message position; not with before"}"#,
+    ),
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":16,"default":16}"#,
+    ),
+];
+
+const DASHBOARD_SEARCH: &[QueryParam] = &[
+    req("q", TEXT),
+    SCOPE,
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":100,"default":25}"#,
+    ),
+    opt("cursor", CURSOR),
+    opt(
+        "types",
+        r#"{"type":"string","pattern":"^(task|session|result|playbook|knowledge)(,(task|session|result|playbook|knowledge))*$","description":"Comma-separated; every type when omitted"}"#,
+    ),
+];
+
+const RESULT_COMMENTS: &[QueryParam] = &[RESULT_LIMIT, opt("cursor", CURSOR)];
+
+const RESULT_FEED: &[QueryParam] = &[
+    opt(
+        "mode",
+        r#"{"enum":["latest","needs_review","following"],"default":"latest"}"#,
+    ),
+    opt(
+        "scope",
+        r#"{"enum":["all_authorized","project"],"description":"project needs project_id"}"#,
+    ),
+    PROJECT,
+    opt("task_id", UUID),
+    opt(
+        "media",
+        r#"{"enum":["any","image","video","none"],"default":"any"}"#,
+    ),
+    opt("since_ms", MILLIS),
+    opt("until_ms", MILLIS),
+    RESULT_LIMIT,
+    opt("cursor", CURSOR),
+];
+
+const HUMAN_RESULTS: &[QueryParam] = &[
+    RESULT_PROFILE,
+    PROJECT,
+    opt(
+        "after",
+        r#"{"type":"string","format":"uuid","description":"The last result of the previous page"}"#,
+    ),
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":25,"default":10}"#,
+    ),
+];
+
+const NOTIFICATION_INBOX: &[QueryParam] = &[
+    opt(
+        "recipient",
+        r#"{"type":"string","format":"uuid","description":"The caller when omitted"}"#,
+    ),
+    opt("after", r#"{"type":"integer","minimum":0,"default":0}"#),
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":64,"default":32}"#,
+    ),
+];
+
+const PLAYBOOK_RUNS: &[QueryParam] = &[
+    PLAYBOOK_AFTER,
+    PLAYBOOK_LIMIT,
+    PROJECT,
+    opt("since_ms", MILLIS),
+    opt(
+        "until_ms",
+        r#"{"type":"integer","minimum":1,"description":"Unix time in milliseconds; after since_ms"}"#,
+    ),
+];
+
+const QUESTIONS: &[QueryParam] = &[
+    STATE,
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":50,"default":25}"#,
+    ),
+    PROJECT,
+    opt("cursor", CURSOR),
+];
+
+const REVIEW_DECISIONS: &[QueryParam] = &[
+    PROJECT,
+    STATE,
+    opt(
+        "order",
+        r#"{"enum":["decision","impact"],"default":"decision","description":"impact needs state open"}"#,
+    ),
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":50,"default":25}"#,
+    ),
+    opt(
+        "cursor",
+        r#"{"type":"string","minLength":1,"maxLength":4096,"description":"Opaque: the cursor a previous page returned"}"#,
+    ),
+];
+
+const SESSION_EVENTS: &[QueryParam] = &[
+    opt("after_sequence", SEQUENCE),
+    opt("through_sequence", SEQUENCE),
+    opt(
+        "limit",
+        r#"{"type":"integer","minimum":1,"maximum":16,"default":16}"#,
+    ),
+];
+
+const INTERNAL_RUNS: &[QueryParam] = &[
+    opt(
+        "affected_kind",
+        r#"{"type":"string","minLength":1,"description":"The kind of thing the run is for, for example task"}"#,
+    ),
+    opt(
+        "affected_id",
+        r#"{"type":"string","minLength":1,"description":"The ID of the thing the run is for"}"#,
+    ),
+    opt(
+        "purpose",
+        r#"{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]}"#,
+    ),
+    opt(
+        "status",
+        r#"{"enum":["queued","running","answered","failed"]}"#,
+    ),
+    opt("cursor", CURSOR),
+    opt("limit", r#"{"type":"integer","minimum":1,"maximum":100}"#),
+];
 
 /// The declared query of the GET route at `path`. A supervisor read
 /// (`/v1/supervisor/read/...`, or the owner bridge) is the owner's handler
@@ -113,79 +295,20 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         | "/api/human/projects/{project}/tasks/{node}/summary"
         | "/api/human/projects/{project}/tasks/{node}/work" => NONE,
         // agent_access/human.rs::graph (`GraphPage`)
-        "/api/human/projects/{project}/tasks/{node}/graph" => {
-            const {
-                &[opt(
-                    "limit",
-                    r#"{"type":"integer","minimum":1,"maximum":63,"default":63}"#,
-                )]
-            }
-        }
+        "/api/human/projects/{project}/tasks/{node}/graph" => TASK_GRAPH,
         // agent_access/human/work.rs::history (`HistoryPage`)
         "/api/human/projects/{project}/tasks/{node}/history" => const { &[opt("cursor", CURSOR)] },
         // agent_access/human/comments.rs::read (`Page`)
-        "/api/human/projects/{project}/tasks/{node}/comments" => {
-            const {
-                &[
-                    opt("cursor", CURSOR),
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":100,"default":50}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/human/projects/{project}/tasks/{node}/comments" => TASK_COMMENTS,
         // agent_access/human.rs::document (`Revision`)
-        "/api/human/projects/{project}/knowledge/{node}" => {
-            const {
-                &[opt(
-                    "revision",
-                    r#"{"type":"integer","minimum":1,"description":"An earlier revision; the current one when omitted"}"#,
-                )]
-            }
-        }
+        "/api/human/projects/{project}/knowledge/{node}" => RECORD_REVISION,
         // agent_access/human/overview.rs::read (`QueryArgs`)
-        "/api/human/overview/tasks" => {
-            const {
-                &[
-                    PROJECT,
-                    opt(
-                        "project_limit",
-                        r#"{"type":"integer","minimum":1,"maximum":8,"default":4}"#,
-                    ),
-                    opt(
-                        "task_limit",
-                        r#"{"type":"integer","minimum":1,"maximum":32,"default":16}"#,
-                    ),
-                    opt(
-                        "after",
-                        r#"{"type":"string","format":"uuid","description":"The last project of the previous page; not with project_id"}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/human/overview/tasks" => TASK_OVERVIEW,
         // agent_access/messaging/global/writes.rs::lookup; marker.rs::read
         "/api/human/conversations/{conversation}/operations/{operation}"
         | "/api/human/conversations/{conversation}/read-marker" => NONE,
         // agent_access/messaging/global/reads.rs::history (`Page`)
-        "/api/human/conversations/{conversation}/messages" => {
-            const {
-                &[
-                    opt(
-                        "before",
-                        r#"{"type":"string","pattern":"^[1-9][0-9]*(\\.[1-9][0-9]*)?$","description":"A message position; not with after"}"#,
-                    ),
-                    opt(
-                        "after",
-                        r#"{"type":"string","pattern":"^(0|[1-9][0-9]*(\\.[1-9][0-9]*)?)$","description":"A message position; not with before"}"#,
-                    ),
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":16,"default":16}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/human/conversations/{conversation}/messages" => CONVERSATION_HISTORY,
         // dashboard_api.rs::bootstrap
         "/api/v1/bootstrap" => NONE,
         // dashboard_api.rs::capacity, ::overview, ::provider_usage, ::swarm,
@@ -199,96 +322,34 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         // dashboard_api.rs::projects, ::sessions (`ReadQuery`)
         "/api/v1/projects" | "/api/v1/sessions" => DASHBOARD_PAGE,
         // dashboard_api/search.rs::read (`QueryParams`)
-        "/api/v1/search" => {
-            const {
-                &[
-                    req("q", TEXT),
-                    SCOPE,
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":100,"default":25}"#,
-                    ),
-                    opt("cursor", CURSOR),
-                    opt(
-                        "types",
-                        r#"{"type":"string","pattern":"^(task|session|result|playbook|knowledge)(,(task|session|result|playbook|knowledge))*$","description":"Comma-separated; every type when omitted"}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/v1/search" => DASHBOARD_SEARCH,
         // dashboard_api/actions/mod.rs::get_operation; the machine listener's
         // agent_access/human/enqueue/supervisor.rs::lookup; agent_access/mutations.rs::agent_get
         "/api/v1/operations/{id}" | "/v1/agent/operations/{operation_id}" => NONE,
+        // aq-environments agent.rs::job
+        "/v1/agent/environments/try/{job_id}" => NONE,
         // aq-supervisor-control read.rs (headers only)
         "/v1/supervisor/projects" => NONE,
         // results_feedback/api.rs::draft_status, ::detail
         "/api/v1/feedback-tasks/{id}" | "/api/v1/results/{id}/revisions/{revision}" => NONE,
         // results_feedback/api.rs::comments (`Page`; only these two are not refused)
-        "/api/v1/results/{id}/revisions/{revision}/comments" => {
-            const { &[RESULT_LIMIT, opt("cursor", CURSOR)] }
-        }
+        "/api/v1/results/{id}/revisions/{revision}/comments" => RESULT_COMMENTS,
         // results_feedback/api.rs::feed (`Page`)
-        "/api/v1/results" => {
-            const {
-                &[
-                    opt(
-                        "mode",
-                        r#"{"enum":["latest","needs_review","following"],"default":"latest"}"#,
-                    ),
-                    opt(
-                        "scope",
-                        r#"{"enum":["all_authorized","project"],"description":"project needs project_id"}"#,
-                    ),
-                    PROJECT,
-                    opt("task_id", UUID),
-                    opt(
-                        "media",
-                        r#"{"enum":["any","image","video","none"],"default":"any"}"#,
-                    ),
-                    opt("since_ms", MILLIS),
-                    opt("until_ms", MILLIS),
-                    RESULT_LIMIT,
-                    opt("cursor", CURSOR),
-                ]
-            }
-        }
+        "/api/v1/results" => RESULT_FEED,
         // profiled_execution/human_results.rs::list (`Page`)
-        "/api/human/results" => {
-            const {
-                &[
-                    RESULT_PROFILE,
-                    PROJECT,
-                    opt(
-                        "after",
-                        r#"{"type":"string","format":"uuid","description":"The last result of the previous page"}"#,
-                    ),
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":25,"default":10}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/human/results" => HUMAN_RESULTS,
         // profiled_execution/human_results.rs::detail (`Page`; after and limit do nothing here)
         "/api/human/results/{id}/revisions/{revision}" => const { &[RESULT_PROFILE, PROJECT] },
         // result_media/api.rs::list (refuses any query string)
         "/api/human/results/{report}/revisions/{revision}/media" => NONE,
+        _ => return operational_query(path),
+    })
+}
+
+fn operational_query(path: &str) -> Option<&'static [QueryParam]> {
+    Some(match path {
         // notifications/api.rs::inbox (`Page`), ::inspect
-        "/api/notifications" => {
-            const {
-                &[
-                    opt(
-                        "recipient",
-                        r#"{"type":"string","format":"uuid","description":"The caller when omitted"}"#,
-                    ),
-                    opt("after", r#"{"type":"integer","minimum":0,"default":0}"#),
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":64,"default":32}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/notifications" => NOTIFICATION_INBOX,
         "/api/notifications/{message}" => NONE,
         // playbooks/inspection/catalog.rs::activations, ::definitions
         "/api/playbooks/inspection/catalog/activations"
@@ -298,74 +359,19 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
             PLAYBOOK_PAGE
         }
         // playbooks/inspection.rs::runs (`RunsQuery`)
-        "/api/playbooks/inspection/runs" => {
-            const {
-                &[
-                    PLAYBOOK_AFTER,
-                    PLAYBOOK_LIMIT,
-                    PROJECT,
-                    opt("since_ms", MILLIS),
-                    opt(
-                        "until_ms",
-                        r#"{"type":"integer","minimum":1,"description":"Unix time in milliseconds; after since_ms"}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/playbooks/inspection/runs" => PLAYBOOK_RUNS,
         // playbooks/inspection/definitions.rs::loaded_definitions (`DefinitionsQuery`)
         "/api/playbooks/inspection/loaded-definitions" => const { &[PROJECT] },
         // provider_accounts.rs::read
         "/api/human/provider-accounts" => NONE,
         // agent_access/questions/inbox.rs::list_http (`ListQuery`), ::detail_http
-        "/api/questions/decisions" => {
-            const {
-                &[
-                    STATE,
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":50,"default":25}"#,
-                    ),
-                    PROJECT,
-                    opt("cursor", CURSOR),
-                ]
-            }
-        }
+        "/api/questions/decisions" => QUESTIONS,
         "/api/questions/decisions/{id}" => NONE,
         // reviews/inbox.rs::inbox_http (`InboxQuery`); reviews.rs::inspect_http
-        "/api/reviews/decisions" => {
-            const {
-                &[
-                    PROJECT,
-                    STATE,
-                    opt(
-                        "order",
-                        r#"{"enum":["decision","impact"],"default":"decision","description":"impact needs state open"}"#,
-                    ),
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":50,"default":25}"#,
-                    ),
-                    opt(
-                        "cursor",
-                        r#"{"type":"string","minLength":1,"maxLength":4096,"description":"Opaque: the cursor a previous page returned"}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/reviews/decisions" => REVIEW_DECISIONS,
         "/api/reviews/decisions/{id}" => NONE,
         // observations/api.rs::events (`Page`), ::usage
-        "/api/observations/sessions/{attempt}/events" => {
-            const {
-                &[
-                    opt("after_sequence", SEQUENCE),
-                    opt("through_sequence", SEQUENCE),
-                    opt(
-                        "limit",
-                        r#"{"type":"integer","minimum":1,"maximum":16,"default":16}"#,
-                    ),
-                ]
-            }
-        }
+        "/api/observations/sessions/{attempt}/events" => SESSION_EVENTS,
         "/api/observations/sessions/{attempt}/usage" => NONE,
         // terminal/api.rs::output, ::tail (`ViewQuery`); ::inspect, ::receipt
         "/api/v1/terminals/{terminal}/output" | "/api/v1/terminals/{terminal}/tail" => {
@@ -406,30 +412,7 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         // playbooks/api.rs::status, ::admission
         "/api/playbooks/status" | "/api/playbooks/admissions/{id}" => NONE,
         // aq-internal-work runs.rs::Query
-        "/api/internal-work/runs" => {
-            const {
-                &[
-                    opt(
-                        "affected_kind",
-                        r#"{"type":"string","minLength":1,"description":"The kind of thing the run is for, for example task"}"#,
-                    ),
-                    opt(
-                        "affected_id",
-                        r#"{"type":"string","minLength":1,"description":"The ID of the thing the run is for"}"#,
-                    ),
-                    opt(
-                        "purpose",
-                        r#"{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]}"#,
-                    ),
-                    opt(
-                        "status",
-                        r#"{"enum":["queued","running","answered","failed"]}"#,
-                    ),
-                    opt("cursor", CURSOR),
-                    opt("limit", r#"{"type":"integer","minimum":1,"maximum":100}"#),
-                ]
-            }
-        }
+        "/api/internal-work/runs" => INTERNAL_RUNS,
         _ => return None,
     })
 }

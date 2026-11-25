@@ -17,9 +17,10 @@ mod validate;
 
 pub use defaults::{default_documents, platform_text};
 pub use markdown::{ParseError, parse_execution, parse_intelligence, parse_role};
-pub use permissions::{effective_permissions, requested_permissions};
+pub use permissions::{RequestedPermissions, requested_permissions};
 pub use selection::{
-    Launch, ResolveError, SelectionDefaults, SelectionOverrides, drop_removed_keys,
+    Launch, LaunchRetryBackoff, ResolveError, SelectionDefaults, SelectionOverrides,
+    drop_removed_keys,
 };
 pub use startup::{StartupError, StartupInput, StartupPart, StartupText, assemble_startup};
 pub use validate::{
@@ -91,7 +92,7 @@ pub struct Role {
     pub description: String,
     /// The id of the execution profile this role runs under.
     pub execution: String,
-    /// AQ operations, without scope: see [`effective_permissions`].
+    /// AQ operations, without scope: see [`requested_permissions`].
     pub operations: Vec<String>,
     pub enabled: bool,
     /// The text under `## Role`.
@@ -209,4 +210,18 @@ pub struct Execution {
     /// Credential profile per harness.
     pub credentials: BTreeMap<String, String>,
     pub limits: Limits,
+}
+
+impl Execution {
+    /// Environments this profile pins, or an empty slice if project placement decides.
+    pub fn pinned_environments(&self) -> &[String] {
+        #[cfg(feature = "project_environments")]
+        {
+            self.environment.as_slice()
+        }
+        #[cfg(not(feature = "project_environments"))]
+        {
+            std::slice::from_ref(&self.environment)
+        }
+    }
 }

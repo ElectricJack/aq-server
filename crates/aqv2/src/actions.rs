@@ -28,34 +28,34 @@ pub struct ActionRequest {
     reason: Option<String>,
     payload: Value,
 }
-fn action(
-    kind: &'static str,
-    entity: &str,
-    id: Uuid,
-    revision: String,
-    operation_id: Uuid,
-    payload: Value,
-) -> ActionRequest {
-    ActionRequest {
-        operation_id,
-        kind,
-        subject: Subject {
+impl Subject {
+    fn versioned(entity: &str, id: Uuid, revision: String) -> Self {
+        Self {
             entity_type: entity.into(),
             id: id.to_string(),
-            revision: Some(revision.clone()),
-        },
-        expected_versions: BTreeMap::from([(entity.into(), revision)]),
-        reason: None,
-        payload,
+            revision: Some(revision),
+        }
+    }
+    fn action(self, kind: &'static str, operation_id: Uuid, payload: Value) -> ActionRequest {
+        let expected_versions = self
+            .revision
+            .iter()
+            .map(|r| (self.entity_type.clone(), r.clone()))
+            .collect();
+        ActionRequest {
+            operation_id,
+            kind,
+            subject: self,
+            expected_versions,
+            reason: None,
+            payload,
+        }
     }
 }
 pub fn task(args: &CreateTask) -> ActionRequest {
     let id = Uuid::new_v4();
-    action(
+    Subject::versioned("project", args.project, args.expected_project_revision.clone()).action(
         "task.create",
-        "project",
-        args.project,
-        args.expected_project_revision.clone(),
         id,
         json!({
             "operation_id":id,"expected_project_revision":args.expected_project_revision,"title":args.title,"body":args.body,"acceptance_criteria":args.acceptance_criteria,"labels":args.labels,"task_state":args.task_state
@@ -66,33 +66,28 @@ pub fn task(args: &CreateTask) -> ActionRequest {
 pub fn task_change(kind: &'static str, c: &TaskChange, revision: String) -> ActionRequest {
     let id = Uuid::new_v4();
     let payload = json!({"operation_id":id,"project_id":c.project,"expected_version":revision});
-    let mut request = action(kind, "task", c.id, revision, id, payload);
+    let mut request = Subject::versioned("task", c.id, revision).action(kind, id, payload);
     request.reason = c.reason.clone();
     request
 }
 /// `worker.revoke`: the subject carries no revision (revoking is idempotent).
 pub fn worker_revoke(machine: &str) -> ActionRequest {
     let operation_id = Uuid::new_v4();
-    ActionRequest {
-        operation_id,
-        kind: "worker.revoke",
-        subject: Subject {
-            entity_type: "machine".into(),
-            id: machine.into(),
-            revision: None,
-        },
-        expected_versions: BTreeMap::new(),
-        reason: None,
-        payload: json!({"operation_id":operation_id,"machine":machine}),
+    Subject {
+        entity_type: "machine".into(),
+        id: machine.into(),
+        revision: None,
     }
+    .action(
+        "worker.revoke",
+        operation_id,
+        json!({"operation_id":operation_id,"machine":machine}),
+    )
 }
 pub fn message(conversation: Uuid, revision: String, body: &str) -> ActionRequest {
     let id = Uuid::new_v4();
-    action(
+    Subject::versioned("conversation", conversation, revision.clone()).action(
         "supervisor.message.send",
-        "conversation",
-        conversation,
-        revision.clone(),
         id,
         json!({
             "operation_id":id,"message_id":Uuid::new_v4(),"expected_conversation_revision":revision,"body":body,"context":[],"attachments":[]
@@ -145,12 +140,11 @@ pub fn decision(id: Uuid, path: &Path) -> Result<ActionRequest> {
     }
     let operation_id = Uuid::new_v4();
     payload["operation_id"] = json!(operation_id);
-    Ok(action(
-        "decision.resolve",
-        "decision",
-        id,
-        revision.to_string(),
-        operation_id,
-        payload,
-    ))
+    Ok(
+        Subject::versioned("decision", id, revision.to_string()).action(
+            "decision.resolve",
+            operation_id,
+            payload,
+        ),
+    )
 }

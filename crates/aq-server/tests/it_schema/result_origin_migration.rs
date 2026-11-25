@@ -1,3 +1,7 @@
+use sqlx::postgres::PgPoolOptions;
+#[path = "archive_receipts.rs"]
+mod archive_receipts;
+
 use aq_server::test_support::migrate_profile;
 #[path = "../support/retained_archive.rs"]
 mod retained_archive;
@@ -8,36 +12,7 @@ use retained_archive::{archive_snapshot, write_archive_evidence};
 #[tokio::test]
 #[ignore = "requires explicitly restored private actual populated36/37 archive clone"]
 async fn selected_populated_archive37_to38_preserves_old_columns_and_receipts() {
-    use sqlx::postgres::PgPoolOptions;
-    let url = std::env::var("AQ_TEST_RESULT38_REHEARSAL_DATABASE_URL")
-        .expect("explicit newly owned archive-clone URL required");
-    let directory = std::path::PathBuf::from(
-        std::env::var("AQ_TEST_RESULT38_REHEARSAL_EVIDENCE")
-            .expect("explicit private new proof directory required"),
-    );
-    let metadata = std::fs::symlink_metadata(&directory).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
-    assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .unwrap();
-    let name: String = sqlx::query_scalar("SELECT current_database()")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let suffix = name
-        .strip_prefix("aq_result38_rehearsal_")
-        .expect("only a newly named result38 rehearsal clone is permitted");
-    assert!(uuid::Uuid::parse_str(suffix).is_ok());
-    let version: String =
-        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(matches!(version.as_str(), "36" | "37"));
+    let (pool, directory, name, version) = selected_archive().await;
     let report_count: i64 = sqlx::query_scalar("SELECT count(*) FROM profiled_result_reports")
         .fetch_one(&pool)
         .await
@@ -58,17 +33,10 @@ async fn selected_populated_archive37_to38_preserves_old_columns_and_receipts() 
     // The retained archive is36. Use the real migration+guard implementation;
     // never stamp a format or skip the independently qualified37 guard.
     migrate_profile(&pool, 37).await.unwrap();
-    let columns: std::collections::BTreeMap<String, Vec<String>> = {
-        let rows: Vec<(String, Vec<String>)> = sqlx::query_as("SELECT c.relname,array_agg(a.attname::text ORDER BY a.attnum) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped WHERE n.nspname='public' AND c.relkind IN('r','p') GROUP BY c.relname ORDER BY c.relname")
-            .fetch_all(&pool).await.unwrap();
-        rows.into_iter().collect()
-    };
+    let columns = archive_receipts::columns(&pool).await;
     let before = archive_snapshot(&pool, &columns, 37).await;
-    let report_bytes: Vec<(uuid::Uuid, Vec<u8>, Vec<u8>)> =
-        sqlx::query_as("SELECT report_id,report_bytes,receipt_bytes FROM profiled_result_reports ORDER BY report_id")
-            .fetch_all(&pool).await.unwrap();
-    let media_bytes: Vec<(uuid::Uuid, Vec<u8>)> = sqlx::query_as("SELECT operation_id,receipt_bytes FROM result_media_intents WHERE state='retained' ORDER BY operation_id")
-        .fetch_all(&pool).await.unwrap();
+    let report_bytes = archive_receipts::report_receipts(&pool).await;
+    let media_bytes = archive_receipts::media_receipts(&pool).await;
     write_archive_evidence(&directory.join("before37.json"), &before);
     migrate_profile(&pool, 38).await.unwrap();
     let after = archive_snapshot(&pool, &columns, 37).await;
@@ -77,11 +45,8 @@ async fn selected_populated_archive37_to38_preserves_old_columns_and_receipts() 
         before, after,
         "old column bags/schema/sequence states changed"
     );
-    let after_reports: Vec<(uuid::Uuid, Vec<u8>, Vec<u8>)> =
-        sqlx::query_as("SELECT report_id,report_bytes,receipt_bytes FROM profiled_result_reports ORDER BY report_id")
-            .fetch_all(&pool).await.unwrap();
-    let after_media: Vec<(uuid::Uuid, Vec<u8>)> = sqlx::query_as("SELECT operation_id,receipt_bytes FROM result_media_intents WHERE state='retained' ORDER BY operation_id")
-        .fetch_all(&pool).await.unwrap();
+    let after_reports = archive_receipts::report_receipts(&pool).await;
+    let after_media = archive_receipts::media_receipts(&pool).await;
     assert!(
         report_bytes == after_reports,
         "actual report/Recorded receipt bytes changed"
@@ -115,4 +80,37 @@ async fn selected_populated_archive37_to38_preserves_old_columns_and_receipts() 
         columns.len()
     );
     pool.close().await;
+}
+
+async fn selected_archive() -> (sqlx::PgPool, std::path::PathBuf, String, String) {
+    let url = std::env::var("AQ_TEST_RESULT38_REHEARSAL_DATABASE_URL")
+        .expect("explicit newly owned archive-clone URL required");
+    let directory = std::path::PathBuf::from(
+        std::env::var("AQ_TEST_RESULT38_REHEARSAL_EVIDENCE")
+            .expect("explicit private new proof directory required"),
+    );
+    let metadata = std::fs::symlink_metadata(&directory).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let suffix = name
+        .strip_prefix("aq_result38_rehearsal_")
+        .expect("only a newly named result38 rehearsal clone is permitted");
+    assert!(uuid::Uuid::parse_str(suffix).is_ok());
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(matches!(version.as_str(), "36" | "37"));
+    (pool, directory, name, version)
 }

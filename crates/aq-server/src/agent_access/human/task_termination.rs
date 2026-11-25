@@ -7,14 +7,9 @@ use crate::profiled_execution::{cancellation, disposition};
 pub struct Sweep(Option<Uuid>);
 impl Sweep {
     pub async fn tick(&mut self, state: &AppState) -> Result<()> {
-        let rows: Vec<(Uuid, Uuid, Uuid, Uuid, Uuid)> = sqlx::query_as(
-            "SELECT DISTINCT ON(a.attempt_id) a.attempt_id,a.task_id,d.operation_id,d.principal_id,i.workspace_id \
-             FROM execution_attempts a JOIN dashboard_operations d ON d.response->'subject_refs'->0->>'id'=a.task_id::text \
-             JOIN dashboard_graph_intents i USING(operation_id) \
-             WHERE a.kind='profiled_v1' AND a.holds_task AND d.kind IN ('task.cancel','task.delete') \
-             AND d.disposition IN ('pending','unknown','confirmed') \
-             AND ($1::uuid IS NULL OR a.attempt_id>$1) ORDER BY a.attempt_id,d.created_at DESC LIMIT 8",
-        ).bind(self.0).fetch_all(&state.store.pool).await.map_err(|_| unavailable())?;
+        let rows = aq_machine_control::owner_retry::due_terminations(&state.store.pool, self.0)
+            .await
+            .map_err(|_| unavailable())?;
         if rows.is_empty() {
             self.0 = None;
         }

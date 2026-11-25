@@ -29,7 +29,7 @@ fn target(body: &str) -> Option<(Uuid, &str)> {
     Some((id.parse().ok()?, revision))
 }
 
-fn verdict(conclusion: &str, report: Uuid, revision: &str, head: &str) -> Option<&'static str> {
+fn review_message(conclusion: &str) -> Option<&str> {
     let (claim, rest) = conclusion
         .strip_prefix("Outcome: done; Changes: ")?
         .split_once("; Copied: none; ")?;
@@ -50,6 +50,11 @@ fn verdict(conclusion: &str, report: Uuid, revision: &str, head: &str) -> Option
     if !matches!(runner, "Claude exit 0" | "Codex exit 0") {
         return None;
     }
+    Some(message)
+}
+
+fn verdict(conclusion: &str, report: Uuid, revision: &str, head: &str) -> Option<&'static str> {
+    let message = review_message(conclusion)?;
     let (decision, evidence) = message.split_once(' ')?;
     let mut words = evidence.split_whitespace();
     if words.next()? != format!("{report}@{revision}") || words.next()? != head {
@@ -117,6 +122,34 @@ pub(crate) async fn outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verdict_requires_a_recognized_runner_that_exited_successfully() {
+        let report = Uuid::new_v4();
+        let revision = "1".repeat(64);
+        let head = "2".repeat(40);
+        for runner in ["Claude exit 0", "Codex exit 0"] {
+            let conclusion = format!(
+                "Outcome: done; Changes: none; Copied: none; {runner}; Result: Review verdict: approved {report}@{revision} {head}"
+            );
+            assert_eq!(
+                verdict(&conclusion, report, &revision, &head),
+                Some("review_approved")
+            );
+        }
+        for runner in [
+            "Claude exit 1",
+            "Codex exit 1",
+            "Other exit 0",
+            "Codex exit 0 ",
+        ] {
+            let conclusion = format!(
+                "Outcome: done; Changes: none; Copied: none; {runner}; Result: Review verdict: approved {report}@{revision} {head}"
+            );
+            assert_eq!(verdict(&conclusion, report, &revision, &head), None);
+        }
+    }
+
     #[test]
     fn requires_one_pin_and_an_explicit_verdict_on_the_same_source() {
         let report = Uuid::new_v4();

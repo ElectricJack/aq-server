@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "source_repository": "aq-playbooks",
+  "source_revision": "fe1e3cc",
+  "publication_profile": "Exact AQ host catalog 2.5.0 data bundle (contracts/aq-host-2.5.0 of aq-playbooks fe1e3cc, PRs #13 and #14), with its deliver-with-environments example. Supersedes 2.3.0 and includes 2.4.0; spec 0017, compiled in only with the cargo features delivery_playbook and project_environments.",
+  "catalog_version": "2.5.0",
+  "catalog_fingerprint": "sha256:d51ac465281614d241fe0023bafd94aadbaf3e65a1c3464c597da5000c549a7f",
+  "vendor_root": "vendor/aq-host-catalog-2.5.0",
+  "files": [
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "bytes": 2663,
+      "sha256": "8becbcc87c4ee1ccfb38b1666b726eec79700be209e889a5aba02bd9a9ff5bec"
+    },
+    {
+      "path": "examples/deliver-with-environments/catalog.json",
+      "mode": "100644",
+      "bytes": 109433,
+      "sha256": "3805133d39da27d3ac94b966666357189b4905c2aca320118a157ef73c9863e9"
+    },
+    {
+      "path": "examples/deliver-with-environments/draft.json",
+      "mode": "100644",
+      "bytes": 31112,
+      "sha256": "dfa0d01f5e88814a0a487141fe51ce04ba2d1ef41d55a2ad98a02d26244a70a7"
+    },
+    {
+      "path": "examples/deliver-with-environments/facts.json",
+      "mode": "100644",
+      "bytes": 23,
+      "sha256": "5c2eae7cc642756fa2c0be67ea37d71962bb8d58b35de8901f4e8be0a7d6e036"
+    },
+    {
+      "path": "examples/deliver-with-environments/record.json",
+      "mode": "100644",
+      "bytes": 928,
+      "sha256": "ad6697526e813e2242bab38ca815010542d5e4f22a3e81b2cdc0ae2b96f8bb82"
+    },
+    {
+      "path": "examples/deliver-with-environments/source.md",
+      "mode": "100644",
+      "bytes": 1462,
+      "sha256": "df59eb78d84dcd0911ddf8b365d596d5404d9a406164f438bf2ed3a5c4231929"
+    },
+    {
+      "path": "fixtures.json",
+      "mode": "100644",
+      "bytes": 131179,
+      "sha256": "32cc7f9dd2e031b5db4e0390b4893ef81c2a6df1f48f34cfdc5362df3a9e9cb5"
+    },
+    {
+      "path": "manifest.json",
+      "mode": "100644",
+      "bytes": 1215,
+      "sha256": "8ceeaf12f20d95c9362790b983f88b16bcf26cacf0115fb978d7b5a138d0a45f"
+    },
+    {
+      "path": "notes.json",
+      "mode": "100644",
+      "bytes": 45111,
+      "sha256": "06c6ac0e6aa9d006ccafd4c60917f9c2075682eb6a7745ef1aeed6bf08686951"
+    },
+    {
+      "path": "registry.json",
+      "mode": "100644",
+      "bytes": 338749,
+      "sha256": "04e2490de2202b5c1f1e6096716bdf121d1c9e8006ae8315a4c8cf2f3507dc06"
+    }
+  ]
+}

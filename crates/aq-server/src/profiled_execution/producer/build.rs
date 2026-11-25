@@ -1,6 +1,6 @@
 //! Assemble only from real owned observations/decisions and retained bytes.
 use super::{
-    artifacts::{RetainedSet, canonical, reference},
+    artifacts::{ArtifactBody, RetainedSet, canonical, reference},
     compose::Compiled,
     now, on_heap, refused, startup,
 };
@@ -125,14 +125,8 @@ async fn snapshot_definitions(
         version: Text::new(snapshot.digest()).map_err(|_| refused())?,
         digest: Digest::of(bytes),
     };
-    set.retain(
-        state,
-        OwnerKind::Catalog,
-        ArtifactKind::Definition,
-        catalog.clone(),
-        bytes,
-    )
-    .await?;
+    let artifact_body = ArtifactBody::new(ArtifactKind::Definition, catalog.clone(), bytes);
+    set.retain(state, OwnerKind::Catalog, artifact_body).await?;
     // The execution profile keeps the confinement object the worker's mirror
     // of it reads (`permit_container`, `require_native`, `require_container`).
     let mut execution = serde_json::to_value(launch.execution).map_err(|_| AppError::Internal)?;
@@ -161,14 +155,8 @@ async fn snapshot_definitions(
             version: Text::new(snapshot.digest()).map_err(|_| refused())?,
             digest: Digest::of(&bytes),
         };
-        set.retain(
-            state,
-            OwnerKind::Catalog,
-            ArtifactKind::Definition,
-            r.clone(),
-            &bytes,
-        )
-        .await?;
+        let artifact_body = ArtifactBody::new(ArtifactKind::Definition, r.clone(), &bytes);
+        set.retain(state, OwnerKind::Catalog, artifact_body).await?;
         out.push(r);
     }
     let [role, intelligence, execution] =
@@ -181,6 +169,7 @@ async fn snapshot_definitions(
     })
 }
 pub struct Assembly<'a> {
+    pub stage: Uuid,
     pub state: &'a AppState,
     pub runtime: &'a RegisteredRuntime,
     pub compiled: Compiled,
@@ -212,6 +201,7 @@ fn confinement_mode(
 }
 pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let Assembly {
+        stage,
         state,
         runtime,
         mut compiled,
@@ -257,6 +247,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .ok_or_else(|| refused())?;
     let prepared = compiled.prepared.swap_remove(index);
     let policy = prepared.policy.clone();
+    #[cfg_attr(feature = "project_environments", allow(unused_variables))]
     let configuration = state
         .config
         .profiled_execution
@@ -324,36 +315,40 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     } else {
         None
     };
+    #[cfg(feature = "project_environments")]
+    let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
+    #[cfg(feature = "project_environments")]
+    let body = |r: &ArtifactRef| catalog.definition(r);
+    #[cfg(not(feature = "project_environments"))]
+    let body = |r: &ArtifactRef| {
+        let mut bodies = configuration.definition_bodies.iter();
+        bodies.find(|d| d.artifact() == r).map(|d| d.body())
+    };
     let review = if enrolled {
         aq_admission::outcome::ReviewRequirement::PolicyActor
     } else {
-        configuration
-            .definition_bodies
-            .iter()
-            .find(|d| d.artifact() == &validation)
-            .map(|d| super::super::settlement::review_requirement(d.body()))
-            .ok_or_else(|| refused())?
+        let review = body(&validation).map(super::super::settlement::review_requirement);
+        review.ok_or_else(|| refused())?
     };
     // Check every required actual body before writing any retained artifact.
-    let definitions = unique
-        .iter()
-        .map(|r| {
-            configuration
-                .definition_bodies
-                .iter()
-                .find(|d| d.artifact() == r)
-                .ok_or_else(|| refused())
-        })
+    let definitions = (unique.iter())
+        .map(|r| body(r).map(|b| (r, b)).ok_or_else(|| refused()))
         .collect::<Result<Vec<_>, _>>()?;
-    for definition in definitions {
+    let staged = aq_history_caps::offer_stage::open(
+        &state.store.pool,
+        stage,
+        attempt_id,
+        set.project,
+        now(state)?,
+    )
+    .await
+    .map_err(crate::error::db)?;
+    set.stage = staged.then_some(stage);
+    for (artifact, body) in definitions {
         on_heap(|| {
-            set.retain(
-                state,
-                OwnerKind::Composition,
-                ArtifactKind::Definition,
-                definition.artifact().clone(),
-                definition.body().as_bytes(),
-            )
+            let artifact_body =
+                ArtifactBody::new(ArtifactKind::Definition, artifact.clone(), body.as_bytes());
+            set.retain(state, OwnerKind::Composition, artifact_body)
         })
         .await?;
     }
@@ -379,13 +374,9 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let policy_ref = policy.artifact().map_err(|_| refused())?;
     let policy_bytes = canonical(&policy)?;
     on_heap(|| {
-        set.retain(
-            state,
-            OwnerKind::Composition,
-            ArtifactKind::Definition,
-            policy_ref.clone(),
-            &policy_bytes,
-        )
+        let artifact_body =
+            ArtifactBody::new(ArtifactKind::Definition, policy_ref.clone(), &policy_bytes);
+        set.retain(state, OwnerKind::Composition, artifact_body)
     })
     .await?;
     modules.push(policy_ref);
@@ -398,7 +389,11 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         let (module, bytes) =
             aq_admission::observation_source::module(&entry.reference).map_err(|_| refused())?;
         let (kind, owner) = (ArtifactKind::Definition, OwnerKind::Composition);
-        on_heap(|| set.retain(state, owner, kind, module.clone(), &bytes)).await?;
+        on_heap(|| {
+            let artifact_body = ArtifactBody::new(kind, module.clone(), &bytes);
+            set.retain(state, owner, artifact_body)
+        })
+        .await?;
         modules.push(module);
     }
     let model = aq_profiles::ResolvedGraphModel {
@@ -408,14 +403,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     };
     let profile = policy
         .resolve_profile(
-            &model,
             &compiled.projection.context,
-            &compiled.role,
-            &aq_profiles::GraphRetryBudget {
-                max_attempts: 1,
-                max_elapsed_ms: 5000,
-                initial_delay_ms: 1,
-                max_delay_ms: 1,
+            aq_profiles::GraphProfileSelection {
+                model: &model,
+                role: &compiled.role,
+                retry: &aq_profiles::GraphRetryBudget {
+                    max_attempts: 1,
+                    max_elapsed_ms: 5000,
+                    initial_delay_ms: 1,
+                    max_delay_ms: 1,
+                },
             },
         )
         .map_err(|_| refused())?;
@@ -428,35 +425,34 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         digest: Digest::of(&profile_bytes),
     };
     on_heap(|| {
-        set.retain(
-            state,
-            OwnerKind::Composition,
+        let artifact_body = ArtifactBody::new(
             ArtifactKind::Definition,
             profile_ref.clone(),
             &profile_bytes,
-        )
+        );
+        set.retain(state, OwnerKind::Composition, artifact_body)
     })
     .await?;
     let selection_bytes = canonical(selected)?;
     let selection_ref = reference("aq.sealed-selection", &selection_bytes)?;
     on_heap(|| {
-        set.retain(
-            state,
-            OwnerKind::Selection,
+        let artifact_body = ArtifactBody::new(
             ArtifactKind::Selection,
             selection_ref.clone(),
             &selection_bytes,
-        )
+        );
+        set.retain(state, OwnerKind::Selection, artifact_body)
     })
     .await?;
     let source_retention_id =
         Uuid::new_v5(&source_operation, &canonical(&(&source.artifact, until))?);
     let source_retained = on_heap(|| {
-        crate::profiled_execution::source::retain_admission(
+        crate::profiled_execution::source::retain_for(
             state,
             source_retention_id,
             &source,
             until,
+            set.stage,
         )
     })
     .await?;
@@ -520,13 +516,9 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let outcome_ref = outcome.artifact().map_err(|_| refused())?;
     let outcome_bytes = outcome.canonical_bytes().map_err(|_| refused())?;
     on_heap(|| {
-        set.retain(
-            state,
-            OwnerKind::Outcome,
-            ArtifactKind::Outcome,
-            outcome_ref.clone(),
-            &outcome_bytes,
-        )
+        let artifact_body =
+            ArtifactBody::new(ArtifactKind::Outcome, outcome_ref.clone(), &outcome_bytes);
+        set.retain(state, OwnerKind::Outcome, artifact_body)
     })
     .await?;
     let spec = ProfiledExecutionSpec {
@@ -546,13 +538,9 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let spec_ref = spec.artifact().map_err(|_| refused())?;
     let spec_bytes = spec.canonical_bytes().map_err(|_| refused())?;
     on_heap(|| {
-        set.retain(
-            state,
-            OwnerKind::Composition,
-            ArtifactKind::Composition,
-            spec_ref.clone(),
-            &spec_bytes,
-        )
+        let artifact_body =
+            ArtifactBody::new(ArtifactKind::Composition, spec_ref.clone(), &spec_bytes);
+        set.retain(state, OwnerKind::Composition, artifact_body)
     })
     .await?;
     let requested = (compiled.requested.iter())
@@ -738,8 +726,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     state_projection.validate().map_err(|_| refused())?;
     let read_provenance = super::observation::ReadProvenance::capture(
         task,
-        ready,
-        context,
+        aq_profiled_state::native_offer::GraphReads { ready, context },
         compiled.projection.artifact.digest.clone(),
         time,
     )

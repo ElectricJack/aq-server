@@ -81,18 +81,18 @@ pub fn evaluate(g: &Gate<'_>) -> Verdict {
     if g.lineage_unknown {
         return Verdict::Hold("lineage_history_unknown");
     }
-    if g.delivery == Delivery::Required {
-        match g.delivery_state {
-            DeliveryState::Published => {}
-            DeliveryState::Indeterminate => return Verdict::Hold("delivery_indeterminate"),
-            DeliveryState::Missing => return Verdict::Hold("delivery_evidence_missing"),
-            // Server-owned evidence that required delivery definitively did not
-            // publish refuses the result, like a failed required check.
-            DeliveryState::Unpublished => return Verdict::Rework("delivery_unpublished"),
-            DeliveryState::NoChange => {}
-        }
+    delivery_verdict(g.delivery, g.delivery_state)
+}
+fn delivery_verdict(delivery: Delivery, state: DeliveryState) -> Verdict {
+    if delivery == Delivery::NotRequired {
+        return Verdict::Complete;
     }
-    Verdict::Complete
+    match state {
+        DeliveryState::Published | DeliveryState::NoChange => Verdict::Complete,
+        DeliveryState::Indeterminate => Verdict::Hold("delivery_indeterminate"),
+        DeliveryState::Missing => Verdict::Hold("delivery_evidence_missing"),
+        DeliveryState::Unpublished => Verdict::Rework("delivery_unpublished"),
+    }
 }
 
 #[cfg(test)]

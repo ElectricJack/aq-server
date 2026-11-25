@@ -28,13 +28,17 @@ pub async fn read(pool: &PgPool, available: &[Provider], path: &str) -> Result<V
         value(crate::read(pool).await?)
     }
 }
+pub struct SaveRequest<'a> {
+    pub actor: Uuid,
+    pub path: &'a str,
+    pub body: Value,
+}
 pub async fn save(
     pool: &PgPool,
-    actor: Uuid,
-    body: Value,
+    request: SaveRequest<'_>,
     available: &[Provider],
-    path: &str,
 ) -> Result<Value> {
+    let SaveRequest { actor, path, body } = request;
     let invalid = |_| crate::invalid("Invalid settings request");
     match path.rsplit('/').next().unwrap_or_default() {
         "providers" => {

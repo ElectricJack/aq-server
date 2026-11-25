@@ -10,4 +10,4 @@ aq-lifecycle-api = { path = "../aq-lifecycle-api", version = "=0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-uuid = { version = "1", features = ["serde"] }
+uuid = { version = "1", features = ["serde", "v5"] }

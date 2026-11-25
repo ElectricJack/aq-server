@@ -46,8 +46,7 @@ impl Runtime {
     }
 }
 pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/results", get(feed))
+    let feedback = Router::new()
         .route(
             "/api/v1/results/{id}/revisions/{revision}/comments",
             get(comments).post(comment),
@@ -59,7 +58,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/feedback-links", post(link))
         .route("/api/v1/feedback-tasks/{id}", get(draft_status))
         .route("/api/v1/feedback-tasks/{id}/recover", post(recover))
-        .route("/api/v1/results/{id}/evidence-waivers", post(waiver))
+        .route("/api/v1/results/{id}/evidence-waivers", post(waiver));
+    with_feed(feedback)
+}
+pub(crate) fn with_feed(routes: Router<AppState>) -> Router<AppState> {
+    routes
+        .route("/api/v1/results", get(feed))
         .layer(DefaultBodyLimit::max(65536))
         .layer(Extension(Arc::new(Runtime::new())))
 }
@@ -197,14 +201,8 @@ async fn feed(
             page.until_ms,
         )
         .await?;
-        (
-            Snapshot {
-                expires: now + 300000,
-                pins,
-            },
-            Uuid::new_v4(),
-            0,
-        )
+        let expires = now + 300000;
+        (Snapshot { expires, pins }, Uuid::new_v4(), 0)
     };
     if start > snapshot.pins.len() {
         return Err(store::invalid());
@@ -218,13 +216,7 @@ async fn feed(
     let next = if end < snapshot.pins.len() {
         let token = runtime
             .codec
-            .encode(
-                &bind,
-                &id.to_string(),
-                &end.to_string(),
-                now,
-                snapshot.expires,
-            )
+            .encode(bind.position(&id.to_string(), &end.to_string(), now..snapshot.expires))
             .map_err(cursor_error)?;
         let mut snapshots = runtime
             .snapshots
@@ -337,7 +329,7 @@ async fn comments(
         Some(
             runtime
                 .codec
-                .encode(&bind, &snapshot.to_string(), position, issued, expires)
+                .encode(bind.position(&snapshot.to_string(), position, issued..expires))
                 .map_err(cursor_error)?,
         )
     } else {

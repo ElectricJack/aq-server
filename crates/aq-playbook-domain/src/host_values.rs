@@ -2,6 +2,7 @@
 //! outcome, subjects and handles, input checks and the completion of a
 //! tracked work node. No I/O.
 use crate::{Error, Result};
+use aq_playbook_host::runner::{DispatchResult, Intent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -13,6 +14,30 @@ pub struct HostResult {
     pub output: Value,
 }
 
+/// An asynchronous host command's `accepted` outcome is its durable handle.
+pub fn dispatch_result(result: HostResult, intent: &Intent) -> DispatchResult {
+    let expired = aq_playbook_host::DELIVERY_ADMISSION_EXPIRED;
+    if result.outcome == "expired"
+        && result.output["reason"] == expired
+        && aq_playbook_host::DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
+    {
+        return DispatchResult::Rejected {
+            reason: expired.into(),
+        };
+    }
+    if aq_playbook_host::plugins::command_plugin(&intent.command.name).is_none()
+        && result.outcome == "accepted"
+        && let Some(handle) = result.output["handle"].as_str()
+    {
+        return DispatchResult::Accepted {
+            handle: handle.to_string(),
+        };
+    }
+    DispatchResult::Completed {
+        outcome: result.outcome,
+        output: result.output,
+    }
+}
 /// The handle prefix of a tracked work node.
 pub const WORK_REF: &str = "aq.playbook.work/";
 
@@ -71,19 +96,10 @@ pub fn work_completion(request: &Value, node: Option<&Value>) -> Result<Option<H
         None => ("refused", "failed", revision_of(&request["subject"])?),
         Some(node) => {
             let revision = node_version(node)?;
-            if node["deleted"] == json!(true)
-                || node["retired"] == json!(true)
-                || node["task_state"] == "canceled"
-            {
+            if unavailable(node) {
                 ("refused", "failed", revision)
             } else if node["task_state"] == "completed" {
-                let disposition = match request["kind"].as_str() {
-                    Some("review" | "fidelity_review") => node["metadata"]["aq:review_disposition"]
-                        .as_str()
-                        .filter(|d| matches!(*d, "accepted" | "changes_requested"))
-                        .unwrap_or("failed"),
-                    _ => "accepted",
-                };
+                let disposition = completed_disposition(request, node);
                 ("completed", disposition, revision)
             } else {
                 return Ok(None);
@@ -97,16 +113,28 @@ pub fn work_completion(request: &Value, node: Option<&Value>) -> Result<Option<H
     }))
 }
 
+fn unavailable(node: &Value) -> bool {
+    node["deleted"] == json!(true)
+        || node["retired"] == json!(true)
+        || node["task_state"] == "canceled"
+}
+fn completed_disposition<'a>(request: &Value, node: &'a Value) -> &'a str {
+    match request["kind"].as_str() {
+        Some("review" | "fidelity_review") => node["metadata"]["aq:review_disposition"]
+            .as_str()
+            .filter(|d| matches!(*d, "accepted" | "changes_requested"))
+            .unwrap_or("failed"),
+        _ => "accepted",
+    }
+}
+
 pub fn handle(id: &str, prefix: &str) -> Option<Uuid> {
     Uuid::parse_str(id.strip_prefix(prefix)?).ok()
 }
 /// A bounded typed reason from the port; anything else maps to `fallback`.
 pub fn token(reason: &str, fallback: &str) -> String {
-    if (1..=64).contains(&reason.len())
-        && reason
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    {
+    let valid_char = |b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_');
+    if (1..=64).contains(&reason.len()) && reason.bytes().all(valid_char) {
         reason.into()
     } else {
         fallback.into()

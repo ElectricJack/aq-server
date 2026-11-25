@@ -18,14 +18,19 @@ use uuid::Uuid;
 
 pub mod agent_task;
 mod catalog;
+mod forwarding;
+pub use forwarding::AgentRequest;
 mod queries;
+mod registration;
 pub mod routes;
 mod subjects;
 mod summaries;
+mod targets;
 pub use catalog::catalog;
 pub use queries::QueryParam;
 pub use subjects::{Id as SubjectId, SubjectRule, subject as subject_rule};
 pub use summaries::{PLACEHOLDER_SUMMARY, action_summary};
+pub use targets::AgentScope;
 /// aq-supervisor-control's owner bridge mount (`owner::PREFIX`), duplicated
 /// to avoid the dependency; aq-server's tests assert the two agree.
 pub const OWNER_PREFIX: &str = "/v1/supervisor/owner";
@@ -252,111 +257,6 @@ pub struct Registry {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryError(pub String);
-impl Registry {
-    /// Every action kind becomes a mutation command reached by the owner
-    /// through the action union. A catalog entry with the same name adds
-    /// the other principals' routes and must agree on the grant.
-    pub fn new(actions: &[ActionSpec]) -> Result<Self, RegistryError> {
-        let mut commands = catalog();
-        for a in actions {
-            match commands.iter_mut().find(|c| c.name == a.kind) {
-                Some(c) => {
-                    if c.grant != Some(a.grant) || c.kind != Kind::Mutation || c.owner.is_some() {
-                        return Err(RegistryError(format!(
-                            "{}: catalog and ActionKind disagree",
-                            a.kind
-                        )));
-                    }
-                    // The catalog's target is the agent-facing one (an agent
-                    // comments on its own task); the owner's action derives
-                    // its own subject.
-                    c.owner = Some(Route::action());
-                }
-                None => commands.push(CommandSpec {
-                    name: a.kind,
-                    kind: Kind::Mutation,
-                    grant: Some(a.grant),
-                    target: a.target,
-                    summary: action_summary(a.kind).unwrap_or(PLACEHOLDER_SUMMARY),
-                    owner: Some(Route::action()),
-                    supervisor: None,
-                    agent: None,
-                }),
-            }
-        }
-        for command in &mut commands {
-            if matches!(
-                command.name,
-                "task.edit"
-                    | "task.reprioritize"
-                    | "task.role.set"
-                    | "task.route.set"
-                    | "task.route.clear"
-                    | "task.dependency.add"
-                    | "task.dependency.remove"
-            ) {
-                command.supervisor = Some(Route::action());
-            }
-        }
-        for command in &mut commands {
-            if is_draft_action(command.name) {
-                command.agent = Some(Route::post(
-                    "/v1/agent/task-actions",
-                    Body::Action,
-                    Params::Action,
-                ));
-            }
-        }
-        // Every other owner command reaches supervisors through the owner
-        // bridge. The leak is bounded: the registry is built once per process.
-        #[cfg(feature = "supervisor_full_access")]
-        for c in &mut commands {
-            if let (Some(owner), None) = (c.owner, c.supervisor)
-                && owner.body != Body::Local
-            {
-                let path = format!("{OWNER_PREFIX}{}", owner.path);
-                c.supervisor = Some(Route {
-                    path: Box::leak(path.into_boxed_str()),
-                    ..owner
-                });
-            }
-        }
-        commands.sort_by(|a, b| a.name.cmp(b.name));
-        for pair in commands.windows(2) {
-            if pair[0].name == pair[1].name {
-                return Err(RegistryError(format!("duplicate {}", pair[0].name)));
-            }
-        }
-        for c in &commands {
-            if !valid_name(c.name) {
-                return Err(RegistryError(format!("invalid name {}", c.name)));
-            }
-            let routes = [&c.owner, &c.supervisor, &c.agent];
-            if routes.iter().all(|r| r.is_none()) {
-                return Err(RegistryError(format!("{} has no route", c.name)));
-            }
-            if routes
-                .iter()
-                .copied()
-                .flatten()
-                .any(|r| r.params == Params::Action)
-                && !actions.iter().any(|a| a.kind == c.name)
-            {
-                return Err(RegistryError(format!(
-                    "{} is not a registered action",
-                    c.name
-                )));
-            }
-        }
-        Ok(Self { commands })
-    }
-    pub fn commands(&self) -> &[CommandSpec] {
-        &self.commands
-    }
-    pub fn get(&self, name: &str) -> Option<&CommandSpec> {
-        self.commands.iter().find(|c| c.name == name)
-    }
-}
 /// Commands whose agent handler checks the live draft graph.
 pub fn is_draft_action(name: &str) -> bool {
     matches!(
@@ -406,189 +306,8 @@ pub struct Forward {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildError(pub &'static str);
 
-/// Build the forwarded request. `binding` is the agent-access-1 binding for
-/// an agent caller (graph reads and commands carry it).
-pub fn forward(
-    spec: &CommandSpec,
-    route: &Route,
-    request: &CommandRequest,
-    binding: Option<&Value>,
-    request_id: Uuid,
-) -> Result<Forward, BuildError> {
-    let mut params = request.params.clone();
-    let mut uri = String::new();
-    for part in route.path.split('/').filter(|s| !s.is_empty()) {
-        uri.push('/');
-        match part.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-            Some(seg) => {
-                let param = route.segments().find(|(s, _)| *s == seg).map(|(_, p)| p);
-                let value = params
-                    .remove(param.unwrap_or(seg))
-                    .ok_or(BuildError("missing path param"))?;
-                let text = scalar(&value).ok_or(BuildError("path param must be a scalar"))?;
-                if text.is_empty()
-                    || !text
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b':')
-                {
-                    return Err(BuildError("path param is not a plain identifier"));
-                }
-                uri.push_str(&text);
-            }
-            None => uri.push_str(part),
-        }
-    }
-    let body = match route.body {
-        Body::Local => None,
-        Body::Query => {
-            let mut first = true;
-            let declared = route.query().unwrap_or_default();
-            for (k, v) in &params {
-                if !declared.iter().any(|q| q.name == k) {
-                    return Err(BuildError("unknown param"));
-                }
-                let text = scalar(v).ok_or(BuildError("query param must be a scalar"))?;
-                uri.push(if first { '?' } else { '&' });
-                first = false;
-                uri.push_str(&encode(k));
-                uri.push('=');
-                uri.push_str(&encode(&text));
-            }
-            None
-        }
-        Body::Params => {
-            // A route that takes the operation ID or a reason in its body
-            // gets the request's own when the params omit them.
-            for (field, value) in [
-                ("operation_id", request.operation_id.map(|op| json!(op))),
-                ("reason", request.reason.as_ref().map(|r| json!(r))),
-            ] {
-                if let Some(value) = value
-                    && route.takes(field)
-                {
-                    params.entry(field).or_insert(value);
-                }
-            }
-            Some(Value::Object(params))
-        }
-        Body::Versioned => {
-            params.insert("api_version".into(), json!(1));
-            Some(Value::Object(params))
-        }
-        Body::GraphRead(kind, defaults) => {
-            let binding = binding.ok_or(BuildError("graph reads need a binding"))?;
-            let mut query = if kind.is_none() {
-                match params.remove("query") {
-                    Some(Value::Object(q)) if params.is_empty() => q,
-                    _ => return Err(BuildError("graph.read takes one `query` object")),
-                }
-            } else {
-                params
-            };
-            for (field, param) in route.rename {
-                if let Some(v) = query.remove(*param) {
-                    query.insert((*field).into(), v);
-                }
-            }
-            if let Some(kind) = kind {
-                query.insert("kind".into(), json!(kind));
-                for (k, v) in graph_defaults(defaults) {
-                    query.entry(k).or_insert(v);
-                }
-            }
-            Some(json!({"api_version":1,"request_id":request_id,"binding":binding,"query":query}))
-        }
-        Body::GraphCommand => {
-            let binding = binding.ok_or(BuildError("graph commands need a binding"))?;
-            params.insert("api_version".into(), json!(1));
-            params.insert("binding".into(), binding.clone());
-            if let Some(op) = request.operation_id {
-                params.entry("operation_id").or_insert(json!(op));
-            }
-            if let Some(reason) = &request.reason {
-                params.entry("reason").or_insert(json!(reason));
-            }
-            Some(Value::Object(params))
-        }
-        Body::Action => {
-            let op = request
-                .operation_id
-                .or_else(|| {
-                    params
-                        .get("operation_id")
-                        .and_then(|v| v.as_str()?.parse().ok())
-                })
-                .ok_or(BuildError("a mutation needs an operation_id"))?;
-            // An explicit subject is sent as given; otherwise it follows
-            // from the params by the kind's rule (subjects.rs).
-            let (subject, derived) = match &request.subject {
-                Some(subject) => (subject.clone(), Map::new()),
-                None => derive_subject(spec.name, &mut params)?,
-            };
-            let expected = request.expected_versions.clone().unwrap_or(derived);
-            // Every payload carries the operation ID.
-            params.entry("operation_id").or_insert(json!(op));
-            let mut action = json!({"operation_id":op,"kind":spec.name,"subject":subject,
-                "expected_versions":expected,"payload":params});
-            if let Some(reason) = &request.reason {
-                action["reason"] = json!(reason);
-            }
-            Some(action)
-        }
-    };
-    Ok(Forward {
-        method: route.method,
-        uri,
-        body,
-    })
-}
-/// The subject and expected versions of `kind` from its params. A param
-/// that only names the subject is taken out of `params` (the payload).
-fn derive_subject(
-    kind: &str,
-    params: &mut Map<String, Value>,
-) -> Result<(Value, Map<String, Value>), BuildError> {
-    const MISSING: BuildError =
-        BuildError("an action needs its subject: the id param its schema names, or `subject`");
-    let rule = subjects::subject(kind).ok_or(BuildError("an action needs a subject"))?;
-    let id = match rule.id {
-        SubjectId::Fixed(id) => id.to_owned(),
-        SubjectId::Payload(p) => params.get(p).and_then(scalar).ok_or(MISSING)?,
-        SubjectId::Param(p) => params.remove(p).as_ref().and_then(scalar).ok_or(MISSING)?,
-    };
-    let mut subject = json!({"type":rule.entity,"id":id});
-    let mut expected = Map::new();
-    if let Some((param, key)) = rule.revision {
-        let revision = params
-            .get(param)
-            .and_then(scalar)
-            .ok_or(BuildError("an action needs the version it expects"))?;
-        subject["revision"] = json!(revision);
-        expected.insert(key.into(), json!(revision));
-    }
-    Ok((subject, expected))
-}
 fn graph_defaults(defaults: &str) -> Map<String, Value> {
     serde_json::from_str(defaults).unwrap_or_default()
-}
-fn scalar(v: &Value) -> Option<String> {
-    match v {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    }
-}
-fn encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
 }
 
 /// The params schema a principal's route takes.
@@ -698,100 +417,6 @@ fn body_name(b: Body) -> &'static str {
 #[cfg(test)]
 mod tests;
 
-/// The agent's scope target for `rule` (§6.4). Params gain defaults from
-/// the binding: an omitted `project_id` is the attempt's project and is
-/// removed before forwarding (agent routes take it from the binding), an
-/// omitted task param is the attempt's task, and a task equal to the
-/// attempt's task is `Own`. `relation` is the server's resolution of any
-/// other named task (its ancestry), or of a `Comment` rule's comment.
-pub fn agent_target(
-    rule: TargetRule,
-    params: &mut Map<String, Value>,
-    holder: aq_agent_grants::Holder,
-    own_task: Uuid,
-    relation: aq_agent_grants::Relation,
-) -> Result<aq_agent_grants::Target, BuildError> {
-    use aq_agent_grants::{Relation, Target};
-    let id = |v: &Value| v.as_str().and_then(|s| s.parse::<Uuid>().ok());
-    let task = |t: Uuid| Target::Task {
-        project: holder.project,
-        relation: if t == own_task {
-            Relation::Own
-        } else {
-            relation
-        },
-    };
-    let project = |params: &mut Map<String, Value>, field: &str| match params.remove(field) {
-        None => Ok(holder.project),
-        Some(v) => id(&v).ok_or(BuildError("project_id must be a UUID")),
-    };
-    Ok(match rule {
-        TargetRule::Own => Target::OwnAttempt,
-        TargetRule::OwnTask => task(own_task),
-        TargetRule::Project(field) => Target::Project(project(params, field)?),
-        TargetRule::Task(field) => {
-            let p = project(params, "project_id")?;
-            let t = match params.get(field) {
-                None => own_task,
-                Some(v) => id(v).ok_or(BuildError("task id must be a UUID"))?,
-            };
-            params.insert(field.into(), json!(t));
-            if p != holder.project {
-                Target::Project(p)
-            } else {
-                task(t)
-            }
-        }
-        TargetRule::Comment(field) => {
-            params
-                .get(field)
-                .and_then(id)
-                .ok_or(BuildError("comment id must be a UUID"))?;
-            Target::Task {
-                project: holder.project,
-                relation,
-            }
-        }
-        TargetRule::ParentTask { field, .. } => match params.get(field) {
-            Some(Value::Null) | None => Target::Project(holder.project),
-            Some(v) => {
-                let parent = if v == "self" { Some(own_task) } else { id(v) };
-                let parent = parent.ok_or(BuildError("parent_id must be a UUID or \"self\""))?;
-                // A child of `parent` sits one level below it.
-                match task(parent) {
-                    Target::Task {
-                        project,
-                        relation: Relation::Own,
-                    } => Target::Task {
-                        project,
-                        relation: Relation::Descendant(1),
-                    },
-                    Target::Task {
-                        project,
-                        relation: Relation::Descendant(d),
-                    } => Target::Task {
-                        project,
-                        relation: Relation::Descendant(d + 1),
-                    },
-                    other => other,
-                }
-            }
-        },
-        TargetRule::Mailbox(field) => match params.get(field) {
-            Some(r) if r["kind"] == "task" => {
-                let t = id(&r["task_id"]).ok_or(BuildError("task mailbox needs a task_id"))?;
-                if r["project_id"] != json!(holder.project) {
-                    Target::Project(id(&r["project_id"]).unwrap_or_default())
-                } else {
-                    task(t)
-                }
-            }
-            Some(_) => Target::OwnAttempt,
-            None => return Err(BuildError("a mailbox command needs a recipient")),
-        },
-        TargetRule::Subject => return Err(BuildError("this command takes no agent subject")),
-    })
-}
 /// The grant a `ParentTask` command needs for its target: the subtask grant
 /// under a parent, the project grant without one.
 pub fn required_grant(
@@ -848,9 +473,7 @@ pub fn authorize(
     spec: &CommandSpec,
     params: &mut Map<String, Value>,
     grants: &aq_agent_grants::GrantSet,
-    holder: aq_agent_grants::Holder,
-    own_task: Uuid,
-    relation: aq_agent_grants::Relation,
+    scope: AgentScope,
 ) -> (aq_agent_grants::Decision, aq_agent_grants::Target) {
     use aq_agent_grants::{Decision, Grant, Refusal, RefusalCode, Scope, Target};
     let Some(grant) = spec.grant else {
@@ -860,13 +483,8 @@ pub fn authorize(
     let draft_create = grants
         .get(aq_agent_grants::op::TASK_CREATE_SUBTASK)
         .is_some_and(|g| g.limits.draft_only);
-    let target_rule = if is_draft_action(spec.name) || (spec.name == "task.create" && draft_create)
-    {
-        TargetRule::OwnTask
-    } else {
-        spec.target
-    };
-    let Ok(target) = agent_target(target_rule, params, holder, own_task, relation) else {
+    let target_rule = authorization_target(spec, draft_create);
+    let Ok(target) = scope.target(target_rule, params) else {
         let r = Refusal::error(
             RefusalCode::InvalidRequest,
             spec.name,
@@ -875,17 +493,17 @@ pub fn authorize(
         return (Decision::Deny(r), Target::OwnAttempt);
     };
     let grant = required_grant(spec, &target).unwrap_or(grant);
+    let request = aq_agent_grants::GrantRequest::new(spec.name, grant, target);
     if spec.name == "task.graph.create" && !draft_create {
         return (
             Decision::Deny(Refusal::grant_missing(
-                spec.name,
-                grant,
+                request.required,
                 grants.related(grant),
             )),
             target,
         );
     }
-    match aq_agent_grants::check(grants, holder, spec.name, grant, target) {
+    match aq_agent_grants::check(grants, scope.holder, request) {
         Decision::Allow(g) => match within_limits(&g, &target) {
             Ok(()) => (Decision::Allow(g), target),
             Err(limit) => {
@@ -895,6 +513,14 @@ pub fn authorize(
             }
         },
         deny => (deny, target),
+    }
+}
+fn authorization_target(spec: &CommandSpec, draft_create: bool) -> TargetRule {
+    let creates_draft = spec.name == "task.create" && draft_create;
+    if is_draft_action(spec.name) || creates_draft {
+        TargetRule::OwnTask
+    } else {
+        spec.target
     }
 }
 /// Whether a caller may run `spec` at all (discovery, "published means

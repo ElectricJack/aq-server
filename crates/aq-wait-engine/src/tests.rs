@@ -32,42 +32,9 @@ fn fixture(
     let wire::Command::RegisterWait(mut registration) = request.body.command else {
         panic!()
     };
-    let members: Vec<_> = (0..count)
-        .map(|n| wire::Member {
-            member_id: id(20 + n as u128),
-            condition: wire::Condition::Task {
-                task_id: id(100 + n as u128),
-                revision: text("fixture-start-0"),
-                requirement: wire::TaskRequirement::Successful,
-            },
-        })
-        .collect();
-    registration.predicate = if count == 1 {
-        wire::Predicate::Single {
-            member: members[0].clone(),
-        }
-    } else if any {
-        wire::Predicate::Any { members }
-    } else {
-        wire::Predicate::All { members }
-    };
+    registration.predicate = fixture_predicate(count, any);
     registration.predicate_digest = canonical_digest(&registration.predicate).unwrap();
-    let body = PolicyBody {
-        maximum_age_ms: 100_000,
-        check_interval_ms: 1000,
-        retry_base_ms: 1000,
-        retry_cap_ms: 60_000,
-        max_retries: 5,
-        max_work_attempts: 128,
-    };
-    let policy = ResolvedPolicy {
-        reference: wire::ArtifactRef {
-            id: text("fixture-policy"),
-            version: text("1"),
-            digest: canonical_digest(&body).unwrap(),
-        },
-        body,
-    };
+    let policy = fixture_policy();
     registration.policy = policy.reference.clone();
     let fence = AuthorityFence {
         scope: registration.scope.clone(),
@@ -96,10 +63,59 @@ fn fixture(
         graph,
     )
 }
+fn fixture_predicate(count: usize, any: bool) -> wire::Predicate {
+    let members: Vec<_> = (0..count)
+        .map(|n| wire::Member {
+            member_id: id(20 + n as u128),
+            condition: wire::Condition::Task {
+                task_id: id(100 + n as u128),
+                revision: text("fixture-start-0"),
+                requirement: wire::TaskRequirement::Successful,
+            },
+        })
+        .collect();
+    if count == 1 {
+        wire::Predicate::Single {
+            member: members[0].clone(),
+        }
+    } else if any {
+        wire::Predicate::Any { members }
+    } else {
+        wire::Predicate::All { members }
+    }
+}
+fn fixture_policy() -> ResolvedPolicy {
+    let body = PolicyBody {
+        maximum_age_ms: 100_000,
+        check_interval_ms: 1000,
+        retry_base_ms: 1000,
+        retry_cap_ms: 60_000,
+        max_retries: 5,
+        max_work_attempts: 128,
+    };
+    ResolvedPolicy {
+        reference: wire::ArtifactRef {
+            id: text("fixture-policy"),
+            version: text("1"),
+            digest: canonical_digest(&body).unwrap(),
+        },
+        body,
+    }
+}
+fn registration_context<'a>(
+    fence: &'a AuthorityFence,
+    graph: &'a KnownGraph,
+) -> RegistrationContext<'a> {
+    RegistrationContext {
+        fence,
+        graph,
+        now: 1000,
+    }
+}
 fn begin(count: usize, any: bool) -> (TransitionPlan, AuthorityFence) {
     let (request, fence, policy, ids, graph) = fixture(count, any);
     (
-        Snapshot::begin(request, &fence, policy, ids, &graph, 1000).unwrap(),
+        Snapshot::begin(request, policy, ids, registration_context(&fence, &graph)).unwrap(),
         fence,
     )
 }
@@ -205,6 +221,42 @@ impl FakeSource {
             .next_back()
             .unwrap_or(wire::MemberState::Pending)
     }
+    fn observation(&self, member: &wire::Member, through: u64) -> wire::MemberOutcome {
+        let mut state = wire::MemberState::Pending;
+        let mut matched = 0;
+        // Fixture predicate means a committed terminal transition since start0.
+        // Previously committed historical terminal evidence survives later reopen.
+        for (seq, tx) in self.transactions.range(..=through) {
+            if let Tx::Committed(ops) = tx
+                && let Some((_, verdict)) = ops.iter().find(|(m, _)| *m == member.member_id)
+            {
+                if !matches!(
+                    verdict,
+                    wire::MemberState::Satisfied | wire::MemberState::SourceFailed
+                ) {
+                    continue;
+                }
+                state = verdict.clone();
+                matched = *seq;
+                break;
+            }
+        }
+        let evidence = matches!(
+            state,
+            wire::MemberState::Satisfied | wire::MemberState::SourceFailed
+        )
+        .then(|| wire::SourceEvidence {
+            owner: member.condition.owner(),
+            condition_digest: canonical_digest(&member.condition).unwrap(),
+            revision: text(format!("committed-transaction-{matched}")),
+            result: artifact(&format!("fixture-terminal-evidence-{matched}")),
+        });
+        wire::MemberOutcome {
+            member_id: member.member_id,
+            state,
+            evidence,
+        }
+    }
     fn proof(&mut self, r: &SourceRequest, install: bool) -> Result<SourceReply> {
         self.calls += 1;
         if self.unavailable {
@@ -225,38 +277,7 @@ impl FakeSource {
             });
         }
         let through = self.boundary();
-        let mut state = wire::MemberState::Pending;
-        let mut matched = 0;
-        // Fixture predicate means a committed terminal transition since start0.
-        // Previously committed historical terminal evidence survives later reopen.
-        for (seq, tx) in self.transactions.range(..=through) {
-            if let Tx::Committed(ops) = tx
-                && let Some((_, verdict)) = ops.iter().find(|(m, _)| *m == r.member.member_id)
-                && matches!(
-                    verdict,
-                    wire::MemberState::Satisfied | wire::MemberState::SourceFailed
-                )
-            {
-                state = verdict.clone();
-                matched = *seq;
-                break;
-            }
-        }
-        let evidence = matches!(
-            state,
-            wire::MemberState::Satisfied | wire::MemberState::SourceFailed
-        )
-        .then(|| wire::SourceEvidence {
-            owner: r.member.condition.owner(),
-            condition_digest: canonical_digest(&r.member.condition).unwrap(),
-            revision: text(format!("committed-transaction-{matched}")),
-            result: artifact(&format!("fixture-terminal-evidence-{matched}")),
-        });
-        let observation = wire::MemberOutcome {
-            member_id: r.member.member_id,
-            state,
-            evidence,
-        };
+        let observation = self.observation(&r.member, through);
         let sub = r.subscription.digest()?;
         let receipt = self
             .subscriptions
@@ -852,11 +873,9 @@ fn bounded_known_cycles_and_serialized_opposing_registration_refuse_without_glob
     assert_eq!(
         Snapshot::begin(
             request.clone(),
-            &fence,
             policy.clone(),
             ids.clone(),
-            &graph,
-            1000
+            registration_context(&fence, &graph)
         )
         .unwrap_err(),
         Error::Cycle
@@ -942,7 +961,7 @@ fn bounded_restore_and_backpressure_refuse_malformed_or_duplicate_work() {
         request.validate().is_err(),
         "frozen self-wait validation refuses before resealing"
     );
-    assert!(Snapshot::begin(request, &fence, policy, ids, &graph, 1000).is_err());
+    assert!(Snapshot::begin(request, policy, ids, registration_context(&fence, &graph)).is_err());
 }
 #[test]
 fn restored_work_cannot_skip_post_install_reobserve_or_contradict_terminal_member_history() {
