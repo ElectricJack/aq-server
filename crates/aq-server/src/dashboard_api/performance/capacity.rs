@@ -236,12 +236,11 @@ pub(super) async fn holds(
             .and_then(parse_hold_cursor)
             .unwrap_or((-1, Uuid::nil(), Uuid::nil()));
     let limit = i64::from(limit.clamp(1, 100));
-    Ok(sqlx::query_scalar(
+    let mut response: Value = sqlx::query_scalar(
         "WITH holds AS MATERIALIZED (
             SELECT w.project_id,w.task_id,w.reason,w.since_ms,f.next_check_at_ms,
-                   CASE WHEN f.owner_attention
-                                  OR (f.next_check_at_ms IS NOT NULL
-                                      AND (NOT COALESCE(c.enabled,FALSE) OR w.workspace_id IS NULL))
+                   CASE WHEN f.next_check_at_ms IS NOT NULL
+                                  AND (NOT COALESCE(c.enabled,FALSE) OR w.workspace_id IS NULL)
                         THEN 'project_owner'
                         WHEN f.next_check_at_ms IS NOT NULL THEN 'project_supervisor'
                    END AS responsible_party
@@ -278,7 +277,19 @@ pub(super) async fn holds(
     .bind(after_task)
     .bind(limit)
     .fetch_one(pool)
-    .await?)
+    .await?;
+    if let Some(rows) = response["rows"].as_array_mut() {
+        for hold in rows {
+            if hold["responsible_party"].is_null()
+                && hold["reason"]
+                    .as_str()
+                    .is_some_and(aq_machine_control::holds::is_budget_hold)
+            {
+                hold["responsible_party"] = json!("project_owner");
+            }
+        }
+    }
+    Ok(response)
 }
 
 #[cfg(test)]

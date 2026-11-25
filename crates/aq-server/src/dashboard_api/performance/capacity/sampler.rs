@@ -328,6 +328,94 @@ fn status(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn minute_commit_is_atomic_across_failure_concurrency_and_replay() {
+        let test = crate::test_support::TestDb::create().await;
+        let store = test.store().await;
+        let pool = &store.pool;
+        let minute = RETENTION + 2 * MINUTE;
+        let samples = |state, id: &str| {
+            BTreeMap::from([(
+                id.to_owned(),
+                Machine {
+                    state,
+                    machine_id: id.into(),
+                    label: id.into(),
+                    ..Default::default()
+                },
+            )])
+        };
+        let ready = |count| Ready {
+            count: Some(count),
+            accuracy: "exact",
+        };
+        store_tick(
+            pool,
+            MINUTE,
+            MINUTE,
+            true,
+            samples("online", "old"),
+            ready(1),
+        )
+        .await
+        .unwrap();
+        assert!(
+            store_tick(
+                pool,
+                minute,
+                minute,
+                true,
+                samples("invalid", "broken"),
+                ready(10)
+            )
+            .await
+            .is_err()
+        );
+        let (first, second) = tokio::join!(
+            store_tick(
+                pool,
+                minute,
+                minute,
+                true,
+                samples("online", "first"),
+                ready(1)
+            ),
+            store_tick(
+                pool,
+                minute,
+                minute,
+                true,
+                samples("online", "second"),
+                ready(2)
+            ),
+        );
+        first.unwrap();
+        second.unwrap();
+        store_tick(
+            pool,
+            minute,
+            minute,
+            true,
+            samples("online", "replay"),
+            ready(100),
+        )
+        .await
+        .unwrap();
+
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT machine_id,ready_count FROM performance_machine_minutes
+             JOIN performance_fleet_minutes USING (minute_ms)",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0] == ("first".into(), 1) || rows[0] == ("second".into(), 2),
+            "{rows:?}",
+        );
+    }
+
     #[test]
     fn expired_heartbeat_and_pause_disable_capacity() {
         let now = DateTime::from_timestamp_millis(120_000).unwrap();
