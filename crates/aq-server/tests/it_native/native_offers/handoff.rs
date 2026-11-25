@@ -522,7 +522,14 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
         roles::ENVIRONMENT
     );
     let first_grant = granted(&mut c, &first).await;
-    run_and_hand_off(&c, &first_grant, &"5".repeat(40), true).await;
+    run_and_hand_off(&c, &first_grant, &"5".repeat(40), false).await;
+    // An owner adds the service after the prior result has been retained.
+    sqlx::query("INSERT INTO task_workspace_services(home_project_id,task_id,service) VALUES($1,$2,'postgres')")
+        .bind(c.env.lineage.project_id)
+        .bind(c.env.lineage.task_id)
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
 
     c.request.operation_id = Uuid::new_v4();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -537,7 +544,10 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
             assert!(offer.workspace_required);
             break offer.native.clone();
         }
-        assert!(tokio::time::Instant::now() < deadline, "{body}");
+        if tokio::time::Instant::now() >= deadline {
+            let readiness = super::holds::work(&c, c.env.lineage.task_id).await;
+            panic!("no workspace successor: poll={body}, readiness={readiness}");
+        }
         native_offer::assembled(&c).await;
     };
     assert_eq!(
@@ -565,6 +575,8 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
             .await
             .unwrap();
     assert_eq!(scope["services"], json!(["postgres"]));
+    let (_, source) = export_of(&c, attempt).await;
+    assert_eq!(source["base"]["hex"], HANDOFF_CANDIDATE);
 
     let (_, plan, request, _) = native_offer::prepare_request(&mut c, &successor).await;
     let nonce = Uuid::new_v4();
