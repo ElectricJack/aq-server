@@ -307,30 +307,6 @@ pub(crate) async fn checkpoint_required(
     .map_err(db)
 }
 
-// The stopped result remains immutable even when the harness naturally exits
-// before receiving the handoff. Record checkpoint rework in the same write.
-pub(crate) async fn settle_checkpoint(
-    connection: &mut PgConnection,
-    receipt: &aq_admission::result_record::Receipt,
-) -> Result<bool, AppError> {
-    let attempt = receipt.binding.attempt_id;
-    if !checkpoint_required(connection, attempt).await? {
-        return Ok(false);
-    }
-    aq_profiled_state::graph_completion::record_noncompletion(
-        connection,
-        receipt.report_id,
-        attempt,
-        ("aq.settlement.workspace-expansion@1", "rework_required", REQUESTED),
-        &serde_json::json!({"decided_by":"workspace_expansion","report_digest":receipt.report_digest}),
-        i64::try_from(receipt.recorded_at_ms).map_err(|_| AppError::Internal)?,
-    )
-    .await
-    .map_err(db)?
-    .ok_or(AppError::Internal)?;
-    Ok(true)
-}
-
 pub(crate) async fn fence_completion(
     connection: &mut PgConnection,
     attempt: Uuid,

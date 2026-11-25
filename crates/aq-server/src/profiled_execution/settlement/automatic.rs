@@ -30,6 +30,33 @@ pub(super) async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>>
         .map_err(db)?;
     Ok(tx)
 }
+// The stopped result remains immutable even when the harness naturally exits
+// before receiving the handoff. Record checkpoint rework in the same write.
+pub(crate) async fn settle_workspace_checkpoint_locked(
+    connection: &mut PgConnection,
+    receipt: &aq_admission::result_record::Receipt,
+) -> Result<bool, AppError> {
+    let attempt = receipt.binding.attempt_id;
+    if !crate::task_workspace_resume::checkpoint_required(connection, attempt).await? {
+        return Ok(false);
+    }
+    graph_completion::fence_transaction(connection, OWNER)
+        .await
+        .map_err(db)?;
+    graph_completion::record_noncompletion(
+        connection,
+        receipt.report_id,
+        attempt,
+        (ACTOR, "rework_required", crate::task_workspace_resume::REQUESTED),
+        &serde_json::json!({"decided_by":"workspace_expansion","report_digest":receipt.report_digest}),
+        i64::try_from(receipt.recorded_at_ms).map_err(|_| AppError::Internal)?,
+    )
+    .await
+    .map_err(db)?
+    .ok_or(AppError::Internal)?;
+    Ok(true)
+}
+
 /// Only a Success report is acceptable (MS1 review B1). A native worker reports
 /// Success only for a harness exit it proved (exit 0 plus an explicit claim);
 /// Unknown, Failed, Expired and Cancelled go to rework, never to completion.

@@ -272,7 +272,7 @@ async fn record_only(
     .map_err(db)?;
     let checkpoint = !view.revoked
         && view.cancellation_id.is_none()
-        && crate::task_workspace_resume::settle_checkpoint(&mut tx, &receipt).await?;
+        && super::settlement::settle_workspace_checkpoint_locked(&mut tx, &receipt).await?;
     tx.commit().await.map_err(db)?;
     Ok((receipt, checkpoint))
 }
