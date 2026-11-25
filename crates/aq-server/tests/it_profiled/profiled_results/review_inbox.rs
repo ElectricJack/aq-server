@@ -621,6 +621,14 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
             .contains(&format!("task {}", item.task_id))
     );
     assert_deferral_replay_and_expiry(&app, first, second).await;
+    assert_impact_pagination_and_cursor_binding(&env, second, third).await;
+
+    assert_decision_history_and_evidence(&env, &app, first, second).await;
+    env.peer.abort();
+}
+
+async fn assert_impact_pagination_and_cursor_binding(env: &ReviewEnv, second: Uuid, third: Uuid) {
+    let f = &env.f;
     let impact = env
         .service
         .inbox(
@@ -660,9 +668,6 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
             .await
             .is_err()
     );
-
-    assert_decision_history_and_evidence(&env, &app, first, second).await;
-    env.peer.abort();
 }
 
 async fn assert_deferral_replay_and_expiry(app: &axum::Router, first: Uuid, second: Uuid) {

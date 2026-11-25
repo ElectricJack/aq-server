@@ -135,6 +135,17 @@ async fn adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_s
     assert!(sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{execution_deadline_ms}','1000002') WHERE attempt_id=$1").bind(attempt).execute(&pool).await.is_err());
 }
 
+fn insert_fresh_cache_attempt(cache: &mut VerifiedCache, key: &mut Key, facts: &mut Facts) {
+    key.attempt_id = Uuid::new_v4();
+    facts.binding.attempt_id = key.attempt_id;
+    if let aq_session_protocol::SessionIdentity::Remote { attempt_id, .. } =
+        &mut facts.binding.session
+    {
+        *attempt_id = key.attempt_id;
+    }
+    assert!(cache.insert_verified(key.clone(), facts.clone()));
+}
+
 #[tokio::test]
 async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
     let f = fixture().await;
@@ -150,14 +161,7 @@ async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
     let mut thousand = Vec::new();
     let started = std::time::Instant::now();
     for _ in 0..1000 {
-        key.attempt_id = Uuid::new_v4();
-        facts.binding.attempt_id = key.attempt_id;
-        if let aq_session_protocol::SessionIdentity::Remote { attempt_id, .. } =
-            &mut facts.binding.session
-        {
-            *attempt_id = key.attempt_id;
-        }
-        assert!(cache.insert_verified(key.clone(), facts.clone()));
+        insert_fresh_cache_attempt(&mut cache, &mut key, &mut facts);
         thousand.push(key.clone());
     }
     let hits = thousand
@@ -172,14 +176,7 @@ async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
     assert_eq!(hits, 1000);
     assert!(count <= VerifiedCache::MAX_ENTRIES && bytes <= VerifiedCache::MAX_BYTES);
     for _ in 0..1100 {
-        key.attempt_id = Uuid::new_v4();
-        facts.binding.attempt_id = key.attempt_id;
-        if let aq_session_protocol::SessionIdentity::Remote { attempt_id, .. } =
-            &mut facts.binding.session
-        {
-            *attempt_id = key.attempt_id;
-        }
-        assert!(cache.insert_verified(key.clone(), facts.clone()));
+        insert_fresh_cache_attempt(&mut cache, &mut key, &mut facts);
     }
     assert!(cache.get(&first_key).is_none());
     key.execution_spec_digest = "x".repeat(100_000);
