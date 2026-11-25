@@ -5,19 +5,20 @@ pub mod attachments;
 pub mod authority;
 pub mod delivery;
 pub mod extract;
+#[cfg(all(feature = "delivery_playbook", feature = "supervisor_full_access"))]
+pub mod git;
 #[cfg(feature = "supervisor_full_access")]
 pub mod owner;
 pub mod read;
 pub mod wire;
-pub use api::{Auth, Service};
-pub use aq_manual_sessions::intelligence::resolve_stored;
+mod zip;
+pub use api::{Auth, Service, resolve_stored, supports_profile, supports_settings};
 use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
 pub use wire::Conversation;
-/// The supervisor routes on the machine listener: `/v1/supervisor/projects`,
-/// and with supervisor_full_access the owner bridge to `owner_app`; without
-/// it, the read nest over `human` and the admin nest over `settings`.
+/// Both supervisor modes use the project discovery and scoped read routes.
+/// Full access adds the owner bridge; the limited mode adds the settings nest.
 pub fn machine_routes<S: Clone + Send + Sync + 'static>(
     human: axum::Router<S>,
     settings: axum::Router<S>,
@@ -26,20 +27,40 @@ pub fn machine_routes<S: Clone + Send + Sync + 'static>(
     clock: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 ) -> axum::Router<S> {
     let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
-    let projects = read::projects(pool.clone(), clock.clone());
+    let supervisor = read::projects(pool.clone(), clock.clone()).merge(read::routes(
+        human,
+        pool.clone(),
+        clock.clone(),
+    ));
     #[cfg(feature = "supervisor_full_access")]
     {
-        let _ = (human, settings);
+        let _ = settings;
         let bridge = owner_app.map(|app| owner::routes(app, pool, clock));
-        projects.merge(bridge.unwrap_or_default())
+        supervisor.merge(bridge.unwrap_or_default())
     }
     #[cfg(not(feature = "supervisor_full_access"))]
     {
         let _ = owner_app;
-        projects
-            .merge(read::routes(human, pool.clone(), clock.clone()))
-            .merge(admin::routes(settings, pool, clock))
+        supervisor.merge(admin::routes(settings, pool, clock))
     }
+}
+/// The supervisor git route `/v1/supervisor/git` on the machine listener,
+/// forwarding fetches to aq-git's git `socket`: mounted only with
+/// supervisor_full_access and a configured socket.
+#[cfg(feature = "delivery_playbook")]
+pub fn git_routes<S: Clone + Send + Sync + 'static>(
+    pool: &sqlx::PgPool,
+    clock: &Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
+    socket: Option<&std::path::Path>,
+) -> axum::Router<S> {
+    #[cfg(feature = "supervisor_full_access")]
+    if let Some(socket) = socket {
+        let clock = clock.clone();
+        let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
+        return git::routes(pool.clone(), clock, socket.to_owned());
+    }
+    let _ = (pool, clock, socket);
+    axum::Router::new()
 }
 /// Scope identity is immutable; the caller supplies owner authorization. These
 /// are the original global locks/counters, or the project's distinct locks.

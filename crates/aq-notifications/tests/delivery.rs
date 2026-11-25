@@ -70,10 +70,12 @@ fn lost_dispatch_response_never_automatically_requeues_or_acknowledges_a_human()
     assert!(recovered.retry_unknown(1003).is_err());
     let accepted = committed
         .observe(
-            id,
-            TransportOutcome::Accepted {
-                message_id: "12345".into(),
-            },
+            AttemptOutcome::new(
+                id,
+                TransportOutcome::Accepted {
+                    message_id: "12345".into(),
+                },
+            ),
             1002,
             0,
         )
@@ -191,11 +193,13 @@ fn provider_delays_are_never_shortened_and_expired_budgets_refuse() {
     let sent = begin(&d, id, 1001);
     let result = sent
         .observe(
-            id,
-            TransportOutcome::RateLimited {
-                retry_after_ms: 10_000,
-                global: false,
-            },
+            AttemptOutcome::new(
+                id,
+                TransportOutcome::RateLimited {
+                    retry_after_ms: 10_000,
+                    global: false,
+                },
+            ),
             1002,
             0,
         )
@@ -222,11 +226,13 @@ fn provider_delays_are_never_shortened_and_expired_budgets_refuse() {
     assert_eq!(begin(&restored, Uuid::new_v4(), 11_002).attempts, 2);
     let over = sent
         .observe(
-            id,
-            TransportOutcome::RateLimited {
-                retry_after_ms: 86_400_001,
-                global: true,
-            },
+            AttemptOutcome::new(
+                id,
+                TransportOutcome::RateLimited {
+                    retry_after_ms: 86_400_001,
+                    global: true,
+                },
+            ),
             1002,
             0,
         )
@@ -238,8 +244,12 @@ fn provider_delays_are_never_shortened_and_expired_budgets_refuse() {
         }
     );
     assert!(
-        sent.observe(Uuid::new_v4(), TransportOutcome::Unknown, 1002, 0)
-            .is_err()
+        sent.observe(
+            AttemptOutcome::new(Uuid::new_v4(), TransportOutcome::Unknown),
+            1002,
+            0
+        )
+        .is_err()
     );
 }
 #[test]

@@ -59,25 +59,133 @@ fn final_time(
     access: &session_access::InspectionAccess,
 ) -> std::result::Result<u64, AppError> {
     let now = (state.clock)().timestamp_millis().max(0) as u64;
-    if now == 0 || now < access.checked_at_ms || now >= access.valid_until_ms {
+    if now == 0 || !(access.checked_at_ms..access.valid_until_ms).contains(&now) {
         return Err(AppError::Forbidden("session inspection expired".into()));
     }
     Ok(now)
 }
+fn accounting_mark(
+    record: &ObservationRecord,
+    decision: Value,
+) -> std::result::Result<AccountingMark, AppError> {
+    Ok(if record.body.kind.is_usage() {
+        match json::<Decision>(decision)? {
+            Decision::Append {
+                fact, supersedes, ..
+            } => {
+                fact.validate().map_err(|_| invalid())?;
+                let same_event = (fact.event.event_id, &fact.event.digest)
+                    == (record.event_id, &record.body_digest);
+                if !same_event || fact.lineage != record.body.binding.lineage_id {
+                    return Err(invalid());
+                }
+                AccountingMark::ContributionRecorded {
+                    event: fact.event,
+                    supersedes,
+                }
+            }
+            Decision::NoCharge { reason } => AccountingMark::NotCharged {
+                reason: reason_code(reason)?,
+            },
+            Decision::Unresolved { reason } => AccountingMark::Unresolved {
+                reason: reason_code(reason)?,
+            },
+        }
+    } else {
+        if decision != json!({"kind":"observation_only"}) {
+            return Err(invalid());
+        }
+        AccountingMark::ObservationOnly
+    })
+}
+
+fn event_view(
+    row: &sqlx::postgres::PgRow,
+    binding: &Binding,
+) -> std::result::Result<EventView, AppError> {
+    let record: ObservationRecord = json(row.get("record"))?;
+    record.validate().map_err(|_| invalid())?;
+    if &record.body.binding != binding
+        || integer(record.body.sequence).map_err(|_| invalid())? != row.get::<i64, _>("sequence")
+    {
+        return Err(invalid());
+    }
+    let accounting = accounting_mark(&record, row.get("decision"))?;
+    let received: i64 = row.get("recorded_at_ms");
+    if received <= 0 {
+        return Err(invalid());
+    }
+    Ok(EventView {
+        record,
+        recorded_at_ms: received as u64,
+        accounting,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventPageQuery {
+    #[serde(default)]
+    pub after_sequence: u64,
+    pub through_sequence: Option<u64>,
+    #[serde(default = "page_limit")]
+    pub limit: u32,
+}
+fn page_limit() -> u32 {
+    16
+}
+impl EventPageQuery {
+    fn validate(&self) -> std::result::Result<(), AppError> {
+        let last_allowed = i64::MAX as u64;
+        let valid_cursor = self.after_sequence <= last_allowed
+            && self
+                .through_sequence
+                .is_none_or(|end| (self.after_sequence..=last_allowed).contains(&end));
+        if !(1..=16).contains(&self.limit) || !valid_cursor {
+            return Err(AppError::BadRequest("invalid observation page".into()));
+        }
+        Ok(())
+    }
+}
+
+fn fill_page(
+    page: &mut EventsPage,
+    rows: Vec<sqlx::postgres::PgRow>,
+    limit: u32,
+) -> std::result::Result<(), AppError> {
+    let mut bytes = serde_json::to_vec(page).map_err(|_| invalid())?.len() + 256;
+    for row in rows {
+        if page.events.len() >= limit as usize {
+            page.complete_for_snapshot = false;
+            break;
+        }
+        let item = event_view(&row, &page.binding)?;
+        let size = serde_json::to_vec(&item).map_err(|_| invalid())?.len() + 1;
+        if bytes + size > 262144 {
+            page.complete_for_snapshot = false;
+            break;
+        }
+        bytes += size;
+        page.events.push(item);
+    }
+    if !page.complete_for_snapshot {
+        page.next_after = Some(page.events.last().ok_or_else(invalid)?.record.body.sequence);
+    }
+    Ok(())
+}
+
 pub async fn events(
     state: &AppState,
     actor: Uuid,
     attempt: Uuid,
-    after: u64,
-    through: Option<u64>,
-    limit: u32,
+    query: EventPageQuery,
 ) -> std::result::Result<EventsPage, AppError> {
-    if !(1..=16).contains(&limit)
-        || after > i64::MAX as u64
-        || through.is_some_and(|v| v > i64::MAX as u64 || v < after)
-    {
-        return Err(AppError::BadRequest("invalid observation page".into()));
-    }
+    query.validate()?;
+    let EventPageQuery {
+        after_sequence: after,
+        through_sequence: through,
+        limit,
+    } = query;
     let snapshot = authority::snapshot(&state.store.observation_pool).await;
     let mut tx = snapshot.map_err(crate::error::db)?;
     let (binding, access) = authorize(state, &mut tx, actor, attempt).await?;
@@ -98,7 +206,7 @@ pub async fn events(
     let rows=sqlx::query("SELECT sequence,record,decision,recorded_at_ms FROM observation_events WHERE attempt_id=$1 AND node_id=$2 AND sequence>$3 AND sequence<=$4 ORDER BY sequence LIMIT $5").bind(attempt).bind(node).bind(after as i64).bind(through as i64).bind(limit as i64+1).fetch_all(&mut *tx).await.map_err(|_|invalid())?;
     let mut page = EventsPage {
         schema_version: 1,
-        binding: binding.clone(),
+        binding,
         after_sequence: after,
         through_sequence: through,
         events: vec![],
@@ -106,71 +214,7 @@ pub async fn events(
         complete_for_snapshot: true,
         checked_at_ms: access.checked_at_ms,
     };
-    let mut bytes = serde_json::to_vec(&page).map_err(|_| invalid())?.len() + 256;
-    for row in rows {
-        if page.events.len() >= limit as usize {
-            page.complete_for_snapshot = false;
-            break;
-        }
-        let record: ObservationRecord = json(row.get("record"))?;
-        record.validate().map_err(|_| invalid())?;
-        if record.body.binding != binding
-            || integer(record.body.sequence).map_err(|_| invalid())?
-                != row.get::<i64, _>("sequence")
-        {
-            return Err(invalid());
-        }
-        let decision: Value = row.get("decision");
-        let accounting = if record.body.kind.is_usage() {
-            match json::<Decision>(decision)? {
-                Decision::Append {
-                    fact, supersedes, ..
-                } => {
-                    fact.validate().map_err(|_| invalid())?;
-                    if fact.event.event_id != record.event_id
-                        || fact.event.digest != record.body_digest
-                        || fact.lineage != binding.lineage_id
-                    {
-                        return Err(invalid());
-                    }
-                    AccountingMark::ContributionRecorded {
-                        event: fact.event,
-                        supersedes,
-                    }
-                }
-                Decision::NoCharge { reason } => AccountingMark::NotCharged {
-                    reason: reason_code(reason)?,
-                },
-                Decision::Unresolved { reason } => AccountingMark::Unresolved {
-                    reason: reason_code(reason)?,
-                },
-            }
-        } else {
-            if decision != json!({"kind":"observation_only"}) {
-                return Err(invalid());
-            }
-            AccountingMark::ObservationOnly
-        };
-        let received: i64 = row.get("recorded_at_ms");
-        if received <= 0 {
-            return Err(invalid());
-        }
-        let item = EventView {
-            record,
-            recorded_at_ms: received as u64,
-            accounting,
-        };
-        let size = serde_json::to_vec(&item).map_err(|_| invalid())?.len() + 1;
-        if bytes + size > 262144 {
-            page.complete_for_snapshot = false;
-            break;
-        }
-        bytes += size;
-        page.events.push(item);
-    }
-    if !page.complete_for_snapshot {
-        page.next_after = Some(page.events.last().ok_or_else(invalid)?.record.body.sequence);
-    }
+    fill_page(&mut page, rows, limit)?;
     page.checked_at_ms = final_time(state, &access)?;
     if serde_json::to_vec(&page).map_err(|_| invalid())?.len() > 262144 {
         return Err(invalid());
@@ -178,6 +222,47 @@ pub async fn events(
     page.validate().map_err(|_| invalid())?;
     tx.commit().await.map_err(|_| invalid())?;
     Ok(page)
+}
+fn usage_view(
+    ledger_revision: ArtifactRef,
+    projection: &Projection,
+    fact_count: usize,
+    summary: aq_accounting::pricing::Summary,
+) -> std::result::Result<UsageView, AppError> {
+    let mut costs = summary.costs;
+    if costs.is_empty() {
+        costs.push(Cost::Unknown {
+            reason: UnknownReason::NotReported,
+        });
+    }
+    let covers_all_calls = projection.incomplete_calls == 0
+        && projection.unresolved_events == 0
+        && fact_count as u64 == projection.canonical_calls;
+    let completeness = if projection.canonical_calls == 0 && projection.unresolved_events == 0 {
+        AccountingCompleteness::Unknown
+    } else if summary.complete && covers_all_calls {
+        AccountingCompleteness::CompleteForPolicy {
+            policy: ArtifactRef {
+                id: Text::new("aq.accounting.cost-policy").map_err(|_| invalid())?,
+                version: Text::new("1").map_err(|_| invalid())?,
+                digest: Digest::of(&serde_json::to_vec(&costs).map_err(|_| invalid())?),
+            },
+        }
+    } else {
+        let reason = summary
+            .reason
+            .unwrap_or_else(|| "native stream coverage or cost evidence is incomplete".to_owned());
+        AccountingCompleteness::Incomplete {
+            reason: Text::new(reason).map_err(|_| invalid())?,
+        }
+    };
+    Ok(UsageView {
+        ledger_revision,
+        counters: projection.counters().map_err(|_| invalid())?,
+        counter_generation: None,
+        costs,
+        completeness,
+    })
 }
 pub async fn usage(
     state: &AppState,
@@ -212,41 +297,7 @@ pub async fn usage(
         .await
         .map_err(|_| invalid())?;
     let summary = budget::summarize(state, &facts).map_err(|_| invalid())?;
-    let mut costs = summary.costs.clone();
-    if costs.is_empty() {
-        costs.push(Cost::Unknown {
-            reason: UnknownReason::NotReported,
-        });
-    }
-    let completeness = if projection.canonical_calls == 0 && projection.unresolved_events == 0 {
-        AccountingCompleteness::Unknown
-    } else if summary.complete
-        && projection.incomplete_calls == 0
-        && projection.unresolved_events == 0
-        && facts.len() as u64 == projection.canonical_calls
-    {
-        AccountingCompleteness::CompleteForPolicy {
-            policy: ArtifactRef {
-                id: Text::new("aq.accounting.cost-policy").map_err(|_| invalid())?,
-                version: Text::new("1").map_err(|_| invalid())?,
-                digest: Digest::of(&serde_json::to_vec(&costs).map_err(|_| invalid())?),
-            },
-        }
-    } else {
-        let reason = summary
-            .reason
-            .unwrap_or_else(|| "native stream coverage or cost evidence is incomplete".to_owned());
-        AccountingCompleteness::Incomplete {
-            reason: Text::new(reason).map_err(|_| invalid())?,
-        }
-    };
-    let usage = UsageView {
-        ledger_revision: reference,
-        counters: projection.counters().map_err(|_| invalid())?,
-        counter_generation: None,
-        costs,
-        completeness,
-    };
+    let usage = usage_view(reference, &projection, facts.len(), summary)?;
     usage.validate().map_err(|_| invalid())?;
     let snapshot = SessionUsage {
         schema_version: 1,

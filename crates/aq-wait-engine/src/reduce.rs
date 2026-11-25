@@ -1,13 +1,20 @@
+use super::snapshot::outcome_digest;
 use super::*;
+/// Trusted authority, dependency graph and clock observed for this registration.
+pub struct RegistrationContext<'a> {
+    pub fence: &'a AuthorityFence,
+    pub graph: &'a KnownGraph,
+    pub now: u64,
+}
+
 impl Snapshot {
     pub fn begin(
         request: wire::Request,
-        fence: &AuthorityFence,
         policy: ResolvedPolicy,
         ids: StableIds,
-        graph: &KnownGraph,
-        now: u64,
+        context: RegistrationContext<'_>,
     ) -> Result<TransitionPlan> {
+        let RegistrationContext { fence, graph, now } = context;
         request.validate()?;
         policy.validate()?;
         instant(now)?;
@@ -26,53 +33,12 @@ impl Snapshot {
         for id in [ids.continuation_id, ids.outcome_id, ids.resume_intent_id] {
             wire::uuid(id)?;
         }
-        let owner = DependencyKey::Task {
-            project: registration.binding.project_id,
-            task: registration.binding.task_id,
-        };
-        let dependencies: Vec<_> = registration
-            .predicate
-            .members()
-            .iter()
-            .filter_map(|member| match member.condition {
-                wire::Condition::Task { task_id, .. } => Some(DependencyKey::Task {
-                    project: registration.binding.project_id,
-                    task: task_id,
-                }),
-                wire::Condition::Dependency {
-                    depends_on_task_id, ..
-                } => Some(DependencyKey::Task {
-                    project: registration.binding.project_id,
-                    task: depends_on_task_id,
-                }),
-                wire::Condition::WaitOutcome { ref wait } => {
-                    Some(DependencyKey::Wait { wait: wait.wait_id })
-                }
-                _ => None,
-            })
-            .collect();
-        let cycle = graph.check(&owner, &dependencies)?;
+        let cycle = graph.assess(registration)?;
         let members = registration
             .predicate
             .members()
             .iter()
-            .map(|v| MemberProgress {
-                original: None,
-                current: None,
-                original_observation: None,
-                current_observation: None,
-                original_snapshot: None,
-                current_snapshot: None,
-                incarnation: None,
-                last: wire::MemberOutcome {
-                    member_id: v.member_id,
-                    state: wire::MemberState::Pending,
-                    evidence: None,
-                },
-                unavailable_reason: None,
-                last_checked_at: None,
-                last_verified_at: None,
-            })
+            .map(|v| MemberProgress::pending(v.member_id))
             .collect();
         let deadline = add(now, policy.body.maximum_age_ms)?;
         let mut next = Self {
@@ -130,64 +96,12 @@ impl Snapshot {
         self.validate()?;
         instant(now)?;
         let current = fence.key()?;
-        if current.principal != self.authority.principal
-            || current.binding != self.authority.binding
-            || current.scope != self.authority.scope
-        {
+        if !self.authority.same_caller(&current) {
             return Err(Error::Stale);
         }
         let mut next = self.clone();
-        let mut actions = Vec::new();
         next.logical_now = now.max(self.logical_now);
-        if fence.task_cancelled {
-            if next.outcome.is_none() {
-                actions.push(next.finish(wire::WaitOutcomeKind::Cancelled, false)?);
-            } else if next.resume_allowed {
-                next.resume_allowed = false;
-                actions.push(Action::RetireResume {
-                    intent_id: next.ids.resume_intent_id,
-                    wait: next.registration().wait_ref(),
-                });
-            }
-        } else if next.outcome.is_some() {
-            // Terminal source identity/outcome never changes on late hints/replies.
-        } else if current.source_access != self.authority.source_access {
-            next.hold("source access or project binding changed")?;
-        } else {
-            if let Input::SourceBatch { ref ticket, .. } | Input::Reclaim { ref ticket } = input
-                && next.inflight.as_ref() != Some(ticket)
-            {
-                return Err(Error::Stale);
-            }
-            if next.logical_now >= next.deadline {
-                actions.push(next.finish(wire::WaitOutcomeKind::DeadlineReached, true)?);
-            } else {
-                match input {
-                    Input::Drive => actions.extend(next.schedule()?),
-                    Input::Hint { member_id } => {
-                        require(
-                            next.registration()
-                                .predicate
-                                .members()
-                                .iter()
-                                .any(|v| v.member_id == member_id),
-                        )?;
-                        next.dirty = next.dirty.checked_add(1).ok_or(Error::Overflow)?;
-                        if next.retries == 0 {
-                            next.next_due = next.logical_now;
-                        }
-                        actions.extend(next.schedule()?);
-                    }
-                    Input::Reclaim { .. } => {
-                        next.inflight = None;
-                        next.retry()?;
-                    }
-                    Input::SourceBatch { ticket, replies } => {
-                        actions.extend(next.receive(ticket, replies)?)
-                    }
-                }
-            }
-        }
+        let actions = next.apply_input(input, fence, &current)?;
         next.revision = self.revision.checked_add(1).ok_or(Error::Overflow)?;
         next.validate()?;
         Ok(TransitionPlan {
@@ -197,40 +111,83 @@ impl Snapshot {
             replay: false,
         })
     }
+    fn apply_input(
+        &mut self,
+        input: Input,
+        fence: &AuthorityFence,
+        current: &AuthorityKey,
+    ) -> Result<Vec<Action>> {
+        if fence.task_cancelled {
+            return self.cancel();
+        }
+        // Late source hints and replies cannot change the terminal outcome.
+        if self.outcome.is_some() {
+            return Ok(Vec::new());
+        }
+        if current.source_access != self.authority.source_access {
+            self.hold("source access or project binding changed")?;
+            return Ok(Vec::new());
+        }
+        if let Input::SourceBatch { ref ticket, .. } | Input::Reclaim { ref ticket } = input
+            && self.inflight.as_ref() != Some(ticket)
+        {
+            return Err(Error::Stale);
+        }
+
+        if self.logical_now >= self.deadline {
+            return Ok(vec![
+                self.finish(wire::WaitOutcomeKind::DeadlineReached, true)?,
+            ]);
+        }
+        match input {
+            Input::Drive => self.schedule(),
+            Input::Hint { member_id } => self.hint(member_id),
+            Input::Reclaim { .. } => {
+                self.inflight = None;
+                self.retry()?;
+                Ok(Vec::new())
+            }
+            Input::SourceBatch { ticket, replies } => self.receive(ticket, replies),
+        }
+    }
+    fn cancel(&mut self) -> Result<Vec<Action>> {
+        let mut actions = Vec::new();
+        if self.outcome.is_none() {
+            actions.push(self.finish(wire::WaitOutcomeKind::Cancelled, false)?);
+        } else if self.resume_allowed {
+            self.resume_allowed = false;
+            actions.push(Action::RetireResume {
+                intent_id: self.ids.resume_intent_id,
+                wait: self.registration().wait_ref(),
+            });
+        }
+
+        Ok(actions)
+    }
+    fn hint(&mut self, member_id: Uuid) -> Result<Vec<Action>> {
+        require(
+            self.registration()
+                .predicate
+                .members()
+                .iter()
+                .any(|v| v.member_id == member_id),
+        )?;
+        self.dirty = self.dirty.checked_add(1).ok_or(Error::Overflow)?;
+        if self.retries == 0 {
+            self.next_due = self.logical_now;
+        }
+        self.schedule()
+    }
     pub fn registration(&self) -> &wire::WaitRegistration {
         match &self.request.body.command {
             wire::Command::RegisterWait(v) => v,
             _ => unreachable!("validated registration"),
         }
     }
-    fn source_requests(&self, kind: &WorkKind) -> Vec<SourceRequest> {
-        self.registration()
-            .predicate
-            .members()
-            .iter()
-            .zip(&self.members)
-            .filter(|(_, p)| *kind != WorkKind::Install || p.original.is_none())
-            .map(|(m, p)| SourceRequest {
-                subscription: SubscriptionId {
-                    wait: self.registration().wait_ref(),
-                    member_id: m.member_id,
-                },
-                scope: self.authority.scope.clone(),
-                binding: self.authority.binding.clone(),
-                principal: self.authority.principal.clone(),
-                source_access: self.authority.source_access.clone(),
-                member: (*m).clone(),
-                previous: p.current.clone(),
-                incarnation: p.incarnation.clone(),
-            })
-            .collect()
-    }
-    fn schedule(&mut self) -> Result<Vec<Action>> {
-        if self.inflight.is_some()
-            || self.outcome.is_some()
-            || self.phase == Phase::RecoveryHeld
-            || self.logical_now < self.next_due
-        {
+    pub(super) fn schedule(&mut self) -> Result<Vec<Action>> {
+        let ready = self.phase != Phase::RecoveryHeld && self.logical_now >= self.next_due;
+        let idle = self.inflight.is_none() && self.outcome.is_none();
+        if !ready || !idle {
             return Ok(Vec::new());
         }
         if self.work_generation >= u64::from(self.policy.body.max_work_attempts) {
@@ -256,153 +213,7 @@ impl Snapshot {
             WorkKind::Reobserve => Action::Reobserve { ticket, sources },
         }])
     }
-    fn receive(&mut self, ticket: WorkTicket, replies: Vec<SourceReply>) -> Result<Vec<Action>> {
-        let requests = self.source_requests(&ticket.kind);
-        require(replies.len() == requests.len() && replies.len() <= wire::MAX_MEMBERS)?;
-        let mut unavailable = false;
-        for (request, reply) in requests.iter().zip(replies) {
-            require(request.member.member_id == reply.member_id())?;
-            let index = self
-                .members
-                .iter()
-                .position(|m| m.last.member_id == request.member.member_id)
-                .ok_or(Error::Invalid)?;
-            match reply {
-                SourceReply::Committed(proof) => {
-                    self.proof(request, &proof)?;
-                    let progress = &mut self.members[index];
-                    if progress.original.is_none() {
-                        progress.original = Some(proof.boundary.clone());
-                        progress.original_observation = Some(proof.observation.clone());
-                        progress.original_snapshot = Some(proof.owner_snapshot.clone());
-                        progress.incarnation = Some(proof.incarnation.clone());
-                    }
-                    progress.current = Some(proof.boundary);
-                    progress.current_observation = Some(proof.observation.clone());
-                    progress.current_snapshot = Some(proof.owner_snapshot);
-                    progress.last = proof.observation;
-                    progress.unavailable_reason = None;
-                    progress.last_checked_at = Some(self.logical_now);
-                    progress.last_verified_at = Some(self.logical_now);
-                }
-                SourceReply::RetryableUnavailable { reason, .. }
-                | SourceReply::ReplayGap { reason, .. } => {
-                    reason.validate()?;
-                    unavailable = true;
-                    self.members[index].last = wire::MemberOutcome {
-                        member_id: request.member.member_id,
-                        state: wire::MemberState::SourceUnavailable,
-                        evidence: None,
-                    };
-                    self.members[index].unavailable_reason = Some(reason);
-                    self.members[index].last_checked_at = Some(self.logical_now);
-                }
-            }
-        }
-        self.inflight = None;
-        if ticket.kind == WorkKind::Install {
-            if self.members.iter().all(|m| m.original.is_some()) {
-                // Even an already-satisfied install snapshot must be unconditionally
-                // reobserved. No install response alone commits an outcome.
-                self.phase = Phase::Pending;
-                self.retries = 0;
-                self.next_due = self.logical_now;
-                return self.schedule();
-            }
-            self.retry()?;
-            return Ok(Vec::new());
-        }
-        self.completed_dirty = ticket.dirty_through;
-        if ticket.dirty_through != self.dirty {
-            // Keep safe source progress, but never erase a hint that arrived
-            // while this round was outside the owner's commit fence.
-            if unavailable {
-                self.retry()?;
-            } else {
-                self.retries = 0;
-                self.next_due = self.logical_now;
-            }
-            return self.schedule();
-        }
-        let any = matches!(self.registration().predicate, wire::Predicate::Any { .. });
-        let satisfied = self
-            .members
-            .iter()
-            .filter(|m| m.last.state == wire::MemberState::Satisfied)
-            .count();
-        let failed = self
-            .members
-            .iter()
-            .any(|m| m.last.state == wire::MemberState::SourceFailed);
-        let pending = self.members.iter().any(|m| {
-            matches!(
-                m.last.state,
-                wire::MemberState::Pending | wire::MemberState::SourceUnavailable
-            )
-        });
-        if (any && satisfied > 0) || (!any && satisfied == self.members.len()) {
-            return Ok(vec![self.finish(wire::WaitOutcomeKind::Satisfied, true)?]);
-        }
-        if failed && (!any || !pending) {
-            return Ok(vec![
-                self.finish(wire::WaitOutcomeKind::SourceFailed, true)?,
-            ]);
-        }
-        if unavailable {
-            self.retry()?;
-        } else {
-            self.retries = 0;
-            self.next_due = add(self.logical_now, self.policy.body.check_interval_ms)?;
-        }
-        Ok(Vec::new())
-    }
-    fn proof(&self, request: &SourceRequest, proof: &CommittedObservation) -> Result<()> {
-        proof.boundary.validate()?;
-        proof.observation.validate()?;
-        proof.incarnation.validate()?;
-        wire::artifact(&proof.owner_snapshot)?;
-        let boundary = &proof.boundary;
-        let valid = proof.protocol == SourceProtocol::CommittedReplay
-            && proof.subscription == request.subscription
-            && proof.scope == request.scope
-            && proof.binding == request.binding
-            && proof.principal == request.principal
-            && proof.source_access == request.source_access
-            && boundary.member_id == request.member.member_id
-            && boundary.owner == request.member.condition.owner()
-            && boundary.condition_digest == canonical_digest(&request.member.condition)?
-            && boundary.snapshot_digest == proof.owner_snapshot.digest
-            && proof.projection_digest == canonical_digest(&proof.observation)?
-            && proof.observation.member_id == request.member.member_id
-            && proof.observation.state != wire::MemberState::SourceUnavailable;
-        if !valid {
-            return Err(Error::Proof);
-        }
-        if let wire::Condition::Timer { due_at_ms } = request.member.condition
-            && proof.observation.state == wire::MemberState::Satisfied
-            && self.logical_now < due_at_ms
-        {
-            return Err(Error::Proof);
-        }
-        if let Some(previous) = &request.previous {
-            if request.incarnation.as_ref() != Some(&proof.incarnation)
-                || proof.replay_from.as_ref() != Some(&previous.committed_replay_cursor)
-                || previous.subscription_receipt != boundary.subscription_receipt
-            {
-                return Err(Error::Proof);
-            }
-        } else if proof.replay_from.is_some() {
-            return Err(Error::Proof);
-        }
-        if let Some(evidence) = &proof.observation.evidence
-            && (evidence.owner != boundary.owner
-                || evidence.condition_digest != boundary.condition_digest)
-        {
-            return Err(Error::Proof);
-        }
-        Ok(())
-    }
-    fn retry(&mut self) -> Result<()> {
+    pub(super) fn retry(&mut self) -> Result<()> {
         self.retries = self.retries.checked_add(1).ok_or(Error::Overflow)?;
         if self.retries >= self.policy.body.max_retries {
             self.hold("source retry budget exhausted")?;
@@ -429,7 +240,7 @@ impl Snapshot {
         self.hold_reason = Some(wire::Text::new(reason)?);
         Ok(())
     }
-    fn finish(&mut self, kind: wire::WaitOutcomeKind, resume: bool) -> Result<Action> {
+    pub(super) fn finish(&mut self, kind: wire::WaitOutcomeKind, resume: bool) -> Result<Action> {
         let members: Vec<_> = self.members.iter().map(|m| m.last.clone()).collect();
         let selected = if kind == wire::WaitOutcomeKind::Satisfied
             && matches!(self.registration().predicate, wire::Predicate::Any { .. })
@@ -474,259 +285,12 @@ impl Snapshot {
             resume,
         })
     }
-    pub fn ids(&self) -> &StableIds {
-        &self.ids
-    }
-    pub fn policy(&self) -> &ResolvedPolicy {
-        &self.policy
-    }
-    pub fn inflight(&self) -> Option<&WorkTicket> {
-        self.inflight.as_ref()
-    }
-    pub fn hold_reason(&self) -> Option<&wire::Text> {
-        self.hold_reason.as_ref()
-    }
-    pub fn cycle(&self) -> &wire::CycleAssessment {
-        &self.cycle
-    }
-    /// Original committed install boundaries, present only once every member
-    /// is installed; aligned with the predicate's members.
-    pub fn boundaries(&self) -> Option<Vec<wire::SourceBoundary>> {
-        self.members.iter().map(|m| m.original.clone()).collect()
-    }
-    /// Latest observation per member, with its last check and verification times.
-    pub fn member_states(&self) -> Vec<MemberFreshness> {
-        self.members
-            .iter()
-            .map(|m| MemberFreshness {
-                state: m.last.clone(),
-                unavailable_reason: m.unavailable_reason.clone(),
-                last_checked_at_ms: m.last_checked_at,
-                last_verified_at_ms: m.last_verified_at,
-            })
-            .collect()
-    }
-    pub fn phase(&self) -> &Phase {
-        &self.phase
-    }
-    pub fn outcome(&self) -> Option<&wire::WaitOutcome> {
-        self.outcome.as_ref()
-    }
-    pub fn original_created_at_ms(&self) -> u64 {
-        self.created
-    }
-    pub fn deadline_ms(&self) -> u64 {
-        self.deadline
-    }
-    pub fn next_due_ms(&self) -> u64 {
-        self.next_due
-    }
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        self.validate()?;
-        let bytes = serde_json::to_vec(self).map_err(|_| Error::Invalid)?;
-        if bytes.len() > MAX_SNAPSHOT_BYTES {
-            return Err(Error::Capacity);
-        }
-        Ok(bytes)
-    }
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() > MAX_SNAPSHOT_BYTES {
-            return Err(Error::Capacity);
-        }
-        let value: Self = serde_json::from_slice(bytes).map_err(|_| Error::Invalid)?;
-        value.validate()?;
-        Ok(value)
-    }
-    pub(crate) fn validate(&self) -> Result<()> {
-        self.request.validate()?;
-        self.policy.validate()?;
-        instant(self.created)?;
-        instant(self.logical_now)?;
-        instant(self.next_due)?;
-        let wire::Command::RegisterWait(registration) = &self.request.body.command else {
-            return Err(Error::Invalid);
-        };
-        require(
-            self.authority.scope == registration.scope
-                && self.authority.binding == registration.binding
-                && self.authority.scope.project_id == self.authority.binding.project_id
-                && registration.policy == self.policy.reference
-                && self.logical_now >= self.created
-                && self.deadline == add(self.created, self.policy.body.maximum_age_ms)?
-                && self.revision > 0
-                && self.completed_dirty <= self.dirty
-                && self.work_generation <= u64::from(self.policy.body.max_work_attempts)
-                && self.retries <= self.policy.body.max_retries,
-        )?;
-        for id in [
-            self.ids.continuation_id,
-            self.ids.outcome_id,
-            self.ids.resume_intent_id,
-        ] {
-            wire::uuid(id)?;
-        }
-        require(self.members.len() == registration.predicate.members().len())?;
-        for (member, progress) in registration.predicate.members().iter().zip(&self.members) {
-            progress.last.validate()?;
-            require(member.member_id == progress.last.member_id)?;
-            require(
-                progress.original.is_some() == progress.current.is_some()
-                    && progress.original.is_some() == progress.incarnation.is_some()
-                    && progress.original.is_some() == progress.original_observation.is_some()
-                    && progress.original.is_some() == progress.current_observation.is_some()
-                    && progress.original.is_some() == progress.original_snapshot.is_some()
-                    && progress.original.is_some() == progress.current_snapshot.is_some(),
-            )?;
-            for (boundary, observation, snapshot) in [
-                (
-                    &progress.original,
-                    &progress.original_observation,
-                    &progress.original_snapshot,
-                ),
-                (
-                    &progress.current,
-                    &progress.current_observation,
-                    &progress.current_snapshot,
-                ),
-            ] {
-                if let (Some(boundary), Some(observation), Some(snapshot)) =
-                    (boundary, observation, snapshot)
-                {
-                    boundary.validate()?;
-                    observation.validate()?;
-                    wire::artifact(snapshot)?;
-                    require(
-                        boundary.member_id == member.member_id
-                            && boundary.owner == member.condition.owner()
-                            && boundary.condition_digest == canonical_digest(&member.condition)?
-                            && boundary.snapshot_digest == snapshot.digest
-                            && observation.member_id == member.member_id,
-                    )?;
-                    if let Some(evidence) = &observation.evidence {
-                        require(
-                            evidence.owner == member.condition.owner()
-                                && evidence.condition_digest
-                                    == canonical_digest(&member.condition)?,
-                        )?;
-                    }
-                }
-            }
-            if matches!(
-                progress.last.state,
-                wire::MemberState::Satisfied | wire::MemberState::SourceFailed
-            ) {
-                require(progress.current_observation.as_ref() == Some(&progress.last))?;
-            }
-            if let (Some(original), Some(current)) = (&progress.original, &progress.current) {
-                require(original.subscription_receipt == current.subscription_receipt)?;
-            }
-            if let Some(incarnation) = &progress.incarnation {
-                incarnation.validate()?;
-            }
-            if let Some(reason) = &progress.unavailable_reason {
-                reason.validate()?;
-            }
-            for at in [progress.last_checked_at, progress.last_verified_at]
-                .into_iter()
-                .flatten()
-            {
-                instant(at)?;
-                require(at >= self.created && at <= self.logical_now)?;
-            }
-            if let Some(verified) = progress.last_verified_at {
-                require(
-                    progress
-                        .last_checked_at
-                        .is_some_and(|checked| checked >= verified),
-                )?;
-            }
-        }
-        if self.phase == Phase::Pending {
-            require(self.members.iter().all(|m| m.original.is_some()))?;
-        }
-        if self.phase == Phase::Installing {
-            require(self.members.iter().any(|m| m.original.is_none()))?;
-        }
-        if self.phase == Phase::RecoveryHeld {
-            require(self.hold_reason.is_some() && self.inflight.is_none())?;
-        }
-        if let Some(reason) = &self.hold_reason {
-            reason.validate()?;
-        }
-        match &self.cycle {
-            wire::CycleAssessment::NoKnownCycle { revision } => wire::artifact(revision)?,
-            wire::CycleAssessment::ExternalUnknown { reason } => reason.validate()?,
-        }
-        if let Some(ticket) = &self.inflight {
-            require(
-                ticket.wait == registration.wait_ref()
-                    && ticket.generation == self.work_generation
-                    && ticket.generation > 0
-                    && ticket.dirty_through <= self.dirty
-                    && self.outcome.is_none()
-                    && self.phase != Phase::RecoveryHeld,
-            )?;
-            require(match ticket.kind {
-                WorkKind::Install => {
-                    self.phase == Phase::Installing
-                        && self.members.iter().any(|m| m.original.is_none())
-                }
-                WorkKind::Reobserve => {
-                    self.phase == Phase::Pending
-                        && self.members.iter().all(|m| m.original.is_some())
-                }
-            })?;
-        }
-        require((self.phase == Phase::Terminal) == self.outcome.is_some())?;
-        if let Some(outcome) = &self.outcome {
-            outcome.validate_for(&registration.predicate)?;
-            require(
-                outcome.outcome.outcome_id == self.ids.outcome_id
-                    && outcome.outcome.wait == registration.wait_ref()
-                    && outcome.outcome.digest == outcome_digest(outcome)?
-                    && outcome.recorded_at_ms >= self.created
-                    && outcome.recorded_at_ms <= self.logical_now,
-            )?;
-            match outcome.kind {
-                wire::WaitOutcomeKind::Satisfied | wire::WaitOutcomeKind::SourceFailed => {
-                    require(
-                        self.members.iter().all(|m| m.original.is_some())
-                            && outcome.recorded_at_ms < self.deadline,
-                    )?;
-                }
-                wire::WaitOutcomeKind::DeadlineReached => {
-                    require(outcome.recorded_at_ms >= self.deadline)?
-                }
-                wire::WaitOutcomeKind::Cancelled => require(!self.resume_allowed)?,
-                wire::WaitOutcomeKind::SourceUnavailable
-                | wire::WaitOutcomeKind::ManualOverride => return Err(Error::Invalid),
-            }
-            require(
-                outcome.members
-                    == self
-                        .members
-                        .iter()
-                        .map(|m| m.last.clone())
-                        .collect::<Vec<_>>(),
-            )?;
-        }
-        if serde_json::to_vec(self).map_err(|_| Error::Invalid)?.len() > MAX_SNAPSHOT_BYTES {
-            return Err(Error::Capacity);
-        }
-        Ok(())
-    }
 }
-fn outcome_digest(outcome: &wire::WaitOutcome) -> Result<wire::Digest> {
-    let mut value = serde_json::to_value(outcome).map_err(|_| Error::Invalid)?;
-    value["outcome"]
-        .as_object_mut()
-        .ok_or(Error::Invalid)?
-        .remove("digest");
-    value.sort_all_objects();
-    Ok(wire::Digest::of(
-        &serde_json::to_vec(&value).map_err(|_| Error::Invalid)?,
-    ))
+
+impl AuthorityKey {
+    fn same_caller(&self, other: &Self) -> bool {
+        self.principal == other.principal
+            && self.binding == other.binding
+            && self.scope == other.scope
+    }
 }

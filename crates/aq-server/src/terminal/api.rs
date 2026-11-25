@@ -10,9 +10,10 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, FromRequest, Path, Query, Request, State},
     http::HeaderMap,
-    routing::{get, post},
+    routing::{MethodRouter, get, post},
 };
 use serde::de::DeserializeOwned;
+use std::{future::Future, time::Duration};
 use uuid::Uuid;
 struct SafeJson<T>(T);
 impl<T: DeserializeOwned> FromRequest<AppState> for SafeJson<T> {
@@ -66,16 +67,35 @@ pub fn human_routes(state: AppState) -> Router<AppState> {
 pub fn worker_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/terminal-relay/register", post(register))
-        .route("/v1/terminal-relay/poll", post(poll))
-        .route("/v1/terminal-relay/output-poll", post(output_poll))
+        .route(
+            "/v1/terminal-relay/poll",
+            POLL.post(async |state, node, request| {
+                super::peer::poll(&state, &node, &request).await
+            }),
+        )
+        .route(
+            "/v1/terminal-relay/output-poll",
+            OUTPUT_POLL.post(async |state, node, request| {
+                super::peer::output_poll(&state, &node, &request).await
+            }),
+        )
         .route(
             "/v1/terminal-relay/control-upload",
-            post(control_upload).layer(DefaultBodyLimit::max(262144)),
+            CONTROL_UPLOAD
+                .post(async |state, node, request| {
+                    super::peer::control_upload(&state, &node, &request).await
+                })
+                .layer(DefaultBodyLimit::max(262144)),
         )
         .with_state(state.terminal_view())
         .merge(
             Router::new()
-                .route("/v1/terminal-relay/upload", post(upload))
+                .route(
+                    "/v1/terminal-relay/upload",
+                    UPLOAD.post(async |state, node, request| {
+                        super::peer::upload(&state, &node, &request).await
+                    }),
+                )
                 .with_state(state.terminal_read_view()),
         )
         .layer(DefaultBodyLimit::max(1024 * 1024))
@@ -87,17 +107,21 @@ async fn inspect(
 ) -> Result<Json<TerminalInfo>> {
     Ok(Json(service::inspect(&state, user.id, terminal).await?))
 }
+fn require_terminal(path: Uuid, bound: Uuid) -> Result<()> {
+    if path != bound {
+        return Err(AppError::BadRequest(
+            "terminal path binding mismatch".into(),
+        ));
+    }
+    Ok(())
+}
 async fn mutate(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(terminal): Path<Uuid>,
     SafeJson(request): SafeJson<service::Mutation>,
 ) -> Result<Json<MutationReply>> {
-    if request.binding().0.terminal_id != terminal {
-        return Err(AppError::BadRequest(
-            "terminal path binding mismatch".into(),
-        ));
-    }
+    require_terminal(terminal, request.binding().0.terminal_id)?;
     Ok(Json(service::mutate(&state, user.id, &request).await?))
 }
 async fn register(
@@ -113,58 +137,72 @@ async fn register(
     }))
 }
 
-async fn poll(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    SafeJson(request): SafeJson<aq_terminal_relay::draft::RelayPoll>,
-) -> Result<Json<aq_terminal_relay::draft::Envelope>> {
-    let node = super::peer::authenticate(&state, &headers)
-        .await
-        .map_err(|error| relay_failure(error, "terminal_poll_failed"))?;
-    let value = tokio::time::timeout(
-        std::time::Duration::from_secs(22),
-        super::peer::poll(&state, &node, &request),
-    )
-    .await
-    .map_err(|_| AppError::IdentityUnavailable("terminal poll deadline exceeded".into()))?
-    .map_err(|error| relay_failure(error, "terminal_poll_failed"))?;
-    Ok(Json(value))
+#[derive(Clone, Copy)]
+struct Endpoint {
+    timeout_secs: u64,
+    deadline_error: &'static str,
+    failure_code: &'static str,
 }
-async fn output_poll(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    SafeJson(request): SafeJson<aq_terminal_relay::draft::RelayPoll>,
-) -> Result<Json<aq_terminal_relay::draft::Envelope>> {
-    let node = super::peer::authenticate(&state, &headers)
-        .await
-        .map_err(|error| relay_failure(error, "terminal_output_poll_failed"))?;
-    let value = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        super::peer::output_poll(&state, &node, &request),
-    )
-    .await
-    .map_err(|_| AppError::IdentityUnavailable("terminal output poll deadline exceeded".into()))?
-    .map_err(|error| relay_failure(error, "terminal_output_poll_failed"))?;
-    Ok(Json(value))
+impl Endpoint {
+    fn post<Q, R, F>(
+        self,
+        dispatch: impl Fn(AppState, super::peer::AuthenticatedNode, Q) -> F
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    ) -> MethodRouter<AppState>
+    where
+        Q: DeserializeOwned + Send + 'static,
+        R: serde::Serialize + Send + 'static,
+        F: Future<Output = Result<R>> + Send + 'static,
+    {
+        post(
+            move |State(state): State<AppState>,
+                  headers: HeaderMap,
+                  SafeJson(request): SafeJson<Q>| {
+                let dispatch = dispatch.clone();
+                async move {
+                    let node = super::peer::authenticate(&state, &headers)
+                        .await
+                        .map_err(|e| relay_failure(e, self.failure_code))?;
+                    tokio::time::timeout(
+                        Duration::from_secs(self.timeout_secs),
+                        dispatch(state, node, request),
+                    )
+                    .await
+                    .map_err(|_| AppError::IdentityUnavailable(self.deadline_error.into()))?
+                    .map(Json)
+                    .map_err(|e| relay_failure(e, self.failure_code))
+                }
+            },
+        )
+    }
 }
 
-async fn upload(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    SafeJson(request): SafeJson<aq_terminal_relay::draft::PeerUpload>,
-) -> Result<Json<aq_terminal_relay::draft::UploadAck>> {
-    let node = super::peer::authenticate(&state, &headers)
-        .await
-        .map_err(|error| relay_failure(error, "terminal_upload_failed"))?;
-    let value = tokio::time::timeout(
-        std::time::Duration::from_secs(4),
-        super::peer::upload(&state, &node, &request),
-    )
-    .await
-    .map_err(|_| AppError::IdentityUnavailable("terminal upload deadline exceeded".into()))?
-    .map_err(|error| relay_failure(error, "terminal_upload_failed"))?;
-    Ok(Json(value))
-}
+const POLL: Endpoint = Endpoint {
+    timeout_secs: 22,
+    deadline_error: "terminal poll deadline exceeded",
+    failure_code: "terminal_poll_failed",
+};
+
+const OUTPUT_POLL: Endpoint = Endpoint {
+    timeout_secs: 2,
+    deadline_error: "terminal output poll deadline exceeded",
+    failure_code: "terminal_output_poll_failed",
+};
+
+const UPLOAD: Endpoint = Endpoint {
+    timeout_secs: 4,
+    deadline_error: "terminal upload deadline exceeded",
+    failure_code: "terminal_upload_failed",
+};
+
+const CONTROL_UPLOAD: Endpoint = Endpoint {
+    timeout_secs: 4,
+    deadline_error: "terminal control upload deadline exceeded",
+    failure_code: "terminal_control_upload_failed",
+};
 
 async fn output(
     State(state): State<AppState>,
@@ -183,11 +221,7 @@ async fn access(
     Path(terminal): Path<Uuid>,
     SafeJson(request): SafeJson<aq_terminal_relay::api::AccessUpdate>,
 ) -> Result<Json<MutationReply>> {
-    if request.terminal.terminal_id != terminal {
-        return Err(AppError::BadRequest(
-            "terminal path binding mismatch".into(),
-        ));
-    }
+    require_terminal(terminal, request.terminal.terminal_id)?;
     Ok(Json(service::set_access(&state, user.id, &request).await?))
 }
 
@@ -199,24 +233,6 @@ async fn receipt(
     Ok(Json(
         service::receipt(&state, user.id, terminal, operation).await?,
     ))
-}
-
-async fn control_upload(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    SafeJson(request): SafeJson<aq_terminal_relay::draft::PeerUpload>,
-) -> Result<Json<aq_terminal_relay::draft::UploadAck>> {
-    let node = super::peer::authenticate(&state, &headers)
-        .await
-        .map_err(|error| relay_failure(error, "terminal_control_upload_failed"))?;
-    let value = tokio::time::timeout(
-        std::time::Duration::from_secs(4),
-        super::peer::control_upload(&state, &node, &request),
-    )
-    .await
-    .map_err(|_| AppError::IdentityUnavailable("terminal control upload deadline exceeded".into()))?
-    .map_err(|error| relay_failure(error, "terminal_control_upload_failed"))?;
-    Ok(Json(value))
 }
 
 async fn tail(

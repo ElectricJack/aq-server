@@ -8,6 +8,8 @@ description = "The AQ command registry (spec 0006 §4): command specs, per-princ
 [features]
 # Supervisors get full access (owner scope and registry); off by default.
 supervisor_full_access = []
+# Spec 0017: the agent's `environment.try` commands. Off by default.
+project_environments = ["aq-agent-grants/project_environments"]
 
 [dependencies]
 aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0" }

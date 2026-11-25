@@ -362,11 +362,13 @@ async fn all_tasks(
     let graph = runtime(&s)?;
     let url = graph.url.join("/v1/task-list").map_err(|_| unavailable())?;
     task_list::read(
-        &r.pool,
-        &r.cursors.shared,
+        task_list::ReadAt {
+            pool: &r.pool,
+            cursors: &r.cursors.shared,
+            now_ms: stamp(&s),
+        },
         work_owner(&u),
         q,
-        stamp(&s),
         async |body| {
             graph
                 .human_response(graph.client.post(url).json(&body), 524288)
@@ -664,11 +666,15 @@ async fn graph(
     let role =
         |p: &mut Value, n: &Value| crate::role_settings::show(p, n, &a.record.binding.default_role);
     let parent = parent(&raw, w, id)?;
-    let data = aq_human_work::projection::neighborhood(&raw, id, parent, limit, |raw| {
-        let mut value = node(raw, w, "task").ok()?;
-        role(&mut value, raw);
-        Some(value)
-    })
+    let data = aq_human_work::projection::neighborhood(
+        &raw,
+        aq_human_work::projection::Neighborhood { id, parent, limit },
+        |raw| {
+            let mut value = node(raw, w, "task").ok()?;
+            role(&mut value, raw);
+            Some(value)
+        },
+    )
     .ok_or_else(unavailable)?;
     finish(&s, &r, a, data).await
 }

@@ -32,21 +32,20 @@ impl Codec {
         }
     }
     pub fn encode(&self, b: &Binding, upstream: &str, now: i64) -> Result<String> {
-        self.encode_for(b, upstream, now, 30000)
+        self.encode_for(b, upstream, validity(now, 30000)?)
     }
-    pub fn encode_for(&self, b: &Binding, upstream: &str, now: i64, ttl: u64) -> Result<String> {
-        if upstream.is_empty() || upstream.len() > 256 || upstream.chars().any(char::is_control) {
+    pub fn encode_for(
+        &self,
+        b: &Binding,
+        upstream: &str,
+        validity: std::ops::Range<u64>,
+    ) -> Result<String> {
+        let valid = (1..=256).contains(&upstream.len()) && !upstream.chars().any(char::is_control);
+        if !valid {
             return Err(unavailable());
         }
-        let now = u64::try_from(now).map_err(|_| unavailable())?;
         self.shared
-            .encode(
-                &Self::binding(b),
-                "graph_owner_snapshot",
-                upstream,
-                now,
-                now.checked_add(ttl).ok_or_else(unavailable)?,
-            )
+            .encode(Self::binding(b).position("graph_owner_snapshot", upstream, validity))
             .map_err(|_| unavailable())
     }
     pub fn decode(&self, token: &str, b: &Binding, now: i64) -> Result<String> {
@@ -62,6 +61,10 @@ impl Codec {
             .map(|v| v.position)
             .map_err(|_| conflict())
     }
+}
+pub(super) fn validity(now: i64, ttl: u64) -> Result<std::ops::Range<u64>> {
+    let now = u64::try_from(now).map_err(|_| unavailable())?;
+    Ok(now..now.checked_add(ttl).ok_or_else(unavailable)?)
 }
 #[cfg(test)]
 mod tests {

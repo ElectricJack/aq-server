@@ -31,16 +31,20 @@ pub struct DeliveryIntegration {
 }
 impl DeliveryIntegration {
     pub(crate) fn new(
-        state: crate::AppState,
+        state: &crate::AppState,
         delivery: DeliveryService,
-        settings: IntegrationSettings,
-        reviews: Arc<crate::reviews::Service>,
-        namespace: &Namespace,
+        settings: &IntegrationSettings,
+        config: &crate::playbooks::config::Loaded,
     ) -> Self {
+        let namespace = &config.namespace;
+        let reviews = Arc::new(crate::reviews::Service::new(
+            state.clone(),
+            config.keys.clone(),
+        ));
         Self {
-            state,
+            state: state.clone(),
             delivery,
-            settings,
+            settings: settings.clone(),
             reviews,
             workspace: namespace.workspace_id,
             project: namespace.project_id,
@@ -74,7 +78,7 @@ impl Integration for DeliveryIntegration {
         let Some(publication) = b.publication else {
             return Ok(None);
         };
-        if !b.enabled || b.project_id != project || b.graph_workspace_id != workspace {
+        if !b.enabled || (b.project_id, b.graph_workspace_id) != (project, workspace) {
             return Ok(None);
         }
         Ok(Some(IntegrationBinding {

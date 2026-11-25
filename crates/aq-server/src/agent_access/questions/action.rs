@@ -48,10 +48,8 @@ fn revision(value: &str) -> Option<u64> {
 fn decision(request: &ActionRequest, p: &QuestionAnswer) -> Result<(Uuid, u64), ApiError> {
     let id = existing::subject(request, "decision", "decision", &p.expected_revision)?;
     let revision = revision(&p.expected_revision).ok_or_else(ApiError::invalid)?;
-    if request.operation_id != p.operation_id
-        || p.answer.trim().is_empty()
-        || p.answer.len() > MAX_ANSWER_BYTES
-    {
+    let valid_text = !p.answer.trim().is_empty() && p.answer.len() <= MAX_ANSWER_BYTES;
+    if request.operation_id != p.operation_id || !valid_text {
         return Err(ApiError::invalid());
     }
     Ok((id, revision))
@@ -110,10 +108,13 @@ impl ActionKind for AnswerQuestion {
         if !matches!(scope, Scope::Project { .. }) {
             return Err(ApiError::invalid());
         }
-        if let Some(op) = operation
-            && (op.subject_refs.len() != 1 || op.subject_refs[0].entity_type != "decision")
-        {
-            return Err(ApiError::invalid());
+        if let Some(op) = operation {
+            let [subject] = op.subject_refs.as_slice() else {
+                return Err(ApiError::invalid());
+            };
+            if subject.entity_type != "decision" {
+                return Err(ApiError::invalid());
+            }
         }
         Ok(())
     }
@@ -149,7 +150,14 @@ impl ActionKind for AnswerQuestion {
         let Ok((id, expected)) = decision(request, &p) else {
             return Outcome::unknown();
         };
-        match answer(state, user.id, id, expected, p.operation_id, &p.answer).await {
+        match answer(
+            state,
+            user.id,
+            super::DecisionRevision::new(id, expected),
+            super::Submission::new(p.operation_id, &p.answer),
+        )
+        .await
+        {
             Ok(response) => confirmed(&response),
             Err(error) => match error.0 {
                 "id_conflict" | "stale_revision" => existing::disposition(Disposition::Conflict),

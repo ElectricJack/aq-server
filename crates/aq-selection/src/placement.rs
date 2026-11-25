@@ -190,23 +190,8 @@ fn check_parts(
     cli_version: &str,
     environment: &ArtifactRef,
 ) -> CandidateResult {
-    if let Some(ceiling) = placement.ceiling {
-        return Err((CandidateState::Unavailable, ceiling.reason()));
-    }
-    if placement.preferred_peer.is_some() {
-        return Err((
-            CandidateState::Unavailable,
-            "placement_preferred_backend_available",
-        ));
-    }
+    check_availability(placement)?;
     let unsupported = |reason| Err((CandidateState::Unsupported, reason));
-    if placement
-        .required_capabilities
-        .iter()
-        .any(|c| !placement.capabilities.contains(c))
-    {
-        return unsupported("required_backend_capability_unsupported");
-    }
     let key = profile_key(environment);
     let Some(resolved) = placement
         .environment_templates
@@ -237,6 +222,27 @@ fn check_parts(
         .any(|h| h.harness == harness && h.version == cli_version)
     {
         return unsupported("template_missing_selected_harness_version");
+    }
+    Ok(())
+}
+
+fn check_availability(placement: &Placement) -> CandidateResult {
+    if let Some(ceiling) = placement.ceiling {
+        return Err((CandidateState::Unavailable, ceiling.reason()));
+    }
+    if placement.preferred_peer.is_some() {
+        return Err((
+            CandidateState::Unavailable,
+            "placement_preferred_backend_available",
+        ));
+    }
+    let unsupported = |reason| Err((CandidateState::Unsupported, reason));
+    if placement
+        .required_capabilities
+        .iter()
+        .any(|c| !placement.capabilities.contains(c))
+    {
+        return unsupported("required_backend_capability_unsupported");
     }
     Ok(())
 }

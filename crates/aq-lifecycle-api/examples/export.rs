@@ -1,6 +1,9 @@
 mod support;
 use aq_lifecycle_api::*;
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 fn main() {
     let check = env::args().any(|x| x == "--check");
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -17,17 +20,21 @@ fn main() {
             paths.push(root.join("protocol/lifecycle-api/v1").join(name));
         }
         for path in paths {
-            if check {
-                assert_eq!(
-                    fs::read_to_string(&path).unwrap(),
-                    content,
-                    "{} drift",
-                    path.display()
-                );
-            } else {
-                fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(path, &content).unwrap();
-            }
+            export(&path, &content, check);
         }
+    }
+}
+
+fn export(path: &Path, content: &str, check: bool) {
+    if check {
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            content,
+            "{} drift",
+            path.display()
+        );
+    } else {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
     }
 }

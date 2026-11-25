@@ -1,5 +1,5 @@
 //! First-offer ancestry for the exact revision retained from the followed ref.
-use super::{MainSync, Scope, cached, limits, refresh};
+use super::{MainFollower, MainSync, Scope, limits};
 use crate::{
     DeliveryError, OperationContext, Result,
     commands::GitTarget,
@@ -18,29 +18,25 @@ use std::{
 use tokio::time::Instant;
 use uuid::Uuid;
 
-/// Select a retained head that includes every same-repository delivery from
-/// the task's completed direct Graph blockers. An inconclusive cached read
-/// can mean the merge object has yet to be fetched, so refresh in that case too.
-pub async fn dependent_current(
-    pool: &PgPool,
-    socket: &Path,
-    scope: &Scope,
-    task: Uuid,
-    context: &Value,
-    now_ms: impl Fn() -> u64,
-) -> std::result::Result<MainSync, Wait> {
-    let required = OfferAncestry::load(pool, scope.into(), task, context).await?;
-    let limits = limits(pool).await.map_err(sync_failed)?;
-    if let Some(head) = cached(pool, scope, &limits, &now_ms)
-        .await
-        .map_err(sync_failed)?
-        && required.check(socket, &head.head).await.is_ok()
-    {
-        return Ok(head);
+impl<F: Fn() -> u64> MainFollower<'_, F> {
+    /// Select a retained head that includes every same-repository delivery from
+    /// the task's completed direct Graph blockers. An inconclusive cached read
+    /// can mean the merge object has yet to be fetched, so refresh in that case too.
+    pub async fn dependent_current(
+        &self,
+        scope: &Scope,
+        task: Uuid,
+        context: &Value,
+    ) -> std::result::Result<MainSync, Wait> {
+        let required = OfferAncestry::load(self.pool, scope.into(), task, context).await?;
+        let limits = limits(self.pool).await.map_err(sync_failed)?;
+        if let Some(head) = self.cached(scope, &limits).await.map_err(sync_failed)?
+            && required.check(self.socket, &head.head).await.is_ok()
+        {
+            return Ok(head);
+        }
+        required.retain_and_check(self, scope, &limits).await
     }
-    required
-        .retain_and_check(pool, socket, scope, &limits, now_ms)
-        .await
 }
 
 impl From<&Scope> for GitTarget {
@@ -103,20 +99,18 @@ impl OfferAncestry {
     /// source can refresh after a failed proof. An immutable source can wait.
     pub async fn verify_or_refresh(
         &self,
-        pool: &PgPool,
-        socket: &Path,
+        follower: &MainFollower<'_, impl Fn() -> u64>,
         base: &str,
         moving: Option<&Scope>,
-        now_ms: impl Fn() -> u64,
     ) -> std::result::Result<Option<MainSync>, Wait> {
-        match self.check(socket, base).await {
+        match self.check(follower.socket, base).await {
             Ok(()) => Ok(None),
             Err(wait) => {
                 let Some(scope) = moving else {
                     return Err(wait);
                 };
-                let limits = limits(pool).await.map_err(sync_failed)?;
-                self.retain_and_check(pool, socket, scope, &limits, now_ms)
+                let limits = limits(follower.pool).await.map_err(sync_failed)?;
+                self.retain_and_check(follower, scope, &limits)
                     .await
                     .map(Some)
             }
@@ -125,19 +119,15 @@ impl OfferAncestry {
 
     async fn retain_and_check(
         &self,
-        pool: &PgPool,
-        socket: &Path,
+        follower: &MainFollower<'_, impl Fn() -> u64>,
         scope: &Scope,
         limits: &super::DeliveryLimits,
-        now_ms: impl Fn() -> u64,
     ) -> std::result::Result<MainSync, Wait> {
         if GitTarget::from(scope) != self.repository {
             return Err(Wait::MainSyncUnavailable);
         }
-        let head = refresh(pool, socket, scope, limits, now_ms)
-            .await
-            .map_err(sync_failed)?;
-        self.check(socket, &head.head).await?;
+        let head = follower.refresh(scope, limits).await.map_err(sync_failed)?;
+        self.check(follower.socket, &head.head).await?;
         Ok(head)
     }
 
@@ -200,12 +190,16 @@ fn completed_blockers(task: Uuid, context: &Value) -> std::result::Result<Vec<Uu
             .ok_or(Wait::GraphContextIncomplete)?;
         let node = nodes.get(source).ok_or(Wait::GraphContextIncomplete)?;
         let prerequisite = Uuid::parse_str(source).map_err(|_| Wait::GraphContextIncomplete)?;
-        if node["kind"] != "task" || node["task_state"] != "completed" || node["deleted"] != false {
+        if !completed_task(node) {
             return Err(Wait::PrerequisiteIncomplete { prerequisite });
         }
         blockers.insert(prerequisite);
     }
     Ok(blockers.into_iter().collect())
+}
+
+fn completed_task(node: &Value) -> bool {
+    node["kind"] == "task" && node["task_state"] == "completed" && node["deleted"] == false
 }
 
 async fn check(
@@ -219,8 +213,10 @@ async fn check(
         let result = contains(
             socket,
             repository,
-            sha,
-            base,
+            AncestryPair {
+                ancestor: sha,
+                descendant: base,
+            },
             deadline.saturating_duration_since(Instant::now()),
         )
         .await;
@@ -257,14 +253,18 @@ impl WireResult for Ancestry {
     }
 }
 
+struct AncestryPair<'a> {
+    ancestor: &'a str,
+    descendant: &'a str,
+}
+
 async fn contains(
     socket: &Path,
     repository: &GitTarget,
-    ancestor: &str,
-    descendant: &str,
+    pair: AncestryPair<'_>,
     wait: Duration,
 ) -> Result<bool> {
-    if !hex40(ancestor) || wait.as_millis() == 0 {
+    if !hex40(pair.ancestor) || wait.as_millis() == 0 {
         return Err(DeliveryError::Protocol);
     }
     let context = OperationContext {
@@ -273,8 +273,8 @@ async fn contains(
         binding_generation: repository.binding_generation,
     };
     let params = json!({
-        "ancestor": {"algorithm": "sha1", "hex": ancestor},
-        "descendant": {"algorithm": "sha1", "hex": descendant},
+        "ancestor": {"algorithm": "sha1", "hex": pair.ancestor},
+        "descendant": {"algorithm": "sha1", "hex": pair.descendant},
     });
     // The v1 aq-git repository ancestry operation is spelled "contains".
     let mut request = serde_json::to_vec(&json!({

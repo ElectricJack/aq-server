@@ -94,93 +94,114 @@ fn task_id(task: &str) -> Result<Option<Uuid>> {
         .map(Some)
         .map_err(|_| invalid("A task is `self` or a task ID"))
 }
-pub fn task_invocation(mode: Mode, c: &Task) -> Result<Option<Invocation>> {
-    Ok(Some(match c {
-        Task::Show { task, project } => {
-            let id = task_id(task)?;
-            let mut p = Map::new();
-            match mode {
-                // An omitted task is the attempt's own task.
-                Mode::Channel => put(&mut p, "task_id", id),
-                Mode::Owner => {
-                    let id = id.ok_or_else(|| invalid("Owner mode needs a task ID, not `self`"))?;
-                    p.insert("project_id".into(), json!(need(*project, "--project")?));
-                    p.insert("task_id".into(), json!(id));
-                }
-            }
-            if mode == Mode::Channel {
-                put(&mut p, "project_id", *project);
-            }
-            Invocation::read("task.show", p)
+pub fn task_invocation(mode: Mode, command: &Task) -> Result<Option<Invocation>> {
+    match command {
+        Task::Show { task, project } => show_task(mode, task, *project).map(Some),
+        Task::Create(task) => task.invocation(mode).map(Some),
+        Task::Other(_) => Ok(None),
+    }
+}
+fn show_task(mode: Mode, task: &str, project: Option<Uuid>) -> Result<Invocation> {
+    let id = task_id(task)?;
+    let mut p = Map::new();
+    match mode {
+        // An omitted task is the attempt's own task.
+        Mode::Channel => put(&mut p, "task_id", id),
+        Mode::Owner => {
+            let id = id.ok_or_else(|| invalid("Owner mode needs a task ID, not `self`"))?;
+            p.insert("project_id".into(), json!(need(project, "--project")?));
+            p.insert("task_id".into(), json!(id));
         }
-        Task::Create(a) => {
-            let body = a.body.as_deref().map(input::text).transpose()?;
-            let parent = match a.parent.as_deref() {
-                None => None,
-                Some("self") if mode == Mode::Channel => Some(json!("self")),
-                Some("self") => {
-                    return Err(invalid("`--parent self` is only meaningful in a sandbox"));
-                }
-                Some(id) => Some(json!(
-                    id.parse::<Uuid>()
-                        .map_err(|_| invalid("--parent is `self` or a task ID"))?
-                )),
-            };
-            let state = if a.draft { "draft" } else { "active" };
-            match mode {
-                Mode::Channel => {
-                    if a.project.is_some() {
-                        return Err(invalid(
-                            "In a sandbox a task is created in the attempt's project; drop --project",
-                        ));
-                    }
-                    let mut p = Map::new();
-                    p.insert("title".into(), json!(a.title));
-                    put(&mut p, "body", body);
-                    put(
-                        &mut p,
-                        "acceptance_criteria",
-                        a.acceptance_criteria.as_ref(),
-                    );
-                    if !a.labels.is_empty() {
-                        p.insert("labels".into(), json!(a.labels));
-                    }
-                    put(&mut p, "parent_id", parent);
-                    if a.draft {
-                        p.insert("task_state".into(), json!(state));
-                    }
-                    put(&mut p, "priority", a.priority);
-                    put(&mut p, "task_type", a.task_type.as_ref());
-                    put(&mut p, "role", a.role.as_ref());
-                    put(
-                        &mut p,
-                        "expected_project_revision",
-                        a.expected_project_revision.as_ref(),
-                    );
-                    Invocation::mutation("task.create", p, true)
-                }
-                Mode::Owner => {
-                    let project = need(a.project, "--project")?;
-                    let revision = a.expected_project_revision.as_deref().ok_or_else(|| {
-                        invalid("--expected-project-revision is required in owner mode")
-                    })?;
-                    let mut p = obj(json!({"expected_project_revision":revision,"title":a.title,
-                        "body":body.unwrap_or_default(),"acceptance_criteria":a.acceptance_criteria.clone().unwrap_or_default(),
-                        "labels":a.labels,"task_state":state}));
-                    put(&mut p, "parent_id", parent);
-                    put(&mut p, "priority", a.priority);
-                    put(&mut p, "task_type", a.task_type.as_ref());
-                    put(&mut p, "role", a.role.as_ref());
-                    Invocation::mutation("task.create", p, true).subject(
-                        "project",
-                        project,
-                        Some(revision),
-                    )
-                }
+    }
+    if mode == Mode::Channel {
+        put(&mut p, "project_id", project);
+    }
+    Ok(Invocation::read("task.show", p))
+}
+impl TaskCreate {
+    fn invocation(&self, mode: Mode) -> Result<Invocation> {
+        let body = self.body.as_deref().map(input::text).transpose()?;
+        let parent = match self.parent.as_deref() {
+            None => None,
+            Some("self") if mode == Mode::Channel => Some(json!("self")),
+            Some("self") => {
+                return Err(invalid("`--parent self` is only meaningful in a sandbox"));
             }
+            Some(id) => Some(json!(
+                id.parse::<Uuid>()
+                    .map_err(|_| invalid("--parent is `self` or a task ID"))?
+            )),
+        };
+        let state = if self.draft { "draft" } else { "active" };
+        match mode {
+            Mode::Channel => self.channel(body, parent, state),
+            Mode::Owner => self.owner(body, parent, state),
         }
-        Task::Other(_) => return Ok(None),
-    }))
+    }
+    fn channel(
+        &self,
+        body: Option<String>,
+        parent: Option<Value>,
+        state: &str,
+    ) -> Result<Invocation> {
+        if self.project.is_some() {
+            return Err(invalid(
+                "In a sandbox a task is created in the attempt's project; drop --project",
+            ));
+        }
+        let mut p = Map::new();
+        p.insert("title".into(), json!(self.title));
+        put(&mut p, "body", body);
+        put(
+            &mut p,
+            "acceptance_criteria",
+            self.acceptance_criteria.as_ref(),
+        );
+        if !self.labels.is_empty() {
+            p.insert("labels".into(), json!(self.labels));
+        }
+        put(&mut p, "parent_id", parent);
+        if self.draft {
+            p.insert("task_state".into(), json!(state));
+        }
+        put(&mut p, "priority", self.priority);
+        put(&mut p, "task_type", self.task_type.as_ref());
+        put(&mut p, "role", self.role.as_ref());
+        put(
+            &mut p,
+            "expected_project_revision",
+            self.expected_project_revision.as_ref(),
+        );
+        Ok(Invocation::mutation("task.create", p, true))
+    }
+    fn owner(
+        &self,
+        body: Option<String>,
+        parent: Option<Value>,
+        state: &str,
+    ) -> Result<Invocation> {
+        let project = need(self.project, "--project")?;
+        let revision = self
+            .expected_project_revision
+            .as_deref()
+            .ok_or_else(|| invalid("--expected-project-revision is required in owner mode"))?;
+        let mut p = obj(
+            json!({"expected_project_revision":revision,"title":self.title,
+                        "body":body.unwrap_or_default(),"acceptance_criteria":self.acceptance_criteria.clone().unwrap_or_default(),
+                        "labels":self.labels,"task_state":state}),
+        );
+        put(&mut p, "parent_id", parent);
+        put(&mut p, "priority", self.priority);
+        put(&mut p, "task_type", self.task_type.as_ref());
+        put(&mut p, "role", self.role.as_ref());
+        Ok(
+            Invocation::mutation("task.create", p, true).subject(
+                "project",
+                project,
+                Some(revision),
+            ),
+        )
+    }
 }
 pub async fn task(ctx: &Ctx, c: &Task) -> Result<Value> {
     match task_invocation(ctx.mode, c)? {
@@ -376,25 +397,29 @@ pub enum Comment {
 /// A revisioned comment edit or delete. In a sandbox the agent route takes
 /// the comment in `params` (an agent changes only its own comments); the
 /// owner's action takes it as the subject.
-fn comment_change(
-    name: &str,
-    mode: Mode,
-    mut p: Map<String, Value>,
-    comment: &Uuid,
-    revision: &str,
+struct CommentTarget<'a> {
+    id: &'a Uuid,
+    revision: &'a str,
     project: Option<Uuid>,
-) -> Result<Invocation> {
-    if mode == Mode::Channel {
-        if project.is_some() {
-            return Err(invalid(
-                "In a sandbox the comment is in the attempt's project; drop --project",
-            ));
+}
+impl CommentTarget<'_> {
+    fn change(&self, name: &str, mode: Mode, mut p: Map<String, Value>) -> Result<Invocation> {
+        if mode == Mode::Channel {
+            if self.project.is_some() {
+                return Err(invalid(
+                    "In a sandbox the comment is in the attempt's project; drop --project",
+                ));
+            }
+            p.insert("comment_id".into(), json!(self.id));
+            return Ok(Invocation::mutation(name, p, true));
         }
-        p.insert("comment_id".into(), json!(comment));
-        return Ok(Invocation::mutation(name, p, true));
+        p.insert("project_id".into(), json!(need(self.project, "--project")?));
+        Ok(Invocation::mutation(name, p, true).subject(
+            "task_comment",
+            self.id,
+            Some(self.revision),
+        ))
     }
-    p.insert("project_id".into(), json!(need(project, "--project")?));
-    Ok(Invocation::mutation(name, p, true).subject("task_comment", comment, Some(revision)))
 }
 pub fn comment_invocation(mode: Mode, c: &Comment) -> Result<Option<Invocation>> {
     Ok(Some(match c {
@@ -402,24 +427,7 @@ pub fn comment_invocation(mode: Mode, c: &Comment) -> Result<Option<Invocation>>
             body,
             task,
             project,
-        } => {
-            let body = input::text(body)?;
-            match mode {
-                Mode::Channel => {
-                    if task.is_some() || project.is_some() {
-                        return Err(invalid(
-                            "In a sandbox a comment goes on your own task; drop --task and --project",
-                        ));
-                    }
-                    Invocation::mutation("task.comment.add", obj(json!({"body":body})), true)
-                }
-                Mode::Owner => {
-                    let task = need(*task, "--task")?;
-                    let p = obj(json!({"project_id":need(*project, "--project")?,"body":body}));
-                    Invocation::mutation("task.comment.add", p, true).subject("task", task, None)
-                }
-            }
-        }
+        } => add_comment(mode, body, *task, *project)?,
         Comment::List {
             task,
             project,
@@ -449,7 +457,12 @@ pub fn comment_invocation(mode: Mode, c: &Comment) -> Result<Option<Invocation>>
             project,
         } => {
             let p = obj(json!({"expected_revision":revision,"body":input::text(body)?}));
-            comment_change("task.comment.edit", mode, p, comment, revision, *project)?
+            CommentTarget {
+                id: comment,
+                revision,
+                project: *project,
+            }
+            .change("task.comment.edit", mode, p)?
         }
         Comment::Delete {
             comment,
@@ -457,10 +470,38 @@ pub fn comment_invocation(mode: Mode, c: &Comment) -> Result<Option<Invocation>>
             project,
         } => {
             let p = obj(json!({"expected_revision":revision}));
-            comment_change("task.comment.delete", mode, p, comment, revision, *project)?
+            CommentTarget {
+                id: comment,
+                revision,
+                project: *project,
+            }
+            .change("task.comment.delete", mode, p)?
         }
         Comment::Other(_) => return Ok(None),
     }))
+}
+fn add_comment(
+    mode: Mode,
+    body: &str,
+    task: Option<Uuid>,
+    project: Option<Uuid>,
+) -> Result<Invocation> {
+    let body = input::text(body)?;
+    Ok(match mode {
+        Mode::Channel => {
+            if task.is_some() || project.is_some() {
+                return Err(invalid(
+                    "In a sandbox a comment goes on your own task; drop --task and --project",
+                ));
+            }
+            Invocation::mutation("task.comment.add", obj(json!({"body":body})), true)
+        }
+        Mode::Owner => {
+            let task = need(task, "--task")?;
+            let p = obj(json!({"project_id":need(project, "--project")?,"body":body}));
+            Invocation::mutation("task.comment.add", p, true).subject("task", task, None)
+        }
+    })
 }
 pub async fn comment(ctx: &Ctx, c: &Comment) -> Result<Value> {
     match comment_invocation(ctx.mode, c)? {

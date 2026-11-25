@@ -167,8 +167,7 @@ struct Based {
 async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Query(Based { base_version }): Query<Based>,
+    (Path(id), Query(Based { base_version })): (Path<Uuid>, Query<Based>),
     body: Bytes,
 ) -> Result<Response, AppError> {
     let bytes = Arc::new(Zeroizing::new(body.to_vec()));
@@ -200,8 +199,7 @@ async fn refresh(
     } else if !login_refresh::refresh_of_head(
         held.registry.clone(),
         held.index,
-        &held.lineage,
-        &dir,
+        held.lineage.head_source(&dir),
         bytes.clone(),
     )
     .await?
@@ -213,10 +211,12 @@ async fn refresh(
             &mut held.tx,
             &dir,
             &held.lineage,
-            Origin::Refresh,
-            None,
-            bytes,
-            now,
+            aq_login_store::NewRevision {
+                origin: Origin::Refresh,
+                lease_id: None,
+                bytes,
+                now_ms: now,
+            },
         )
         .await?;
         held.tx.commit().await.map_err(db)?;

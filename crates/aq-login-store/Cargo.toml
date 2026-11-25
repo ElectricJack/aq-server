@@ -6,6 +6,7 @@ publish.workspace = true
 description = "Versioned subscription-login store (moved out of the aq-server lib)"
 
 [dependencies]
+anyhow.workspace = true
 aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 aq-intelligence-config = { path = "../aq-intelligence-config", version = "=0.1.0" }
 aq-selection = { path = "../aq-selection", version = "=0.1.5" }

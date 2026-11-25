@@ -37,20 +37,7 @@ fn main() {
         std::process::exit(2);
     }
     let directory = Path::new(directory);
-    let mut documents = Vec::new();
-    for (name, kind) in [
-        ("roles", Kind::Role),
-        ("intelligence", Kind::Intelligence),
-        ("execution", Kind::Execution),
-    ] {
-        match read(directory, name, kind) {
-            Ok(read) => documents.extend(read),
-            Err(error) => {
-                eprintln!("aq-profile: {}: {error}", directory.join(name).display());
-                std::process::exit(2);
-            }
-        }
-    }
+    let documents = read_documents(directory);
     match compile(
         &documents,
         &SelectionDefaults::default(),
@@ -68,4 +55,22 @@ fn main() {
             std::process::exit(3);
         }
     }
+}
+
+fn read_documents(directory: &Path) -> Vec<SourceDocument> {
+    let mut documents = Vec::new();
+    for (name, kind) in [
+        ("roles", Kind::Role),
+        ("intelligence", Kind::Intelligence),
+        ("execution", Kind::Execution),
+    ] {
+        match read(directory, name, kind) {
+            Ok(read) => documents.extend(read),
+            Err(error) => {
+                eprintln!("aq-profile: {}: {error}", directory.join(name).display());
+                std::process::exit(2);
+            }
+        }
+    }
+    documents
 }

@@ -4,10 +4,11 @@
 //! puts the previous playbook back. All of it can be repeated after a
 //! restart: [`tick`] finds what is unfinished.
 use crate::{
-    Ended, Error, Finished, Result, Run, Server, SourceKind, SourceRecord, active, facts_digest,
-    finish, in_flight, now_ms, record_digest, request, requested, running, running_for_task, runs,
-    save, source_digest, store, stranded, task_for,
+    Ended, Error, Finished, Result, Run, Server, SourceKind, SourceRecord, facts_digest, finish,
+    in_flight, now_ms, record_digest, request, requested, running, running_for_task, runs,
+    source_digest, store, stranded, task_for,
 };
+mod saving;
 use aq_internal_work::{Outcome, Reason, store as internal};
 use aq_playbooks_model::Artifact;
 use aq_playbooks_simulation::cases::{Outcome as Authored, quote};
@@ -21,6 +22,7 @@ pub const FACTS_CHANGED: &str = "Settings changed while the playbook was being w
 const DOCUMENT_CHANGED: &str =
     "The document changed while the playbook was being written. Authoring has started again.";
 /// What the owner reads beside an `unable` that blames a host file.
+const UNREADABLE: &str = "The agent's result could not be read.";
 const HOST_FAULT: &str = "This is a fault in what the server gave the agent, not in your document.";
 
 fn not_found(source: &str) -> Error {
@@ -125,41 +127,48 @@ pub async fn submit_run<S: Server>(s: &S, id: i64) -> Result<()> {
             }
             continue;
         }
-        let previous = previous(pool, &run.source_id).await?;
-        let catalog = s.catalog(&now.record)?;
-        let files = request::workspace_files(
-            &now.record,
-            &now.markdown,
-            &catalog,
-            &now.facts,
-            &run.facts_digest,
-            previous.as_ref(),
-        );
-        let files = match files {
-            Ok(files) => files,
-            Err(e) => {
-                tracing::warn!(source = %run.source_id, error = %e, "authoring workspace refused");
-                let owner = "The server could not prepare the agent's workspace for this source.";
-                fail(pool, id, Ended::Failed, owner).await?;
-                return Ok(());
-            }
-        };
-        let Some(task) = task_for(pool, id).await? else {
-            return Ok(());
-        };
-        let request = request::request(&now.record, files, &s.config());
-        return match s.submit(task, &request).await {
-            // Not a passing fault: the request is refused as it is, or there
-            // is no internal work here to take it.
-            Err(Error::Invalid(why) | Error::Conflict(why)) => {
-                tracing::warn!(source = %run.source_id, %why, "authoring request refused");
-                let owner = format!("The agent's work could not be submitted: {why}.");
-                fail(pool, id, Ended::Failed, &owner).await.map(drop)
-            }
-            other => other,
-        };
+        return submit_workspace(s, &run, now).await;
     }
     Ok(())
+}
+
+async fn submit_workspace<S: Server>(s: &S, run: &Run, now: Now) -> Result<()> {
+    let pool: &PgPool = s.as_ref();
+    let previous = previous(pool, &run.source_id).await?;
+    let catalog = s.catalog(&now.record)?;
+    let files = request::workspace_files(
+        &now.record,
+        request::WorkspaceSource {
+            markdown: &now.markdown,
+            facts: &now.facts,
+            facts_version: &run.facts_digest,
+        },
+        &catalog,
+        previous.as_ref(),
+    );
+    let files = match files {
+        Ok(files) => files,
+        Err(e) => {
+            tracing::warn!(source = %run.source_id, error = %e, "authoring workspace refused");
+            let owner = "The server could not prepare the agent's workspace for this source.";
+            fail(pool, run.id, Ended::Failed, owner).await?;
+            return Ok(());
+        }
+    };
+    let Some(task) = task_for(pool, run.id).await? else {
+        return Ok(());
+    };
+    let request = request::request(&now.record, files, &s.config());
+    match s.submit(task, &request).await {
+        // Not a passing fault: the request is refused as it is, or there
+        // is no internal work here to take it.
+        Err(Error::Invalid(why) | Error::Conflict(why)) => {
+            tracing::warn!(source = %run.source_id, %why, "authoring request refused");
+            let owner = format!("The agent's work could not be submitted: {why}.");
+            fail(pool, run.id, Ended::Failed, &owner).await.map(drop)
+        }
+        other => other,
+    }
 }
 
 fn failure_words(reason: Reason) -> &'static str {
@@ -190,7 +199,6 @@ pub async fn completed<S: Server>(s: &S, internal_task: Uuid, outcome: &Outcome)
         }
         Outcome::Answered { answer, .. } => answer,
     };
-    let unreadable = "The agent's result could not be read.";
     let authored = serde_json::from_value::<Authored>(answer.clone())
         .map_err(|e| e.to_string())
         .and_then(|authored| authored.check().map(|()| authored));
@@ -198,7 +206,7 @@ pub async fn completed<S: Server>(s: &S, internal_task: Uuid, outcome: &Outcome)
         Ok(authored) => authored,
         Err(why) => {
             tracing::warn!(source = %run.source_id, %why, "authoring outcome refused");
-            fail(pool, run.id, Ended::Failed, unreadable).await?;
+            fail(pool, run.id, Ended::Failed, UNREADABLE).await?;
             return prune(s, &run.source_id).await;
         }
     };
@@ -207,6 +215,10 @@ pub async fn completed<S: Server>(s: &S, internal_task: Uuid, outcome: &Outcome)
         fail(pool, run.id, Ended::Failed, DOCUMENT_CHANGED).await?;
         return author(s, &run.source_id).await.map(drop);
     }
+    record_outcome(s, &run, now, authored).await
+}
+
+async fn record_outcome<S: Server>(s: &S, run: &Run, now: Now, authored: Authored) -> Result<()> {
     let finished = match authored {
         Authored::Question {
             question,
@@ -224,7 +236,7 @@ pub async fn completed<S: Server>(s: &S, internal_task: Uuid, outcome: &Outcome)
                 },
                 Err(why) => {
                     tracing::warn!(source = %run.source_id, %why, "question quotes no sentence");
-                    refusal(Ended::Failed, unreadable)
+                    refusal(Ended::Failed, UNREADABLE)
                 }
             }
         }
@@ -241,7 +253,7 @@ pub async fn completed<S: Server>(s: &S, internal_task: Uuid, outcome: &Outcome)
             },
             Err(why) => {
                 tracing::warn!(source = %run.source_id, %why, "unable quotes no sentence");
-                refusal(Ended::Failed, unreadable)
+                refusal(Ended::Failed, UNREADABLE)
             }
         },
         Authored::Unable { reason, file, .. } => {
@@ -257,9 +269,21 @@ pub async fn completed<S: Server>(s: &S, internal_task: Uuid, outcome: &Outcome)
             cases,
             artifact,
             ..
-        } => return saved(s, &run, now, draft, cases, &artifact).await,
+        } => {
+            return saving::saved(
+                s,
+                run,
+                now,
+                saving::Claim {
+                    draft,
+                    cases,
+                    artifact,
+                },
+            )
+            .await;
+        }
     };
-    finish(pool, run.id, &finished).await?;
+    finish(s.as_ref(), run.id, &finished).await?;
     prune(s, &run.source_id).await
 }
 
@@ -269,126 +293,6 @@ fn refusal(status: Ended, owner: &str) -> Finished {
         refusal: Some(owner.to_owned()),
         ..Finished::default()
     }
-}
-
-/// How many of the source's newest runs, one after another, were refused
-/// because the facts changed.
-async fn facts_restarts(pool: &PgPool, source: &str) -> Result<usize> {
-    let refusals: Vec<Option<String>> = sqlx::query_scalar(
-        "SELECT CASE WHEN status='refused' THEN refusal END FROM playbook_authoring_runs
-         WHERE source_id=$1 AND status<>'superseded' ORDER BY id DESC LIMIT 64",
-    )
-    .bind(source)
-    .fetch_all(pool)
-    .await?;
-    let changed = |r: &&Option<String>| r.as_deref() == Some(FACTS_CHANGED);
-    Ok(refusals.iter().take_while(changed).count())
-}
-
-/// A save: checked by the server, installed, recorded as active, activated.
-async fn saved<S: Server>(
-    s: &S,
-    run: &Run,
-    now: Now,
-    draft: Value,
-    cases: Vec<aq_playbooks_simulation::cases::Case>,
-    claimed: &str,
-) -> Result<()> {
-    let pool: &PgPool = s.as_ref();
-    let (source, config) = (run.source_id.as_str(), s.config());
-    if !now.facts_are(run) {
-        // Review focus 3: nothing changes, and authoring starts again.
-        fail(pool, run.id, Ended::Refused, FACTS_CHANGED).await?;
-        if facts_restarts(pool, source).await? <= config.facts_restarts as usize {
-            author(s, source).await?;
-        }
-        return Ok(());
-    }
-    let cannot_deploy =
-        "The playbook cannot be put into effect because playbooks are not running on this server.";
-    if let Err(e) = s.ensure_grant(source, &now.record.capabilities).await {
-        tracing::warn!(source, error = %e, "no grant for an authored playbook");
-        fail(pool, run.id, Ended::Refused, cannot_deploy).await?;
-        return Ok(());
-    }
-    let in_effect = active(pool, source).await?;
-    let previous: Option<Artifact> =
-        (in_effect.as_ref()).and_then(|a| serde_json::from_value(a.artifact.clone()).ok());
-    let case_files = serde_json::to_value(&cases).map_err(|_| Error::Corrupt)?;
-    let catalog = s.catalog(&now.record)?;
-    let inputs = save::Inputs {
-        grant_capabilities: now.record.capabilities.clone(),
-        record: now.record,
-        markdown: now.markdown,
-        catalog,
-        facts: now.facts,
-        facts_version: run.facts_digest.clone(),
-        previous,
-    };
-    let markdown = inputs.markdown.clone();
-    let check_config = config.clone();
-    let check = tokio::task::spawn_blocking(move || {
-        save::check_saved(&draft, &cases, &inputs, &check_config)
-    });
-    let deadline = Duration::from_millis(config.check_deadline_ms);
-    let checked = match tokio::time::timeout(deadline, check).await {
-        Ok(Ok(checked)) => checked,
-        Ok(Err(_)) | Err(_) => Err(save::Refusal {
-            owner: "The server's check of the saved playbook did not finish in time.".into(),
-            detail: "check deadline or panic".into(),
-        }),
-    };
-    let checked = match checked {
-        Ok(checked) => checked,
-        Err(refused) => {
-            tracing::warn!(source, detail = %refused.detail, "authored save refused");
-            fail(pool, run.id, Ended::Refused, &refused.owner).await?;
-            return prune(s, source).await;
-        }
-    };
-    let digest = checked.artifact.digest.clone();
-    if digest != claimed {
-        // The agent's digest is a claim; the server's artifact is what counts.
-        tracing::warn!(
-            source,
-            "the agent's artifact digest differs from the server's"
-        );
-    }
-    if let Err(e) = s.install(&checked.artifact).await {
-        tracing::warn!(source, error = %e, "authored artifact not installed");
-        let owner = "The playbook passed its checks but could not be installed.";
-        fail(pool, run.id, Ended::Refused, owner).await?;
-        return prune(s, source).await;
-    }
-    // Saving the same playbook again keeps what a rollback would bring back.
-    let previous_digest = match &in_effect {
-        Some(a) if a.artifact_digest == digest => a.previous_digest.clone(),
-        Some(a) => Some(a.artifact_digest.clone()),
-        None => None,
-    };
-    let finished = Finished {
-        status: Ended::Saved,
-        activate: true,
-        artifact_digest: Some(digest.clone()),
-        artifact: Some(serde_json::to_value(&checked.artifact).map_err(|_| Error::Corrupt)?),
-        previous_digest,
-        comparison: checked.comparison,
-        cases: Some(checked.cases),
-        markdown: Some(markdown),
-        case_files: Some(case_files),
-        ..Finished::default()
-    };
-    // Review focus 2: a superseded run is not recorded as saved, so its
-    // artifact is never activated.
-    if !finish(pool, run.id, &finished).await? {
-        return Ok(());
-    }
-    // The run is active but not yet deployed: when this fails, every pass of
-    // `tick` tries again until the engine has the artifact on the binding.
-    if let Err(e) = deploy(s, run.id).await {
-        tracing::error!(source, error = %e, "authored artifact recorded active but not activated yet");
-    }
-    prune(s, source).await
 }
 
 async fn prune<S: Server>(s: &S, source: &str) -> Result<()> {
@@ -535,19 +439,23 @@ pub async fn tick<S: Server>(s: &S) -> Result<usize> {
             Some(task) => internal::get(pool, task).await.map_err(internal_error)?,
             None => None,
         };
-        let stepped = match (run.internal_task_id, task) {
-            (Some(id), Some(row)) => match row.outcome() {
-                Some(outcome) => completed(s, id, &outcome).await,
-                None => Ok(()),
-            },
-            _ => submit_run(s, run.id).await,
-        };
+        let stepped = advance(s, run, task).await;
         if let Err(e) = stepped {
             tracing::warn!(source = %run.source_id, run = run.id, error = %e, "authoring run not advanced");
         }
     }
     deploy_pending(s).await?;
     Ok(runs.len())
+}
+
+async fn advance<S: Server>(s: &S, run: &Run, task: Option<internal::Row>) -> Result<()> {
+    match (run.internal_task_id, task) {
+        (Some(id), Some(row)) => match row.outcome() {
+            Some(outcome) => completed(s, id, &outcome).await,
+            None => Ok(()),
+        },
+        _ => submit_run(s, run.id).await,
+    }
 }
 
 /// Activates every active run the engine has not acknowledged yet: a save

@@ -186,34 +186,52 @@ impl ViewStore<'_> {
         let rows=sqlx::query("SELECT request_id,status,held_reason,created_at_ms,receipt,engine_key,request_digest,expected_activation_revision FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND ($3::uuid IS NULL OR request_id>$3) ORDER BY request_id LIMIT $4")
             .bind(self.0.namespace_id).bind(self.0.generation).bind(after).bind((limit+1) as i64).fetch_all(&mut *db).await?;
         let more = rows.len() > limit;
-        let mut items = Vec::with_capacity(limit);
-        for row in rows.into_iter().take(limit) {
-            let receipt: Option<serde_json::Value> = row.get("receipt");
-            let receipt = receipt
-                .map(serde_json::from_value::<aq_playbook_host::runner::KeyedAdmissionReceipt>)
-                .transpose()
-                .map_err(|_| Error::Unknown)?;
-            if let Some(r) = &receipt
-                && (r.key != row.get::<String, _>("engine_key")
-                    || r.request_digest != row.get::<String, _>("request_digest")
-                    || i64::try_from(r.activation_revision).ok()
-                        != Some(row.get::<i64, _>("expected_activation_revision")))
-            {
-                return Err(Error::Conflict);
-            }
-            items.push(AdmissionView {
-                request_id: row.get("request_id"),
-                status: row.get("status"),
-                created_at_ms: row.get("created_at_ms"),
-                run_id: receipt.as_ref().map(|r| r.run_id.clone()),
-                activation_revision: receipt.as_ref().map(|r| r.activation_revision.to_string()),
-                catalog_revision: receipt.as_ref().map(|r| r.catalog_revision.to_string()),
-                held_reason: row.get("held_reason"),
-            });
-        }
+        let items = rows
+            .into_iter()
+            .take(limit)
+            .map(admission_view)
+            .collect::<Result<Vec<_>>>()?;
         let next_cursor = more
             .then(|| items.last().map(|r| r.request_id.to_string()))
             .flatten();
         Ok((items, next_cursor))
     }
+}
+
+fn checked_receipt(
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<aq_playbook_host::runner::KeyedAdmissionReceipt>> {
+    let receipt: Option<serde_json::Value> = row.get("receipt");
+    let receipt = receipt
+        .map(serde_json::from_value::<aq_playbook_host::runner::KeyedAdmissionReceipt>)
+        .transpose()
+        .map_err(|_| Error::Unknown)?;
+    if let Some(r) = &receipt {
+        let key: &str = row.get("engine_key");
+        let digest: &str = row.get("request_digest");
+        let revision: i64 = row.get("expected_activation_revision");
+        let retained = (key, digest, Some(revision));
+        let observed = (
+            r.key.as_str(),
+            r.request_digest.as_str(),
+            i64::try_from(r.activation_revision).ok(),
+        );
+        if observed != retained {
+            return Err(Error::Conflict);
+        }
+    }
+    Ok(receipt)
+}
+
+fn admission_view(row: sqlx::postgres::PgRow) -> Result<AdmissionView> {
+    let receipt = checked_receipt(&row)?;
+    Ok(AdmissionView {
+        request_id: row.get("request_id"),
+        status: row.get("status"),
+        created_at_ms: row.get("created_at_ms"),
+        run_id: receipt.as_ref().map(|r| r.run_id.clone()),
+        activation_revision: receipt.as_ref().map(|r| r.activation_revision.to_string()),
+        catalog_revision: receipt.as_ref().map(|r| r.catalog_revision.to_string()),
+        held_reason: row.get("held_reason"),
+    })
 }
