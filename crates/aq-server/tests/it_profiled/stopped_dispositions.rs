@@ -51,6 +51,16 @@ async fn held(f: &Fixture, attempt: Uuid) -> bool {
         .unwrap()
 }
 
+async fn stopped_attempt() -> (Fixture, aq_admission::started::Request) {
+    let (f, start) = setup(true).await;
+    let auth = context(&f).await;
+    started::record(&f.state, &auth, &start).await.unwrap();
+    stopped::record(&f.state, &auth, &stop_request(&start))
+        .await
+        .unwrap();
+    (f, start)
+}
+
 #[tokio::test]
 async fn owner_disposes_stopped_unsettled_attempt_and_preserves_unresolved_evidence() {
     let (mut f, start) = setup(true).await;
@@ -120,12 +130,7 @@ async fn owner_disposes_stopped_unsettled_attempt_and_preserves_unresolved_evide
 
 #[tokio::test]
 async fn disposition_is_owner_only_and_exactly_idempotent_under_concurrent_requests() {
-    let (f, start) = setup(true).await;
-    let auth = context(&f).await;
-    started::record(&f.state, &auth, &start).await.unwrap();
-    stopped::record(&f.state, &auth, &stop_request(&start))
-        .await
-        .unwrap();
+    let (f, start) = stopped_attempt().await;
     let attempt = start.binding.attempt_id;
     let request = request();
     assert_eq!(
@@ -173,12 +178,7 @@ async fn disposition_is_owner_only_and_exactly_idempotent_under_concurrent_reque
 
 #[tokio::test]
 async fn disposition_and_claim_release_roll_back_together_and_sql_rejects_bypass() {
-    let (f, start) = setup(true).await;
-    let auth = context(&f).await;
-    started::record(&f.state, &auth, &start).await.unwrap();
-    stopped::record(&f.state, &auth, &stop_request(&start))
-        .await
-        .unwrap();
+    let (f, start) = stopped_attempt().await;
     let pool = f.db.pool().await;
     let attempt = start.binding.attempt_id;
     assert!(
@@ -249,12 +249,7 @@ async fn disposition_and_claim_release_roll_back_together_and_sql_rejects_bypass
 
 #[tokio::test]
 async fn admitted_automatic_completion_cannot_be_terminally_disposed() {
-    let (f, start) = setup(true).await;
-    let auth = context(&f).await;
-    started::record(&f.state, &auth, &start).await.unwrap();
-    stopped::record(&f.state, &auth, &stop_request(&start))
-        .await
-        .unwrap();
+    let (f, start) = stopped_attempt().await;
     let attempt = start.binding.attempt_id;
     let pool = f.db.pool().await;
     let report = Uuid::new_v4();
@@ -305,13 +300,8 @@ async fn admitted_automatic_completion_cannot_be_terminally_disposed() {
 #[tokio::test]
 async fn an_owner_disposition_clears_the_tasks_hold_in_both_reads() {
     use aq_machine_control::holds;
-    let (mut f, start) = setup(true).await;
-    let auth = context(&f).await;
-    started::record(&f.state, &auth, &start).await.unwrap();
+    let (mut f, start) = stopped_attempt().await;
     let attempt = start.binding.attempt_id;
-    stopped::record(&f.state, &auth, &stop_request(&start))
-        .await
-        .unwrap();
     let pool = f.db.pool().await;
     let (project, task) = (f.selection.lineage.project_id, f.selection.lineage.task_id);
     let seen = holds::attempts(&pool, task).await.unwrap();

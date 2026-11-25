@@ -5,7 +5,7 @@ use crate::common;
 use aq_playbook_host::{Limits, MemoryStorage, Owner};
 use aq_server::{build_admin_router, build_worker_router};
 use aq_worker_protocol::*;
-use common::profiled::{NOW, fixture};
+use common::profiled::{Fixture, NOW, fixture};
 use serde_json::json;
 use std::{
     sync::{
@@ -15,9 +15,7 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-#[tokio::test(flavor = "current_thread")]
-async fn actual_control_renew_cancel_and_readiness_progress_during_playbook_storage_stall() {
-    let f = fixture().await;
+async fn accepted_offer(f: &Fixture) -> Offer {
     let spec = ExecutionSpec {
         bindings: None,
         project_id: Uuid::new_v4(),
@@ -67,6 +65,24 @@ async fn actual_control_renew_cancel_and_readiness_progress_during_playbook_stor
         )
         .await
         .unwrap();
+    offer
+}
+
+// Release even if an assertion panics, so failures cannot strand a thread.
+struct Release(Arc<(Mutex<bool>, Condvar)>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let (lock, cv) = &*self.0;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actual_control_renew_cancel_and_readiness_progress_during_playbook_storage_stall() {
+    let f = fixture().await;
+    let offer = accepted_offer(&f).await;
     let admin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let worker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let a = admin.local_addr().unwrap();
@@ -143,20 +159,23 @@ async fn actual_control_renew_cancel_and_readiness_progress_during_playbook_stor
         let status = renewed.status();
         let body = renewed.text().await.unwrap();
         assert_eq!(status, 200, "{body}");
-        let cancel=client.post(format!("http://{a}/api/execution/attempts/{}/cancel",offer.attempt.attempt_id)).header("x-aq-request","1").json(&json!({"operation_id":Uuid::new_v4(),"reason":"control survives stalled playbook backend"})).send().await.unwrap();
+        let cancel = client
+            .post(format!(
+                "http://{a}/api/execution/attempts/{}/cancel",
+                offer.attempt.attempt_id
+            ))
+            .header("x-aq-request", "1")
+            .json(&json!({
+                "operation_id": Uuid::new_v4(),
+                "reason": "control survives stalled playbook backend",
+            }))
+            .send()
+            .await
+            .unwrap();
         let status = cancel.status();
         let body = cancel.text().await.unwrap();
         assert_eq!(status, 200, "{body}");
     };
-    // Release even if assertion panics, so test failures cannot strand a thread.
-    struct Release(Arc<(Mutex<bool>, Condvar)>);
-    impl Drop for Release {
-        fn drop(&mut self) {
-            let (lock, cv) = &*self.0;
-            *lock.lock().unwrap() = true;
-            cv.notify_all();
-        }
-    }
     let release = Release(gate);
     outcome.await;
     drop(release);

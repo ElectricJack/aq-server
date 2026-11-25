@@ -1,0 +1,20 @@
+[package]
+name = "aq-worker-protocol"
+version = "0.2.1"
+edition.workspace = true
+publish.workspace = true
+description = "Implementation-independent AQ execution wire contract"
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+aq-admission = { path = "../../vendor/aq-admission-0.1.13", version = "=0.1.13", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[features]
+test-support = []
+native-git-author = ["dep:anyhow", "dep:aq-admission"]

@@ -133,67 +133,7 @@ pub async fn prepare_turn(
     {
         return Err(refused());
     }
-    // X5: pinned context refs follow the body; turns without refs keep their
-    // bytes. A pre-0071 store has no context table and therefore no refs.
-    let context: bool =
-        sqlx::query_scalar("SELECT to_regclass('global_supervisor_message_context') IS NOT NULL")
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?;
-    let refs = if context {
-        "(SELECT c.refs FROM global_supervisor_message_context c WHERE c.message_id=m.message_id)"
-    } else {
-        "NULL::jsonb"
-    };
-    // agile-vault-27: bound owner files render after the refs, in Create order.
-    let stored: bool =
-        sqlx::query_scalar("SELECT to_regclass('global_supervisor_attachments') IS NOT NULL")
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?;
-    let files = if stored {
-        super::attachments::DESCRIPTORS
-    } else {
-        "NULL::jsonb"
-    };
-    let bodies: Vec<(Uuid, String)> = sqlx::query(&format!("SELECT m.message_id,m.sender,m.body,{refs} AS refs,{files} AS files FROM central_supervisor_mail_members b JOIN mailbox_messages m ON m.message_id=b.message_id WHERE b.reservation_id=$1 ORDER BY b.ordinal LIMIT 17"))
-        .bind(reservation)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(db)?
-        .into_iter()
-        .map(|r| {
-            let mut body: String = r.get("body");
-            // bold-stone-51: agent mail names its sending session; owner bytes are unchanged.
-            let sender: serde_json::Value = r.get("sender");
-            if sender["kind"] == "session" {
-                let b = &sender["binding"];
-                body = format!(
-                    "[from agent session {} task {} project {}]\n{body}",
-                    b["session_id"].as_str().unwrap_or("?"),
-                    b["task_id"].as_str().unwrap_or("?"),
-                    b["project_id"].as_str().unwrap_or("?"),
-                );
-            }
-            for c in super::writes::stored_context(r.get("refs"))? {
-                body.push_str(&format!("\n[context {}]", c.render()));
-            }
-            for a in super::attachments::stored(r.get("files"))? {
-                body.push_str(&format!("\n[attachment {}]", a.render()));
-            }
-            Ok((r.get("message_id"), body))
-        })
-        .collect::<Result<_>>()?;
-    if bodies.len() != view.batch.messages.len() {
-        return Err(unavailable());
-    }
-    let mut members = Vec::with_capacity(bodies.len());
-    for (m, (id, body)) in view.batch.messages.iter().zip(bodies) {
-        if m.message_id != id {
-            return Err(unavailable());
-        }
-        members.push((m.clone(), body));
-    }
+    let members = turn_members(&mut tx, &view).await?;
     let mut input =
         aq_supervisor_control::history(&mut tx, view.conversation_id, members[0].0.cursor as i64)
             .await
@@ -214,6 +154,78 @@ pub async fn prepare_turn(
         host_operation_id,
         input,
     })
+}
+
+/// Load the exact reserved messages, preserving context and file order across
+/// historical schemas that predate those tables.
+async fn turn_members(
+    tx: &mut Transaction<'_, Postgres>,
+    view: &reservations::ReservationView,
+) -> Result<Vec<(MailRef, String)>> {
+    // X5: pinned context refs follow the body; turns without refs keep their
+    // bytes. A pre-0071 store has no context table and therefore no refs.
+    let context: bool =
+        sqlx::query_scalar("SELECT to_regclass('global_supervisor_message_context') IS NOT NULL")
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    let refs = if context {
+        "(SELECT c.refs FROM global_supervisor_message_context c WHERE c.message_id=m.message_id)"
+    } else {
+        "NULL::jsonb"
+    };
+    // agile-vault-27: bound owner files render after the refs, in Create order.
+    let stored: bool =
+        sqlx::query_scalar("SELECT to_regclass('global_supervisor_attachments') IS NOT NULL")
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    let files = if stored {
+        super::attachments::DESCRIPTORS
+    } else {
+        "NULL::jsonb"
+    };
+    let bodies: Vec<(Uuid, String)> = sqlx::query(&format!("SELECT m.message_id,m.sender,m.body,{refs} AS refs,{files} AS files FROM central_supervisor_mail_members b JOIN mailbox_messages m ON m.message_id=b.message_id WHERE b.reservation_id=$1 ORDER BY b.ordinal LIMIT 17"))
+        .bind(view.id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(db)?
+        .into_iter()
+        .map(render_message)
+        .collect::<Result<_>>()?;
+    if bodies.len() != view.batch.messages.len() {
+        return Err(unavailable());
+    }
+    let mut members = Vec::with_capacity(bodies.len());
+    for (m, (id, body)) in view.batch.messages.iter().zip(bodies) {
+        if m.message_id != id {
+            return Err(unavailable());
+        }
+        members.push((m.clone(), body));
+    }
+    Ok(members)
+}
+
+fn render_message(r: sqlx::postgres::PgRow) -> Result<(Uuid, String)> {
+    let mut body: String = r.get("body");
+    // bold-stone-51: agent mail names its sending session; owner bytes are unchanged.
+    let sender: serde_json::Value = r.get("sender");
+    if sender["kind"] == "session" {
+        let b = &sender["binding"];
+        body = format!(
+            "[from agent session {} task {} project {}]\n{body}",
+            b["session_id"].as_str().unwrap_or("?"),
+            b["task_id"].as_str().unwrap_or("?"),
+            b["project_id"].as_str().unwrap_or("?"),
+        );
+    }
+    for c in super::writes::stored_context(r.get("refs"))? {
+        body.push_str(&format!("\n[context {}]", c.render()));
+    }
+    for a in super::attachments::stored(r.get("files"))? {
+        body.push_str(&format!("\n[attachment {}]", a.render()));
+    }
+    Ok((r.get("message_id"), body))
 }
 
 /// Plan authorization: the plan and its startup bytes must be exactly the recorded turn.

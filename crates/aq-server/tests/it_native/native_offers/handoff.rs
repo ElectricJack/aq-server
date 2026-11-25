@@ -52,9 +52,14 @@ fn sole_offer(body: &Value) -> NativeOffer {
     page.offers.remove(0)
 }
 
-/// The granted predecessor starts, saves `checkpoint`, is stopped by its owner
-/// (an `owner_stop` handoff) and reports Failed with that checkpoint's receipt.
-async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &str) {
+/// Start the predecessor and save its result from a known stopped owner.
+/// A workspace request can exist before a natural success reaches AQ.
+async fn run_and_hand_off(
+    c: &Case,
+    grant: &InitialGrantDelivery,
+    checkpoint: &str,
+    expanded: bool,
+) {
     let state = &c.env.env.state;
     let auth = auth(c).await;
     let g = &grant.original;
@@ -82,7 +87,17 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     intent.manifest_digest = start.binding.launch_manifest_digest.clone();
     start.observation_digest = start.observation.digest().unwrap();
     started::record(state, &auth, &start).await.unwrap();
-    let stop = native_started::stop_request(&start);
+    if expanded {
+        sqlx::query("INSERT INTO task_workspace_services(home_project_id,task_id,service,requested_attempt_id) VALUES($1,$2,'postgres',$3)")
+            .bind(c.env.lineage.project_id)
+            .bind(c.env.lineage.task_id)
+            .bind(start.binding.attempt_id)
+            .execute(&c.env.env.pool).await.unwrap();
+    }
+    let mut stop = native_started::stop_request(&start);
+    if expanded {
+        stop.evidence.reason = aq_admission::transport::StopReason::Completed;
+    }
     // The legacy stop and result owners need host stop evidence: the synthetic
     // host advertises it for those reports, then the registration is restored.
     let pool = &c.env.env.pool;
@@ -124,33 +139,15 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     registered(json!(stop_capable)).await;
     stopped::record(state, &auth, &stop).await.unwrap();
 
-    // The worker's checkpoint transfer, centrally retained (validation only).
     let binding = &start.binding;
-    let aq_session_protocol::SessionIdentity::Remote {
-        node_id,
-        session_id,
-        ..
-    } = binding.session
-    else {
+    let aq_session_protocol::SessionIdentity::Remote { node_id, .. } = binding.session else {
         unreachable!()
     };
-    let (source, transfer_id, artifact_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let repository = c.env.frozen.project.binding.repository_id;
-    let sha1 = |hex: &str| json!({"algorithm":"sha1","hex":hex});
-    let manifest = json!({"transfer_id":transfer_id,"role":"checkpoint","checkpoint":sha1(checkpoint),
-        "attempt":{"attempt_id":binding.attempt_id,"session_id":session_id,"generation":binding.assignment_generation},
-        "resolved_spec_digest":binding.execution_spec_digest,
-        "source":{"repository_id":repository,"binding_generation":1,"logical_identity":"synthetic-native-repository","base":sha1(&"a".repeat(40))},
-        "artifact_id":artifact_id,"manifest_digest":"a".repeat(64),"bundle_digest":null,"manifest_bytes":1,"bundle_bytes":0});
-    let receipt = json!({"receipt_id":source,"transfer_id":transfer_id,"repository_id":repository,"binding_generation":1,
-        "source":sha1(checkpoint),"retention_handle":artifact_id,"manifest_digest":"b".repeat(64)});
-    let central = json!({"repository_id":repository,"binding_generation":1,"transfer_id":artifact_id,"retention_handle":artifact_id,
-        "manifest_digest":"b".repeat(64),"source":sha1(checkpoint),"retention_state":"active","historical":false,"receiver_installation_id":Uuid::new_v4()});
-    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
-        .bind(transfer_id).bind(binding.attempt_id).bind(node_id).bind(repository).bind(artifact_id).bind(source)
-        .bind(manifest).bind(receipt).bind(central).execute(pool).await.unwrap();
-    sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
-        .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
+    let source = retain_checkpoint(c, binding, checkpoint).await;
+    if !expanded {
+        sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
+            .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
+    }
     let report = ResultReport {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -158,13 +155,31 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
         identity: c.request.identity.clone(),
         binding: binding.clone(),
         supersedes: None,
-        outcome: ProcessOutcome::Failed,
+        outcome: if expanded {
+            ProcessOutcome::Success
+        } else {
+            ProcessOutcome::Failed
+        },
         stop: stop.evidence,
         source_receipt_ids: vec![source],
         pending_effect_ids: vec![],
         conclusion: Label::new("Handoff (owner stop): step1 and step2 saved").unwrap(),
     };
     results::record(state, &auth, &report).await.unwrap();
+    if expanded {
+        let (worker_outcome, disposition, reason): (String, String, String) = sqlx::query_as(
+            "SELECT convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome', s.disposition, s.reason
+             FROM profiled_result_reports r JOIN profiled_auto_settlements s USING(report_id)
+             WHERE r.report_id=$1",
+        )
+        .bind(report.report_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(worker_outcome, "success");
+        assert_eq!(disposition, "rework_required");
+        assert_eq!(reason, "workspace_expansion_requested");
+    }
     registered(native).await;
 
     // Synthetic retained and quiescent owner facts; the actual stop is kept.
@@ -204,16 +219,72 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     replacement::release(state, task, &r).await.unwrap();
 }
 
+async fn retain_checkpoint(
+    c: &Case,
+    binding: &aq_admission::LaunchBinding,
+    checkpoint: &str,
+) -> Uuid {
+    let pool = &c.env.env.pool;
+    // The worker's checkpoint transfer, centrally retained (validation only).
+    let aq_session_protocol::SessionIdentity::Remote {
+        node_id,
+        session_id,
+        ..
+    } = binding.session
+    else {
+        unreachable!()
+    };
+    let (source, transfer_id, artifact_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let repository = c.env.frozen.project.binding.repository_id;
+    let sha1 = |hex: &str| json!({"algorithm":"sha1","hex":hex});
+    let manifest = json!({"transfer_id":transfer_id,"role":"checkpoint","checkpoint":sha1(checkpoint),
+        "attempt":{"attempt_id":binding.attempt_id,"session_id":session_id,"generation":binding.assignment_generation},
+        "resolved_spec_digest":binding.execution_spec_digest,
+        "source":{"repository_id":repository,"binding_generation":1,"logical_identity":"synthetic-native-repository","base":sha1(&"a".repeat(40))},
+        "artifact_id":artifact_id,"manifest_digest":"a".repeat(64),"bundle_digest":null,"manifest_bytes":1,"bundle_bytes":0});
+    let receipt = json!({"receipt_id":source,"transfer_id":transfer_id,"repository_id":repository,"binding_generation":1,
+        "source":sha1(checkpoint),"retention_handle":artifact_id,"manifest_digest":"b".repeat(64)});
+    let central = json!({"repository_id":repository,"binding_generation":1,"transfer_id":artifact_id,"retention_handle":artifact_id,
+        "manifest_digest":"b".repeat(64),"source":sha1(checkpoint),"retention_state":"active","historical":false,"receiver_installation_id":Uuid::new_v4()});
+    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
+        .bind(transfer_id).bind(binding.attempt_id).bind(node_id).bind(repository).bind(artifact_id).bind(source)
+        .bind(manifest).bind(receipt).bind(central).execute(pool).await.unwrap();
+    source
+}
+
 async fn export_of(c: &Case, attempt: Uuid) -> (Uuid, Value) {
     sqlx::query_as::<_, (Uuid, Value)>("SELECT x.operation_id,convert_from(e.request_bytes,'UTF8')::jsonb FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id) WHERE x.attempt_id=$1")
         .bind(attempt).fetch_one(&c.env.env.pool).await.unwrap()
 }
 
+async fn refused_poll(c: &Case) {
+    let (status, body) = native_offer::poll(c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert!(page.offers.is_empty(), "{body}");
+    // A refused successor is counted when the poll's assembly ends, which on a
+    // loaded runner is after the poll has answered the empty page; until then
+    // a further poll counts nothing.
+    native_offer::assembled(c).await;
+}
+
 async fn handed_off() -> (Case, Uuid) {
     let (mut c, first) = native_offer::published().await;
     let grant = granted(&mut c, &first).await;
-    run_and_hand_off(&c, &grant, &"5".repeat(40)).await;
+    run_and_hand_off(&c, &grant, &"5".repeat(40), false).await;
     (c, first.offered.offer.binding.attempt_id)
+}
+
+#[tokio::test]
+async fn workspace_request_retains_natural_success_as_checkpoint_rework() {
+    let (mut c, first) = native_offer::published().await;
+    let grant = granted(&mut c, &first).await;
+    // The worker submits its physical success before the machine poll has
+    // delivered the workspace stop request.
+    run_and_hand_off(&c, &grant, &"5".repeat(40), true).await;
 }
 
 #[tokio::test]
@@ -287,17 +358,7 @@ async fn handoff_successor_cannot_export_a_commit_other_than_the_recorded_candid
     };
     let exports = count("SELECT count(*) FROM profiled_source_exports").await;
     for _ in 0..2 {
-        let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(
-            status, 200,
-            "a refused handoff never fails the poll: {body}"
-        );
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        assert!(page.offers.is_empty(), "{body}");
-        native_offer::assembled(&c).await;
+        refused_poll(&c).await;
     }
     assert_eq!(
         count("SELECT count(*) FROM profiled_source_exports").await,
@@ -340,22 +401,9 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
             .await
             .unwrap()
     };
-    let refused_poll = || async {
-        let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(status, 200, "{body}");
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        assert!(page.offers.is_empty(), "{body}");
-        // A refused successor is counted when the poll's assembly ends, which on a
-        // loaded runner is after the poll has answered the empty page; until then
-        // a further poll counts nothing.
-        native_offer::assembled(&c).await;
-    };
     // The case clock stands still: 20 skips within a moment are not stuck.
     for n in 1..=holds::STUCK_SKIPS {
-        refused_poll().await;
+        refused_poll(&c).await;
         assert_eq!(skips().await, Some(n));
         assert!(
             super::holds::hold_rows(&c, task).await.is_empty(),
@@ -371,7 +419,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     .execute(pool)
     .await
     .unwrap();
-    refused_poll().await;
+    refused_poll(&c).await;
     let readiness = super::holds::work(&c, task).await;
     assert_eq!(readiness["state"], "held", "{readiness}");
     assert_eq!(
@@ -388,7 +436,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
         )]
     );
     // AQ keeps trying it; the hold and its one comment stay as they are.
-    refused_poll().await;
+    refused_poll(&c).await;
     assert_eq!(skips().await, Some(holds::STUCK_SKIPS + 2));
     assert_eq!(posted().await, 1);
     let comments = super::holds::system_comments(&c, task).await;
@@ -413,4 +461,91 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     assert!(super::holds::swarm(&c).await.is_empty());
     let rows = super::holds::hold_rows(&c, task).await;
     assert_eq!(rows[0].3.as_deref(), Some("task_closed"), "{rows:?}");
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let c = native_offer::setup().await;
+    let pool = &c.env.env.pool;
+    let (home, task) = (c.env.lineage.project_id, c.env.lineage.task_id);
+    let (sibling, repository) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO project_execution_bindings
+         (project_id,revision,binding,validated_at_ms,binding_observation)
+         VALUES ($1,1,jsonb_build_object('enabled',true,'repository_id',$2::text,
+                                         'repository_binding_generation',1),1,'{}')",
+    )
+    .bind(sibling)
+    .bind(repository.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO task_workspace_sources
+         (home_project_id,task_id,target_project_id,project_revision,repository_id,
+          binding_generation,commit_oid,access,state)
+         VALUES($1,$2,$3,1,$4,1,repeat('a',40),'read','pending')",
+    )
+    .bind(home)
+    .bind(task)
+    .bind(sibling)
+    .bind(repository)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let poll = || async {
+        let response = aq_server::build_worker_router(c.env.env.state.clone())
+            .oneshot(
+                axum::http::Request::post("/v1/worker/profiled/poll")
+                    .header("authorization", format!("Bearer {}", c.env.env.credential))
+                    .header("content-type", "application/json")
+                    .header("AQ-Workspace-Expansion", "1")
+                    .body(Body::from(serde_json::to_vec(&c.request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
+            .unwrap()
+    };
+    assert_eq!(poll().await["body"]["offers"], json!([]));
+    native_offer::assembled(&c).await;
+    sqlx::query("UPDATE task_workspace_sources SET state='approved' WHERE task_id=$1")
+        .bind(task)
+        .execute(pool)
+        .await
+        .unwrap();
+    refused_poll(&c).await;
+
+    let mut body = poll().await;
+    native_offer::assembled(&c).await;
+    if body["body"]["offers"] == json!([]) {
+        body = poll().await;
+    }
+    assert_eq!(body["body"]["offers"][0]["workspace_required"], true);
+    let decoded = aq_profiled_state::git_author::decode_poll_reply(
+        &serde_json::to_vec(&body).unwrap(),
+        &c.request,
+    )
+    .unwrap();
+    assert!(decoded.offers[0].workspace_required);
+    let offer = decoded.offers[0].native.clone();
+    let attempt = offer.offered.offer.binding.attempt_id;
+    let frozen: Value =
+        sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(frozen["sources"][0]["target_project_id"], json!(sibling));
+    assert_eq!(frozen["sources"][0]["commit_oid"], json!("a".repeat(40)));
+    assert_eq!(frozen["services"], json!([]));
+    refused_poll(&c).await;
 }

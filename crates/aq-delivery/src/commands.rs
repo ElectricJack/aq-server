@@ -343,6 +343,33 @@ impl Delivery {
         })
     }
 
+    /// Read the forge PR and verify its exact revision and destination.
+    pub async fn pull_request_at(
+        &self,
+        target: &DeliveryTarget,
+        number: u64,
+        head: &str,
+    ) -> crate::github::GitHubResult<Option<crate::policy::PullRequest>> {
+        let pr = self.github.pull_request(&target.github, number).await?;
+        Ok(
+            (pr.number == number && pr.head_sha == head && pr.base_branch == target.default_branch)
+                .then_some(pr),
+        )
+    }
+
+    /// Read external merge evidence without issuing a merge request.
+    pub async fn verified_external_merge(
+        &self,
+        target: &DeliveryTarget,
+        number: u64,
+        head: &str,
+    ) -> crate::github::GitHubResult<Option<crate::policy::PullRequest>> {
+        Ok(self
+            .pull_request_at(target, number, head)
+            .await?
+            .filter(|pr| pr.state == PullRequestState::Merged))
+    }
+
     /// `pull_request.merge`: merges with `method` if the head is still
     /// `expected_head_sha`, then deletes the task's branch on the remote and in
     /// central aq-git. A merge that is already done is not done twice, so a

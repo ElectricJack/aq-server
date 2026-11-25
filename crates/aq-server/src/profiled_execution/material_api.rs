@@ -67,42 +67,7 @@ pub async fn fetch(
     if auth.id() != request.identity.node_id {
         return Err(AppError::Forbidden("material node mismatch".into()));
     }
-    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
-    // This first read is only a bounded candidate for private file I/O. It grants
-    // no delivery permission. All mutable owners are rechecked afterward.
-    let candidate: Value = sqlx::query_scalar(
-        "SELECT lease FROM admission_material_leases WHERE lease_id=$1 AND node_id=$2 AND boot_id=$3 AND admitted_attempt_id=$4 AND state='admitted'",
-    )
-    .bind(request.lease_id)
-    .bind(auth.id())
-    .bind(request.identity.boot_id)
-    .bind(request.binding.attempt_id)
-    .fetch_optional(&state.store.pool)
-    .await
-    .map_err(db)?
-    .ok_or_else(|| refused())?;
-    let lease: MaterialLease = serde_json::from_value(candidate).map_err(|_| refused())?;
-    lease.validate().map_err(|_| refused())?;
-    if lease.lease_id != request.lease_id || lease.binding != request.binding {
-        return Err(refused());
-    }
-    let permit = aq_machine_control::limits::MATERIAL_REQUESTS.enter();
-    let permit = permit.ok_or_else(|| refused())?;
-    let read_lease = lease.clone();
-    let node_id = auth.id();
-    let (source, version) =
-        super::login_refresh::lease_versioned(&state.store.pool, &registry, &lease).await?;
-    let bytes = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            material::read_for_lease_from(&registry, &read_lease, node_id, source.as_ref())
-        }),
-    )
-    .await
-    .map_err(|_| refused())?
-    .map_err(|_| AppError::Internal)?
-    .map_err(|_| refused())?;
+    let (lease, bytes, version) = read_candidate_material(state, auth, request).await?;
 
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     sqlx::query("SET LOCAL lock_timeout='2s'")
@@ -189,48 +154,8 @@ pub async fn fetch(
     .await
     .map_err(db)?
     .ok_or_else(|| refused())?;
-    let identity = format!(
-        "{}@{}",
-        lease.credential_profile.id.as_str(),
-        lease.credential_profile.version.as_str()
-    );
-    if row.get::<uuid::Uuid, _>("node_id") != auth.id()
-        || row.get::<uuid::Uuid, _>("boot_id") != request.identity.boot_id
-        || row.get::<uuid::Uuid, _>("prospective_attempt_id") != request.binding.attempt_id
-        || row.get::<Option<uuid::Uuid>, _>("admitted_attempt_id")
-            != Some(request.binding.attempt_id)
-        || row.get::<uuid::Uuid, _>("offer_id") != request.binding.offer_id
-        || row.get::<String, _>("state") != "admitted"
-        || row.get::<String, _>("credential_identity") != identity
-        || row.get::<i64, _>("credential_revision") as u64 != lease.credential_revision
-        || row.get::<String, _>("purpose") != lease.purpose.as_str()
-        || row.get::<i64, _>("issued_at_ms") as u64 != lease.issued_at_ms
-        || row.get::<i64, _>("expires_at_ms") as u64 != lease.expires_at_ms
-        || !same(&row.get::<Value, _>("lease"), &lease)?
-    {
-        return Err(refused());
-    }
-    // A delegated caller may fetch only the lease bound to its own permit, and
-    // only while that permit's row is still unrevoked.
-    if let Some(delegate) = auth.delegated() {
-        let record = &delegate.current.record;
-        let bound: Option<uuid::Uuid> = row.get("permit_id");
-        let live: Option<bool> = sqlx::query_scalar(
-            "SELECT NOT revoked FROM delegated_permits WHERE permit_id=$1 AND node_id=$2 AND attempt_id=$3 FOR SHARE",
-        )
-        .bind(record.permit_id)
-        .bind(auth.id())
-        .bind(request.binding.attempt_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db)?;
-        if bound != Some(record.permit_id)
-            || record.binding.attempt_id != request.binding.attempt_id
-            || live != Some(true)
-        {
-            return Err(refused());
-        }
-    }
+    require_lease_row(&row, auth, request, &lease)?;
+    require_delegated_lease_locked(&mut tx, &row, auth, request).await?;
     let selected: Value = sqlx::query_scalar(
         "SELECT selection FROM intelligence_attempt_selections WHERE attempt_id=$1",
     )
@@ -278,6 +203,112 @@ pub async fn fetch(
         version,
         material: bytes,
     })
+}
+
+/// File I/O precedes the transaction; fetch rechecks every mutable owner
+/// before returning these candidate bytes to the caller.
+async fn read_candidate_material(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &MaterialFetch,
+) -> Result<(MaterialLease, material::ProtectedMaterial, Option<i64>), AppError> {
+    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
+    // This first read is only a bounded candidate for private file I/O. It grants
+    // no delivery permission. All mutable owners are rechecked afterward.
+    let candidate: Value = sqlx::query_scalar(
+        "SELECT lease FROM admission_material_leases WHERE lease_id=$1 AND node_id=$2 AND boot_id=$3 AND admitted_attempt_id=$4 AND state='admitted'",
+    )
+    .bind(request.lease_id)
+    .bind(auth.id())
+    .bind(request.identity.boot_id)
+    .bind(request.binding.attempt_id)
+    .fetch_optional(&state.store.pool)
+    .await
+    .map_err(db)?
+    .ok_or_else(|| refused())?;
+    let lease: MaterialLease = serde_json::from_value(candidate).map_err(|_| refused())?;
+    lease.validate().map_err(|_| refused())?;
+    if lease.lease_id != request.lease_id || lease.binding != request.binding {
+        return Err(refused());
+    }
+    let permit = aq_machine_control::limits::MATERIAL_REQUESTS.enter();
+    let permit = permit.ok_or_else(|| refused())?;
+    let read_lease = lease.clone();
+    let node_id = auth.id();
+    let (source, version) =
+        super::login_refresh::lease_versioned(&state.store.pool, &registry, &lease).await?;
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            material::read_for_lease_from(&registry, &read_lease, node_id, source.as_ref())
+        }),
+    )
+    .await
+    .map_err(|_| refused())?
+    .map_err(|_| AppError::Internal)?
+    .map_err(|_| refused())?;
+
+    Ok((lease, bytes, version))
+}
+
+fn require_lease_row(
+    row: &sqlx::postgres::PgRow,
+    auth: &AuthenticatedNode,
+    request: &MaterialFetch,
+    lease: &MaterialLease,
+) -> Result<(), AppError> {
+    let identity = format!(
+        "{}@{}",
+        lease.credential_profile.id.as_str(),
+        lease.credential_profile.version.as_str()
+    );
+    if row.get::<uuid::Uuid, _>("node_id") != auth.id()
+        || row.get::<uuid::Uuid, _>("boot_id") != request.identity.boot_id
+        || row.get::<uuid::Uuid, _>("prospective_attempt_id") != request.binding.attempt_id
+        || row.get::<Option<uuid::Uuid>, _>("admitted_attempt_id")
+            != Some(request.binding.attempt_id)
+        || row.get::<uuid::Uuid, _>("offer_id") != request.binding.offer_id
+        || row.get::<String, _>("state") != "admitted"
+        || row.get::<String, _>("credential_identity") != identity
+        || row.get::<i64, _>("credential_revision") as u64 != lease.credential_revision
+        || row.get::<String, _>("purpose") != lease.purpose.as_str()
+        || row.get::<i64, _>("issued_at_ms") as u64 != lease.issued_at_ms
+        || row.get::<i64, _>("expires_at_ms") as u64 != lease.expires_at_ms
+        || !same(&row.get::<Value, _>("lease"), lease)?
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+async fn require_delegated_lease_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    row: &sqlx::postgres::PgRow,
+    auth: &AuthenticatedNode,
+    request: &MaterialFetch,
+) -> Result<(), AppError> {
+    // A delegated caller may fetch only the lease bound to its own permit, and
+    // only while that permit's row is still unrevoked.
+    if let Some(delegate) = auth.delegated() {
+        let record = &delegate.current.record;
+        let bound: Option<uuid::Uuid> = row.get("permit_id");
+        let live: Option<bool> = sqlx::query_scalar(
+            "SELECT NOT revoked FROM delegated_permits WHERE permit_id=$1 AND node_id=$2 AND attempt_id=$3 FOR SHARE",
+        )
+        .bind(record.permit_id)
+        .bind(auth.id())
+        .bind(request.binding.attempt_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?;
+        if bound != Some(record.permit_id)
+            || record.binding.attempt_id != request.binding.attempt_id
+            || live != Some(true)
+        {
+            return Err(refused());
+        }
+    }
+    Ok(())
 }
 
 fn metadata_header(metadata: &MaterialDelivery) -> Result<HeaderValue, AppError> {

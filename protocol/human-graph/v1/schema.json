@@ -1827,6 +1827,22 @@
                       "maxLength": 128
                     }
                   },
+                  "prefer_providers": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  },
+                  "prefer_harnesses": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  },
                   "lane": {
                     "type": [
                       "string",

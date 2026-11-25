@@ -1,6 +1,12 @@
 #[path = "../../migration_catalog.rs"]
 mod catalog;
 
+mod installed {
+    include!(concat!(env!("OUT_DIR"), "/migration_catalog.rs"));
+}
+
+use installed::{MIGRATIONS, READABLE_STATE_FORMATS, STATE_FORMAT_VERSION};
+
 use std::path::PathBuf;
 
 fn paths(names: &[&str]) -> Vec<PathBuf> {
@@ -117,4 +123,34 @@ async fn node_slots_135_preserves_existing_counts_at_one_and_defaults_new_nodes_
             .unwrap(),
         2
     );
+}
+
+/// Every migration is a state-format change. The updater decides whether
+/// a rollback must restore the pre-update backup by comparing manifest
+/// state formats, while the server refuses a database holding any
+/// migration newer than it knows. Generate both from the same catalog so
+/// rollback always restores data when the schema changes.
+#[test]
+fn state_format_is_the_latest_migration() {
+    let numbers: Vec<i32> = MIGRATIONS.iter().map(|m| m.0).collect();
+    let expected: Vec<i32> = (1..=numbers.len() as i32).collect();
+    assert_eq!(
+        numbers, expected,
+        "migrations must be numbered 1, 2, 3, ... with no gaps"
+    );
+    let latest = *numbers.last().expect("at least one migration") as u32;
+    assert_eq!(
+        STATE_FORMAT_VERSION, latest,
+        "STATE_FORMAT_VERSION must equal the newest migration number: every migration is a \
+         state-format change. Both must be generated from the migration catalog"
+    );
+    assert_eq!(STATE_FORMAT_VERSION, aq_server::STATE_FORMAT_VERSION);
+    assert_eq!(READABLE_STATE_FORMATS, aq_server::READABLE_STATE_FORMATS);
+    assert!(READABLE_STATE_FORMATS.contains(&STATE_FORMAT_VERSION));
+    for (n, sql) in MIGRATIONS {
+        assert!(
+            sql.contains("state_format_version") && sql.contains(&format!("'{n}'")),
+            "migration {n} must set meta.state_format_version to '{n}'"
+        );
+    }
 }

@@ -1,4 +1,4 @@
-//! Spec 0006 phase 0: every `/v1/agent/*` question, comment and wait route
+//! Spec 0006 phase 0: every `/v1/agent/*` grant-checked route
 //! refuses an attempt that does not hold its grant, names the missing grant,
 //! and records each decision in `command_audit`.
 use crate::messaging::{Env, send, setup_with};
@@ -11,7 +11,13 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const ROUTES: [(&str, &str, &str); 14] = [
+const WORKSPACE_ROUTE: &str = "/v1/agent/workspace/request";
+const ROUTES: [(&str, &str, &str); 15] = [
+    (
+        WORKSPACE_ROUTE,
+        "task.workspace.request",
+        "task.workspace.request",
+    ),
     ("/v1/agent/questions", "question.ask", "question.ask"),
     ("/v1/agent/questions/show", "question.show", "question.read"),
     ("/v1/agent/comments", "task.comment.add", "comment.write"),
@@ -48,7 +54,7 @@ const ROUTES: [(&str, &str, &str); 14] = [
     ),
 ];
 
-async fn structured(e: &Env, path: &str) -> (StatusCode, Value) {
+async fn structured(e: &Env, path: &str, body: &Value) -> (StatusCode, Value) {
     let r = e
         .app
         .clone()
@@ -60,7 +66,7 @@ async fn structured(e: &Env, path: &str) -> (StatusCode, Value) {
                 .header("X-AQ-Request", "1")
                 .header("X-AQ-Refusal-Version", "1")
                 .header("authorization", format!("Bearer {}", e.token))
-                .body(Body::from(json!({"api_version":1}).to_string()))
+                .body(Body::from(body.to_string()))
                 .unwrap(),
         )
         .await
@@ -83,9 +89,13 @@ async fn agent_routes_refuse_without_their_grant_and_name_it() {
     ))
     .unwrap();
     for (path, command, grant) in ROUTES {
+        let request = if path == WORKSPACE_ROUTE {
+            json!({"target_project_id": Uuid::new_v4(), "access": "read"})
+        } else {
+            json!({"api_version":1})
+        };
         // Default: the closed agent-access-1 ErrorResponse, naming the grant.
-        let (status, body) =
-            send(&e.app, path, Some(&e.token), Some(json!({"api_version":1}))).await;
+        let (status, body) = send(&e.app, path, Some(&e.token), Some(request.clone())).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path} {body}");
         assert!(
             aq_agent_api::check(&schema, &schema["$defs"]["ErrorResponse"], &body),
@@ -93,7 +103,7 @@ async fn agent_routes_refuse_without_their_grant_and_name_it() {
         );
         assert!(body["message"].as_str().unwrap().contains(grant), "{body}");
         // Opt-in: the spec 0006 §6.8 refusal.
-        let (status, body) = structured(&e, path).await;
+        let (status, body) = structured(&e, path, &request).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path} {body}");
         assert_eq!(body["command"], command, "{body}");
         assert_eq!(body["grant"], grant, "{body}");
@@ -192,6 +202,23 @@ fn route_contracts_publish_the_grant_each_route_checks() {
             );
         }
     }
+    let commands: Value = serde_json::from_str(include_str!(
+        "../../../../protocol/commands/v1/commands.json"
+    ))
+    .unwrap();
+    let workspace_request = commands["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["name"] == "task.workspace.request")
+        .unwrap();
+    published.insert(
+        workspace_request["principals"]["agent"]["route"]["path"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        workspace_request["grant"].as_str().unwrap().to_owned(),
+    );
     // Spec 0017's routes are published when `project_environments` is removed.
     #[cfg(feature = "project_environments")]
     for path in [
@@ -306,7 +333,7 @@ async fn reject_narrow_result_scopes() {
             "/v1/agent/results/show",
             "/v1/agent/results/patch",
         ] {
-            let (status, body) = structured(&e, path).await;
+            let (status, body) = structured(&e, path, &json!({"api_version":1})).await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{scope} {path} {body}");
             assert_eq!(body["code"], "scope_denied", "{scope} {path} {body}");
             assert_eq!(body["grant"], "result.read");
@@ -314,7 +341,7 @@ async fn reject_narrow_result_scopes() {
     }
     let other = format!("project:{}", Uuid::new_v4());
     let e = setup_with(Some(json!([{"operation":"result.read","scope":other}]))).await;
-    let (status, body) = structured(&e, "/v1/agent/results/list").await;
+    let (status, body) = structured(&e, "/v1/agent/results/list", &json!({"api_version":1})).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["code"], "scope_denied", "{body}");
 }

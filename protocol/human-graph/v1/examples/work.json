@@ -45,6 +45,10 @@
         ],
         "prefer": [],
         "lane": "backend",
+        "prefer_providers": [
+          "anthropic"
+        ],
+        "prefer_harnesses": [],
         "provider_intent": "any",
         "source": "owner",
         "policy_digest": null

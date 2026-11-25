@@ -110,6 +110,7 @@ impl DeliveryPort for PgDelivery {
              WHERE a.kind='profiled_v1' AND a.holds_task AND ah.state#>>'{stop,kind}'='stopped' \
              AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')::uuid=$1) \
              AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+             AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements s WHERE s.report_id=h.report_id AND s.reason='workspace_expansion_requested') \
              AND NOT ",
              aq_machine_control::platform_interruption_sql!("r.report_bytes"),
              " \

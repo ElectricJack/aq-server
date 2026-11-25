@@ -119,6 +119,9 @@ services:
       # Public machine hostname behind Cloudflare Access; never the Compose network.
       AQ_SERVER_URL: https://${AQ_PUBLIC_HOSTNAME:?set AQ_PUBLIC_HOSTNAME to the public Access hostname}
       DOCKER_HOST: unix:///run/aq-sandbox/podman.sock
+      # The sandbox daemon's view of this worker's /state, used for readonly
+      # project snapshots. An omitted mapping leaves this worker single-project.
+      AQ_WORKER_DAEMON_STATE_ROOT: ${AQ_WORKER_DAEMON_STATE_ROOT:-}
     volumes:
       - type: bind
         source: ${AQ_WORKER_CONFIG_DIR:?set AQ_WORKER_CONFIG_DIR to the worker config directory}

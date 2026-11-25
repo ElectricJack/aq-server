@@ -5,27 +5,37 @@ pub(super) async fn media36_storage_guard(
     tx: &mut Transaction<'_, Postgres>,
     version: u32,
 ) -> Result<()> {
-    // A surviving function OID/name is insufficient after CREATE OR REPLACE.
-    // Compare the installed body with the exact frozen migration body too.
+    validate_functions(tx, version).await?;
+    validate_schema(tx).await?;
+    validate_accounting(tx).await
+}
+
+fn function_body(name: &str, version: u32) -> Result<&'static str> {
     let migration = include_str!("../../migrations/0036_result_media_owner.sql");
     let clips = include_str!("../../migrations/0075_result_media_clips.sql");
+    // 0075 replaces the intent guard to admit video clips.
+    let (source, marker) = if version >= 75 && name == "guard_result_media_intent" {
+        (clips, format!("CREATE OR REPLACE FUNCTION {name}()"))
+    } else {
+        (migration, format!("CREATE FUNCTION {name}()"))
+    };
+    source
+        .split_once(&marker)
+        .and_then(|(_, tail)| tail.split_once("AS $$"))
+        .and_then(|(_, tail)| tail.split_once("$$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| StoreError::Corrupt("result media guard source missing".into()))
+}
+
+async fn validate_functions(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
+    // A surviving function OID/name is insufficient after CREATE OR REPLACE.
+    // Compare the installed body with the exact frozen migration body too.
     for name in [
         "guard_result_media_storage",
         "guard_result_media_budget",
         "guard_result_media_intent",
     ] {
-        // 0075 replaces the intent guard to admit video clips.
-        let (source, marker) = if version >= 75 && name == "guard_result_media_intent" {
-            (clips, format!("CREATE OR REPLACE FUNCTION {name}()"))
-        } else {
-            (migration, format!("CREATE FUNCTION {name}()"))
-        };
-        let expected = source
-            .split_once(&marker)
-            .and_then(|(_, tail)| tail.split_once("AS $$"))
-            .and_then(|(_, tail)| tail.split_once("$$;"))
-            .map(|(body, _)| body)
-            .ok_or_else(|| StoreError::Corrupt("result media guard source missing".into()))?;
+        let expected = function_body(name, version)?;
         let actual: Option<String> =
             sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure($1)")
                 .bind(format!("{name}()"))
@@ -37,6 +47,10 @@ pub(super) async fn media36_storage_guard(
             ));
         }
     }
+    Ok(())
+}
+
+async fn validate_schema(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     let complete: bool = sqlx::query_scalar(r#"SELECT
       to_regclass('result_media_storage') IS NOT NULL
       AND to_regclass('result_media_budgets') IS NOT NULL
@@ -94,6 +108,10 @@ pub(super) async fn media36_storage_guard(
             "result media owner storage/guards missing or disabled".into(),
         ));
     }
+    Ok(())
+}
+
+async fn validate_accounting(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     let accounted: bool = sqlx::query_scalar(r#"WITH charges AS (
       SELECT 'installation'::TEXT AS scope_key,COALESCE(sum(reserved_bytes),0) AS reserved,COALESCE(sum(retained_bytes),0) AS retained,count(*) AS history FROM result_media_intents
       UNION ALL SELECT 'project/'||project_id::TEXT,COALESCE(sum(reserved_bytes),0),COALESCE(sum(retained_bytes),0),count(*) FROM result_media_intents GROUP BY project_id
@@ -108,4 +126,32 @@ pub(super) async fn media36_storage_guard(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn function_bodies_follow_frozen_migration_boundaries() {
+        for name in [
+            "guard_result_media_storage",
+            "guard_result_media_budget",
+            "guard_result_media_intent",
+        ] {
+            let mut expected = None;
+            for (version, sql) in super::super::MIGRATIONS {
+                if let Some(body) = aq_profiled_state::sql_function_body(sql, name) {
+                    expected = Some(body);
+                }
+                if *version >= 36 {
+                    assert_eq!(
+                        Some(function_body(name, *version as u32).unwrap()),
+                        expected,
+                        "{name} at {version}"
+                    );
+                }
+            }
+        }
+    }
 }

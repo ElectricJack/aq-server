@@ -156,13 +156,7 @@ async fn an_offer_delivers_the_observation_catalog_entry_as_a_module() {
     assert_eq!(retained.bytes, body.len() as u64);
 }
 
-/// An unrouted task with no role: the project's default role on the
-/// project's default level, the startup text in the spec's order, and what
-/// the attempt ran with on its record.
-#[tokio::test]
-async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_default_level() {
-    let c = setup().await;
-    let native = offered(&c).await;
+async fn assert_default_offer(c: &Case, native: &NativeOffer) {
     let manifest = &native.offered.offer.manifest;
     let digest = c.env.snapshot.digest();
     // The unchanged wire: role, level and execution profile by document id,
@@ -184,12 +178,12 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     assert_eq!(manifest.harness.harness.as_str(), roles::HARNESS);
     // The role's operations within the project's ceilings.
     assert_eq!(
-        operations(&native),
+        operations(native),
         ["task.read", "knowledge.read", "source.write"]
     );
     // Platform text first, then the role and its rules, then the task; each
     // joined to the next by one blank line and nothing else.
-    let text = startup_text(&c, &native).await;
+    let text = startup_text(c, native).await;
     let role = c.env.snapshot.role("developer").unwrap();
     let platform = aq_profiles::roles::platform_text(roles::ENVIRONMENT);
     let head = format!(
@@ -226,6 +220,17 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
             "{id}"
         );
     }
+}
+
+/// An unrouted task with no role: the project's default role on the
+/// project's default level, the startup text in the spec's order, and what
+/// the attempt ran with on its record.
+#[tokio::test]
+async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_default_level() {
+    let c = setup().await;
+    let native = offered(&c).await;
+    assert_default_offer(&c, &native).await;
+    let digest = c.env.snapshot.digest();
     // Spec 0014 §7.1: the summary is on the attempt's record and its snapshot is pinned.
     let attempt = native.offered.offer.binding.attempt_id;
     let summary = ran_with(&c, attempt).await.expect("a summary");
