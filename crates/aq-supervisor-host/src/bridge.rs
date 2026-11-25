@@ -33,11 +33,7 @@ pub fn validate_join(c: &CentralPlan, h: &HostPlan) -> Result<()> {
     ensure!(
         c.session == h.session
             && policy == &h.policy
-            && c.profiles.host_plan.digest == h.digest()?
-            && c.profiles.execution == h.execution
-            && c.profiles.adapter == h.harness.adapter
-            && c.profiles.environment == h.harness.environment
-            && c.profiles.startup == h.startup.descriptor
+            && profiles_match(c, h)?
             && c.dispatch_id == h.input.dispatch_id
             && c.host_operation_id == h.input.host_operation_id
             && c.batch.digest()? == h.input.batch.digest
@@ -46,6 +42,14 @@ pub fn validate_join(c: &CentralPlan, h: &HostPlan) -> Result<()> {
     );
     Ok(())
 }
+fn profiles_match(c: &CentralPlan, h: &HostPlan) -> Result<bool> {
+    Ok(c.profiles.host_plan.digest == h.digest()?
+        && c.profiles.execution == h.execution
+        && c.profiles.adapter == h.harness.adapter
+        && c.profiles.environment == h.harness.environment
+        && c.profiles.startup == h.startup.descriptor)
+}
+
 pub(crate) fn permit(c: &CentralPlan, h: &HostPlan, p: &PermitData) -> Result<ExecutionPermit> {
     validate_join(c, h)?;
     p.validate()?;

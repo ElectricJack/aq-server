@@ -1,3 +1,4 @@
+from argparse import Namespace
 import importlib.util
 import json
 from pathlib import Path
@@ -8,6 +9,12 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("usage", Path(__file__).with_name("refresh-provider-usage.py"))
 usage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(usage)
+
+
+def settings(output, account, cache=None, account_id=None):
+    return Namespace(output=output, cwd="/tmp", claude_sdk="sdk", claude="claude",
+                     claude_account=account, codex_account="codex", claude_cache=cache,
+                     claude_account_id=account_id)
 
 
 class UsageTests(unittest.TestCase):
@@ -62,12 +69,12 @@ class UsageTests(unittest.TestCase):
             windows = [usage.window("primary", "Weekly", 52, None)]
             known = {"state": "known", "available_count": 2, "grants": None}
             with patch.object(usage, "claude", side_effect=ValueError()), patch.object(usage, "codex", return_value=(windows, known)), patch.object(usage.time, "time", return_value=1700000000):
-                usage.refresh(path, "/tmp", "sdk", "claude", "owner", "codex")
+                usage.refresh(settings(path, "owner"))
             with patch.object(usage, "claude", side_effect=ValueError()), patch.object(usage, "codex", side_effect=ValueError()), patch.object(usage.time, "time", return_value=1700000050):
-                usage.refresh(path, "/tmp", "sdk", "claude", "owner", "codex")
+                usage.refresh(settings(path, "owner"))
             self.assertEqual(json.loads(path.read_text())["accounts"][0]["reset_credits"]["observed_at_ms"], 1700000000000)
             with patch.object(usage, "claude", side_effect=ValueError()), patch.object(usage, "codex", return_value=(windows, usage.reset_unknown())), patch.object(usage.time, "time", return_value=1700000060):
-                usage.refresh(path, "/tmp", "sdk", "claude", "owner", "codex")
+                usage.refresh(settings(path, "owner"))
             self.assertEqual(json.loads(path.read_text())["accounts"][0]["reset_credits"],
                              {"state": "unknown", "available_count": None, "grants": None, "observed_at_ms": 1700000060000})
 
@@ -79,21 +86,21 @@ class UsageTests(unittest.TestCase):
             path.write_text(json.dumps({"accounts": [old]}))
             cache.write_text(json.dumps({"cachedUsageUtilization": {"accountUuid": "owner-id", "fetchedAtMs": 1700000000000, "utilization": {"seven_day": {"utilization": 20}}}}))
             with patch.object(usage, "claude", side_effect=ValueError()), patch.object(usage, "codex", side_effect=ValueError()), patch.object(usage.time, "time", return_value=1800000000):
-                usage.refresh(path, "/tmp", "sdk", "claude", "owner", "codex", cache, "owner-id")
+                usage.refresh(settings(path, "owner", cache, "owner-id"))
                 account = json.loads(path.read_text())["accounts"][0]
                 self.assertEqual(account["observed_at_ms"], 1700000000000)
                 self.assertEqual(account["reset_credits"], reset)
-                usage.refresh(path, "/tmp", "sdk", "claude", "different", "codex", cache, "wrong-id")
+                usage.refresh(settings(path, "different", cache, "wrong-id"))
                 self.assertEqual(json.loads(path.read_text())["accounts"], [])
 
     def test_failure_retains_original_time_and_never_claims_zero(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "usage.json"
             with patch.object(usage, "codex", return_value=([usage.window("primary", "Weekly", 52, 1800000000)], usage.reset_unknown())), patch.object(usage, "claude", side_effect=ValueError("unavailable")), patch.object(usage.time, "time", return_value=1700000000):
-                self.assertEqual(usage.refresh(path, "/tmp", "sdk", "claude", "claude", "codex"), {"anthropic": "unavailable", "openai": "refreshed"})
+                self.assertEqual(usage.refresh(settings(path, "claude")), {"anthropic": "unavailable", "openai": "refreshed"})
             original = json.loads(path.read_text())
             with patch.object(usage, "codex", side_effect=ValueError("private error")), patch.object(usage, "claude", side_effect=ValueError("private error")):
-                result = usage.refresh(path, "/tmp", "sdk", "claude", "claude", "codex")
+                result = usage.refresh(settings(path, "claude"))
             self.assertEqual(json.loads(path.read_text()), original)
             self.assertEqual(result["openai"], "retained stale reading")
             self.assertNotIn("private error", path.read_text())
@@ -109,7 +116,7 @@ class UsageTests(unittest.TestCase):
                 self.assertIsNone(usage.cached_claude(cache, None))
             output = Path(directory) / "usage.json"
             with patch.object(usage, "claude", side_effect=ValueError()), patch.object(usage, "codex", return_value=([usage.window("primary", "Weekly", 52, None)], usage.reset_unknown())):
-                status = usage.refresh(output, "/tmp", "sdk", "claude", "owner-claude", "codex", cache, "owner")
+                status = usage.refresh(settings(output, "owner-claude", cache, "owner"))
                 self.assertEqual(status["anthropic"], "retained stale reading")
                 self.assertEqual(json.loads(output.read_text())["accounts"][0]["observed_at_ms"], 1700000000000)
 

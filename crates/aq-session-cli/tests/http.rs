@@ -69,50 +69,8 @@ async fn mutate(
                 expires_at_ms: r.expires_at_ms,
             }))
         }
-        Mutation::Control(r) => {
-            f.calls.lock().unwrap().push("control".into());
-            let mut status = f.control.lock().unwrap();
-            status.generation = 1;
-            status.fence_acknowledged = true;
-            status.lease = Some(ControllerLease {
-                terminal: f.terminal,
-                principal_id: Text::new("operator").unwrap(),
-                lease_id: Uuid::new_v4(),
-                generation: 1,
-                issued_at_ms: clock(),
-                expires_at_ms: r.expires_at_ms.min(clock() + f.lease_ms),
-                execution_expires_at_ms: r.expires_at_ms + 10000,
-            });
-            Ok(Json(MutationReply::Control {
-                operation_id: r.operation_id,
-                status: status.clone(),
-            }))
-        }
-        Mutation::OpenEpoch(r) => {
-            assert!(r.expires_at_ms <= clock() + 2000);
-            f.calls.lock().unwrap().push("open_epoch".into());
-            let expires = f
-                .control
-                .lock()
-                .unwrap()
-                .lease
-                .as_ref()
-                .unwrap()
-                .expires_at_ms;
-            let permit = aq_terminal_relay::epoch::Permit {
-                terminal: f.terminal,
-                epoch_id: Uuid::new_v4(),
-                lease_id: r.lease_id,
-                controller_generation: r.expected_controller_generation,
-                expires_at_ms: expires,
-                derivation_version: 1,
-            };
-            *f.permit.lock().unwrap() = Some(permit.clone());
-            Ok(Json(MutationReply::Epoch {
-                operation_id: r.operation_id,
-                permit,
-            }))
-        }
+        Mutation::Control(r) => control(f, r),
+        Mutation::OpenEpoch(r) => open_epoch(f, r),
         Mutation::EpochInput(r) => {
             r.validate().unwrap();
             let permit = f.permit.lock().unwrap().clone().unwrap();
@@ -141,6 +99,58 @@ async fn mutate(
         _ => Err(StatusCode::BAD_REQUEST),
     }
 }
+fn control(
+    f: Fake,
+    r: aq_session_api::AcquireControlRequest,
+) -> Result<Json<MutationReply>, StatusCode> {
+    f.calls.lock().unwrap().push("control".into());
+    let mut status = f.control.lock().unwrap();
+    status.generation = 1;
+    status.fence_acknowledged = true;
+    status.lease = Some(ControllerLease {
+        terminal: f.terminal,
+        principal_id: Text::new("operator").unwrap(),
+        lease_id: Uuid::new_v4(),
+        generation: 1,
+        issued_at_ms: clock(),
+        expires_at_ms: r.expires_at_ms.min(clock() + f.lease_ms),
+        execution_expires_at_ms: r.expires_at_ms + 10000,
+    });
+    Ok(Json(MutationReply::Control {
+        operation_id: r.operation_id,
+        status: status.clone(),
+    }))
+}
+
+fn open_epoch(
+    f: Fake,
+    r: aq_terminal_relay::epoch::Open,
+) -> Result<Json<MutationReply>, StatusCode> {
+    assert!(r.expires_at_ms <= clock() + 2000);
+    f.calls.lock().unwrap().push("open_epoch".into());
+    let expires = f
+        .control
+        .lock()
+        .unwrap()
+        .lease
+        .as_ref()
+        .unwrap()
+        .expires_at_ms;
+    let permit = aq_terminal_relay::epoch::Permit {
+        terminal: f.terminal,
+        epoch_id: Uuid::new_v4(),
+        lease_id: r.lease_id,
+        controller_generation: r.expected_controller_generation,
+        expires_at_ms: expires,
+        derivation_version: 1,
+    };
+    *f.permit.lock().unwrap() = Some(permit.clone());
+    Ok(Json(MutationReply::Epoch {
+        operation_id: r.operation_id,
+        permit,
+    }))
+}
+
 async fn output(
     State(f): State<Fake>,
     axum::extract::Query(q): axum::extract::Query<aq_terminal_relay::api::ViewQuery>,
@@ -253,6 +263,20 @@ fn command(f: &Fake) -> tokio::process::Command {
         .stderr(std::process::Stdio::piped());
     c
 }
+async fn attach_with_input(f: &Fake, bytes: &[u8]) -> std::process::Output {
+    use tokio::io::AsyncWriteExt;
+    let mut child = command(f)
+        .arg("--control")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(bytes).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(8), child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap()
+}
+
 #[tokio::test]
 async fn actual_cli_attach_is_watch_only_by_default_and_json_never_executes_escape_bytes() {
     let (f, task) = fake().await;
@@ -274,22 +298,8 @@ async fn actual_cli_attach_is_watch_only_by_default_and_json_never_executes_esca
 }
 #[tokio::test]
 async fn actual_cli_control_lost_input_reply_stops_without_resending_literal_bytes() {
-    use tokio::io::AsyncWriteExt;
     let (f, task) = fake().await;
-    let mut command = command(&f);
-    command.arg("--control").stdin(std::process::Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"private input sentinel\n")
-        .await
-        .unwrap();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(8), child.wait_with_output())
-        .await
-        .unwrap()
-        .unwrap();
+    let result = attach_with_input(&f, b"private input sentinel\n").await;
     task.abort();
     assert!(!result.status.success());
     assert_eq!(
@@ -359,22 +369,8 @@ async fn actual_cli_logs_and_usage_preserve_typed_unknowns_and_category_subtotal
 
 #[tokio::test]
 async fn actual_cli_epoch_open_has_short_intent_deadline_and_never_falls_back_to_finite_input() {
-    use tokio::io::AsyncWriteExt;
     let (f, task) = fake_with(InputMode::EpochV1, 15000).await;
-    let mut c = command(&f);
-    c.arg("--control").stdin(std::process::Stdio::piped());
-    let mut child = c.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"private epoch input\n")
-        .await
-        .unwrap();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(8), child.wait_with_output())
-        .await
-        .unwrap()
-        .unwrap();
+    let result = attach_with_input(&f, b"private epoch input\n").await;
     task.abort();
     assert!(!result.status.success());
     let calls = f.calls.lock().unwrap();
@@ -385,22 +381,8 @@ async fn actual_cli_epoch_open_has_short_intent_deadline_and_never_falls_back_to
 }
 #[tokio::test]
 async fn actual_cli_accepts_short_control_lease_and_clamps_literal_deadline() {
-    use tokio::io::AsyncWriteExt;
     let (f, task) = fake_with(InputMode::FiniteV1, 1500).await;
-    let mut c = command(&f);
-    c.arg("--control").stdin(std::process::Stdio::piped());
-    let mut child = c.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"private short lease input\n")
-        .await
-        .unwrap();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(8), child.wait_with_output())
-        .await
-        .unwrap()
-        .unwrap();
+    let result = attach_with_input(&f, b"private short lease input\n").await;
     task.abort();
     assert!(!result.status.success());
     assert_eq!(

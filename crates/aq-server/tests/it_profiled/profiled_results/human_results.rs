@@ -1,5 +1,6 @@
 //! Actual SQL result recording and mounted human route, no browser/API fixtures.
 use super::*;
+use crate::common::supervisor::{supervised, supervisor_token};
 use aq_server::profiled_execution::human_results::{self, Page};
 use axum::{
     body::{Body, to_bytes},
@@ -282,96 +283,81 @@ async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart(
     );
 }
 
-/// One GET through the supervisor read nest as `project`'s supervisor (the
-/// global supervisor when `None`), approved by the fixture's owner.
-async fn supervised(
-    f: &Fixture,
-    project: Option<Uuid>,
-    path: &str,
-) -> (StatusCode, serde_json::Value) {
-    use aq_supervisor_control::read::{self, Permit, ReadOwner};
-    use sqlx::Row;
-    let pool = f.db.pool().await;
-    let user = sqlx::query("SELECT email,issuer,subject FROM users WHERE id=$1")
-        .bind(f.actor)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let owner = ReadOwner {
-        id: f.actor,
-        email: user.get("email"),
-        issuer: user.get("issuer"),
-        subject: user.get("subject"),
-    };
-    let auth: read::Auth = std::sync::Arc::new(move |_| {
-        let (pool, owner) = (pool.clone(), owner.clone());
-        Box::pin(async move {
-            let guard = pool
-                .begin()
-                .await
-                .map_err(aq_manual_sessions::Error::from)?;
-            Ok(Permit {
-                owner,
-                project,
-                guard,
-            })
-        })
-    });
-    let response = read::nest(human_results::routes(), auth)
-        .with_state(f.state.clone())
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/supervisor/read{path}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 262144).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
-
 #[tokio::test]
 async fn a_supervisor_reads_only_the_results_its_scope_covers() {
     let (f, _, report) = prepare(true, true).await;
     let auth = context(&f).await;
     let receipt = results::record(&f.state, &auth, &report).await.unwrap();
     let (own, other) = (f.selection.lineage.project_id, Uuid::new_v4());
-    let one = format!(
-        "/api/human/results/{}/revisions/{}",
-        report.report_id,
-        receipt.report_digest.as_str()
+    sqlx::query(
+        "INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')",
+    )
+    .bind(other)
+    .bind(json!({"name":"Other","enabled":true}))
+    .execute(&f.db.pool().await)
+    .await
+    .unwrap();
+    #[cfg(not(feature = "supervisor_full_access"))]
+    let machine = aq_server::build_worker_router(f.state.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    let machine = aq_server::build_worker_router_with_owner_app(
+        f.state.clone(),
+        aq_server::build_admin_router(f.state.clone()),
     );
+    let supervisor = supervisor_token(&f.state, &f.db.pool().await, Some(own)).await;
+    let foreign = supervisor_token(&f.state, &f.db.pool().await, Some(other)).await;
+    let global = supervisor_token(&f.state, &f.db.pool().await, None).await;
+    let detail = json!({"result_id":report.report_id,"revision":receipt.report_digest.as_str()});
+    let mut exact = detail.clone();
+    exact["profile"] = json!("recorded_native_v2");
+    let results = [("result.show", exact), ("result.detail", detail)];
+    let attempt = json!({"attempt_id":report.binding.attempt_id});
     let refused = |(status, body): (StatusCode, serde_json::Value)| {
         assert_eq!(body["error"], "supervisor_refused", "{body}");
-        status
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     };
-    // The project's supervisor reads its own result; the global one any.
-    for scope in [Some(own), None] {
-        let (status, detail) = supervised(&f, scope, &one).await;
-        assert_eq!(status, StatusCode::OK, "{detail}");
-        assert_eq!(detail["items"][0]["report_id"], json!(report.report_id));
-        let (status, page) = supervised(&f, scope, "/api/human/results").await;
+    for (token, has_task_assessment) in [(&supervisor, false), (&global, true)] {
+        for (name, params) in &results {
+            let (status, detail) = supervised(&machine, token, name, params.clone()).await;
+            assert_eq!(status, StatusCode::OK, "{name}: {detail}");
+            let evidence = if *name == "result.show" {
+                assert_eq!(detail["items"][0]["current_report_head"], true, "{detail}");
+                &detail["items"][0]
+            } else {
+                &detail["data"]["revision"]
+            };
+            assert_eq!(evidence["report_id"], json!(report.report_id), "{detail}");
+        }
+        let (status, page) = supervised(&machine, token, "result.list", json!({})).await;
         assert_eq!(status, StatusCode::OK, "{page}");
-        assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
+        assert_eq!(page["items"][0]["report_id"], json!(report.report_id));
+        let (status, view) = supervised(&machine, token, "attempt.show", attempt.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["attempt_id"], json!(report.binding.attempt_id));
+        assert_eq!(
+            view.get("task_assessment").is_some(),
+            has_task_assessment,
+            "{view}"
+        );
     }
-    // Another project's supervisor is refused the result and sees none listed.
-    for path in [one.clone(), one.replacen("/api/human/", "/api/v1/", 1)] {
-        let status = refused(supervised(&f, Some(other), &path).await);
-        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+    let mut legacy = results[1].1.clone();
+    for profile in [None, Some(human_results::COVERAGE)] {
+        if let Some(profile) = profile {
+            legacy["profile"] = json!(profile);
+        }
+        let (status, detail) =
+            supervised(&machine, &supervisor, "result.show", legacy.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+        assert_eq!(detail["coverage"], human_results::COVERAGE);
+        assert_eq!(detail["items"][0]["report_id"], json!(report.report_id));
+        assert!(detail["items"][0].get("origin").is_none(), "{detail}");
     }
-    let (status, page) = supervised(&f, Some(other), "/api/human/results").await;
+    for (name, params) in results {
+        refused(supervised(&machine, &foreign, name, params).await);
+    }
+    refused(supervised(&machine, &foreign, "attempt.show", attempt).await);
+    refused(supervised(&machine, &foreign, "result.list", json!({"project_id":own})).await);
+    let (status, page) = supervised(&machine, &foreign, "result.list", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(page["items"].as_array().unwrap().is_empty(), "{page}");
-    // It cannot widen the page to the project it does not supervise.
-    let widened = format!("/api/human/results?project_id={own}");
-    let status = refused(supervised(&f, Some(other), &widened).await);
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    // A path no supervisor route serves is a supervisor refusal, never a
-    // manual-session one.
-    for scope in [Some(own), None] {
-        let status = refused(supervised(&f, scope, "/api/human/nope").await);
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
 }

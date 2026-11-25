@@ -30,9 +30,7 @@ async fn auth(state: &aq_server::AppState, token: &str) -> worker_api::Authentic
     h.insert("authorization", format!("Bearer {token}").parse().unwrap());
     worker_api::authenticate_context(state, &h).await.unwrap()
 }
-#[tokio::test]
-async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposal() {
-    let mut c = common::native_offer::setup().await;
+async fn install_policy(c: &mut common::native_offer::Case) {
     let mut config = (*c.env.env.state.config).clone();
     let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
     let r = &p.qualified_runtimes[0];
@@ -74,6 +72,8 @@ async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposa
     config.profiled_execution = Some(Arc::new(p));
     c.env.env.state.config = Arc::new(config);
     policies::install(&c.env.env.state).await.unwrap();
+}
+async fn assert_proposal_schema(c: &common::native_offer::Case) {
     let version: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
             .fetch_one(&c.env.env.pool)
@@ -85,6 +85,10 @@ async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposa
         present,
         "ordered current schema must own the proposal tables"
     );
+}
+async fn register_other_node(
+    c: &common::native_offer::Case,
+) -> (Register, worker_api::AuthenticatedNode) {
     let store = &c.env.env.state.store;
     let owner = store
         .list_users()
@@ -136,6 +140,14 @@ async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposa
     registration::register(&c.env.env.state, &b_auth, &register)
         .await
         .unwrap();
+    (register, b_auth)
+}
+#[tokio::test]
+async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposal() {
+    let mut c = common::native_offer::setup().await;
+    install_policy(&mut c).await;
+    assert_proposal_schema(&c).await;
+    let (register, b_auth) = register_other_node(&c).await;
     let (status, body) = common::native_offer::poll_offered(&c).await;
     assert_eq!(status, 200);
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()

@@ -507,6 +507,7 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
     let profiled = ProfiledConfig {
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: runtime.clone(),
             qualification: qualification.clone(),
             capabilities,

@@ -31,10 +31,10 @@ pub async fn author_document<S: Server>(s: &S, record: &SourceRecord) {
 /// missed save is caught up). The engine may not be open yet; that is only
 /// logged, and the next pass tries again.
 pub async fn catch_up<S: Server>(s: &S, record: &SourceRecord) {
-    if ensure_builtin(s.as_ref(), record).await.is_ok()
-        && !no_document(s, record).await
-        && let Err(error) = author_missed(s, &record.id).await
-    {
+    if ensure_builtin(s.as_ref(), record).await.is_err() || no_document(s, record).await {
+        return;
+    }
+    if let Err(error) = author_missed(s, &record.id).await {
         tracing::info!(source = %record.id, %error, "the document is not authored yet");
     }
 }

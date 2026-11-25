@@ -87,15 +87,14 @@ async fn pause(stop: &mut watch::Receiver<bool>, delay: Duration) -> bool {
 /// (a [`Backoff`] from `interval` to `max_backoff`); a success resets it.
 pub async fn run<E, Q, F>(
     mut stop: watch::Receiver<bool>,
-    interval: Duration,
-    max_backoff: Duration,
+    mut backoff: Backoff,
     mut quantum: impl FnMut() -> Q,
     mut failed: F,
 ) where
     Q: Future<Output = Result<(), E>>,
     F: FnMut(&E, Duration),
 {
-    let mut backoff = Backoff::new(interval, max_backoff);
+    let interval = backoff.first;
     loop {
         let delay = match quantum().await {
             Ok(()) => {
@@ -130,15 +129,14 @@ where
         if *stop.borrow() {
             return None;
         }
-        match attempt().await {
+        let error = match attempt().await {
             Ok(value) => return Some(value),
-            Err(error) => {
-                let delay = backoff.fail();
-                failed(&error, delay);
-                if !pause(&mut stop, delay).await {
-                    return None;
-                }
-            }
+            Err(error) => error,
+        };
+        let delay = backoff.fail();
+        failed(&error, delay);
+        if !pause(&mut stop, delay).await {
+            return None;
         }
     }
 }
@@ -189,8 +187,7 @@ mod tests {
         let (c, d) = (calls.clone(), delays.clone());
         let drive = tokio::spawn(run(
             rx,
-            Duration::from_millis(10),
-            Duration::from_millis(40),
+            Backoff::new(Duration::from_millis(10), Duration::from_millis(40)),
             move || {
                 let n = c.fetch_add(1, Ordering::SeqCst);
                 // Three transient storage failures, then the drive goes on.

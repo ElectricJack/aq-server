@@ -21,13 +21,7 @@ impl Actual {
         // external whole-session proof runs after the test process has exited.
         c.env.env._dir.disable_cleanup(true);
         let parent = c.env.env._dir.path();
-        let seed = parent.join("source-seed");
-        std::fs::create_dir(&seed).unwrap();
-        git(&seed, &["init", "-b", "main"]).await;
-        std::fs::write(seed.join("source"), "base fixture bytes\n").unwrap();
-        git(&seed, &["add", "."]).await;
-        git(&seed, &["commit", "-m", "base"]).await;
-        let base = git(&seed, &["rev-parse", "HEAD"]).await;
+        let (seed, base) = seed_repository(parent).await;
         let repo = c.env.frozen.project.binding.repository_id;
         let central = Owner::start(parent, "rc").await;
         central.call(repo,"repo.register",json!({"identity":"phase-retention-actual-fixture","mode":"central","remote_url":seed,"allow_file_transport":true,"allowed_refs":["refs/heads/main"],"allowed_targets":["refs/heads/main"]})).await;
@@ -40,21 +34,7 @@ impl Actual {
         let export=central.call(repo,"artifact.export",json!({"base":oid,"source":oid,"retention_handle":checkpoint["retention_handle"],"confirmed_prerequisites":[]})).await;
         let worker = Owner::start(parent, "rw").await;
         worker.call(repo,"repo.register",json!({"identity":"phase-retention-actual-fixture","mode":"worker","binding_generation":1})).await;
-        let artifact: Uuid = serde_json::from_value(export["artifact_handle"].clone()).unwrap();
-        let incoming = worker
-            .root
-            .join("artifacts/incoming")
-            .join(artifact.to_string());
-        std::fs::create_dir_all(&incoming).unwrap();
-        for file in ["manifest.json", "objects.bundle"] {
-            std::fs::copy(central.artifact(&export).join(file), incoming.join(file)).unwrap();
-        }
-        worker
-            .call(repo, "artifact.import", json!({"artifact_handle":artifact}))
-            .await;
-        let workspace = worker
-            .call(repo, "workspace.create", json!({"base":oid}))
-            .await;
+        let workspace = import_workspace((&central, &worker), repo, &export, &oid).await;
         let mut config = (*c.env.env.state.config).clone();
         let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
         profiled.revision += 1;
@@ -107,4 +87,38 @@ impl Actual {
         );
         (export, manifest, bundle)
     }
+}
+
+async fn seed_repository(parent: &std::path::Path) -> (std::path::PathBuf, String) {
+    let seed = parent.join("source-seed");
+    std::fs::create_dir(&seed).unwrap();
+    git(&seed, &["init", "-b", "main"]).await;
+    std::fs::write(seed.join("source"), "base fixture bytes\n").unwrap();
+    git(&seed, &["add", "."]).await;
+    git(&seed, &["commit", "-m", "base"]).await;
+    let base = git(&seed, &["rev-parse", "HEAD"]).await;
+    (seed, base)
+}
+async fn import_workspace(
+    owners: (&Owner, &Owner),
+    repo: Uuid,
+    export: &Value,
+    oid: &Value,
+) -> Value {
+    let (central, worker) = owners;
+    let artifact: Uuid = serde_json::from_value(export["artifact_handle"].clone()).unwrap();
+    let incoming = worker
+        .root
+        .join("artifacts/incoming")
+        .join(artifact.to_string());
+    std::fs::create_dir_all(&incoming).unwrap();
+    for file in ["manifest.json", "objects.bundle"] {
+        std::fs::copy(central.artifact(export).join(file), incoming.join(file)).unwrap();
+    }
+    worker
+        .call(repo, "artifact.import", json!({"artifact_handle":artifact}))
+        .await;
+    worker
+        .call(repo, "workspace.create", json!({"base":oid}))
+        .await
 }

@@ -1,7 +1,7 @@
 mod logins;
 mod session_login;
 use crate::{AppState, authz::RequireOwner, internal_work, worker_api::authenticate_context};
-use aq_manual_sessions::{Auth, Error, Service};
+use aq_manual_sessions::{Auth, Authentication, Error, Service};
 use axum::{
     Router,
     extract::FromRequestParts,
@@ -40,8 +40,7 @@ pub(super) fn service(state: &AppState) -> Service {
     let sources = aq_manual_sessions::configured_sources(config.profiled_execution.as_ref());
     Service::new(
         state.store.pool.clone(),
-        owner,
-        node,
+        Authentication { owner, node },
         sources,
         state.store.manual_runtime.clone(),
     )
@@ -62,7 +61,9 @@ pub(super) fn supervisor_nests(state: &AppState, owner: Option<Router>) -> Route
         .merge(crate::role_settings::admin_routes())
         .merge(internal_work::admin_routes())
         .merge(crate::playbook_authoring::admin_routes());
-    let human = crate::agent_access::human::routes(state);
+    let human = crate::results_feedback::with_feed(Router::new())
+        .merge(crate::agent_access::human::routes(state))
+        .merge(crate::execution::api::inspection());
     let (clock, pool) = (state.clock.clone(), state.store.pool.clone());
     aq_supervisor_control::machine_routes(human, settings, owner, pool, clock)
 }

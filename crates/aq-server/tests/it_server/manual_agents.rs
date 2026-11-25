@@ -194,9 +194,9 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let node = f.node.node_id;
     // The level a manual session and the supervisor choose from: one
     // candidate per logged-in harness.
-    let level = |rows: &str| {
+    let level = |id: &str, rows: &str| {
         format!(
-            "---\nid: manual-model\nname: Standard\ndescription: Manual fixture level.\n---\n\
+            "---\nid: {id}\nname: Standard\ndescription: Manual fixture level.\n---\n\
              ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
         )
     };
@@ -215,7 +215,15 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(&format!("{claude_row}{codex_row}")),
+        &level("manual-model", &format!("{claude_row}{codex_row}")),
+    )
+    .await;
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "default-codex",
+        &level("default-codex", "| openai | gpt-test | default | codex |\n"),
     )
     .await;
     let snapshot_digest = common::roles::active(&pool).await.digest().to_owned();
@@ -228,16 +236,52 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let worker = build_worker_router(f.state.clone());
     let (status, fleet) = call(&admin, "/api/supervisors", None, None, false).await;
     assert_eq!(status, StatusCode::OK, "{fleet}");
+    let profiles = fleet["profiles"].as_array().unwrap();
+    let offered: Vec<_> = profiles
+        .iter()
+        .filter(|p| p["profile_id"] == "manual-model")
+        .map(|p| p["candidate_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        offered,
+        ["anthropic:fixture-model:medium", "openai:gpt-test:high"]
+    );
+    assert!(profiles.iter().all(|p| p["profile_id"] != "default-codex"));
     let scopes = fleet["supervisors"].as_array().unwrap();
     let project_scope = scopes
         .iter()
         .find(|s| s["project_id"] == project.to_string())
         .unwrap();
     let conversation = project_scope["id"].as_str().unwrap();
-    assert_ne!(
-        conversation,
-        scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+    let global = scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(conversation, global);
+    let global_uri = format!("/api/supervisors/{global}/control");
+    let unsupported = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"default-codex","candidate_id":"openai:gpt-test:default"}});
+    assert_eq!(
+        call(&admin, &global_uri, Some(unsupported), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
     );
+    let claude = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium"}});
+    let (status, saved) = call(&admin, &global_uri, Some(claude), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["profile"],
+        json!({"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium","name":"Standard","provider":"anthropic","model":"fixture-model","reasoning":"medium","harness":"claude"})
+    );
+    let (_, updated) = call(&admin, "/api/supervisors", None, None, false).await;
+    let stored_global = updated["supervisors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == global)
+        .unwrap();
+    assert_eq!(stored_global["enabled"], true);
+    assert_eq!(stored_global["profile"], saved["profile"]);
+    assert!(stored_global.get("unavailable_reason").is_none());
     let uri = format!("/api/supervisors/{conversation}/control");
     let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
     assert_eq!(
@@ -290,7 +334,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(claude_row),
+        &level("manual-model", claude_row),
     )
     .await;
     let unlisted = read().await;
@@ -314,7 +358,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(&format!("{claude_row}{codex_row}")),
+        &level("manual-model", &format!("{claude_row}{codex_row}")),
     )
     .await;
     assert!(read().await.get("unavailable_reason").is_none());
@@ -379,7 +423,12 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         discovery["conversation"]
     );
 
-    let poll = json!({"max_slots":3,"repositories":[repo],"reports":[]});
+    sqlx::query("UPDATE worker_settings SET max_agents=4 WHERE kind='node' AND id=$1")
+        .bind(node.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let poll = json!({"max_slots":4,"repositories":[repo],"reports":[]});
     assert_eq!(
         call(
             &worker,
@@ -498,7 +547,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(claude_row),
+        &level("manual-model", claude_row),
     )
     .await;
     assert_eq!(
@@ -578,20 +627,31 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     .await
     .1;
     assert_eq!(response["sessions"][0]["status"], "preparing");
+    assert_eq!(response["pending_count"], 1, "a new launch gets priority");
     let running = json!({"id":id,"status":"running","stage":"Ready to connect","snapshot":"real fixture screen","acknowledged":[]});
-    let report = json!({"max_slots":3,"repositories":[repo],"reports":[running]});
+    let report = json!({"max_slots":4,"repositories":[repo],"reports":[running]});
+    let (status, leased) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(report.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{leased}");
+    assert_eq!(leased["sessions"][0]["id"], json!(id));
+    assert_eq!(leased["lease_ms"], 45_000);
     assert_eq!(
-        call(
-            &worker,
-            "/v1/worker/manual-agents",
-            Some(report.clone()),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
+        leased["pending_count"], 0,
+        "running work lets native pollers resume"
     );
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
+        .await
+        .unwrap();
+    assert_eq!((view.occupied, view.idle), (1, 3));
+    let manual_slot = leased["sessions"][0]["spec"]["node_slot"].as_u64().unwrap() as u32;
+    assert!(!view.free(manual_slot));
+    assert_eq!((1..=4).filter(|slot| view.free(*slot)).count(), 3);
     let terminal = format!("/api/manual-agents/{id}/terminal");
     let client = Uuid::new_v4();
     let (status, control) = call(
@@ -774,7 +834,10 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         1,
         "removing capacity keeps the running session and queues new sessions"
     );
-    assert_eq!(response["pending_count"], 2);
+    assert_eq!(
+        response["pending_count"], 1,
+        "only the waiting launch asks native pollers to yield"
+    );
     let stop = format!("/api/manual-agents/{id}/stop");
     assert_eq!(
         call(
@@ -798,6 +861,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     .await
     .1;
     assert_eq!(response["sessions"][0]["desired_running"], false);
+    assert_eq!(response["pending_count"], 1);
     let mut stopped = report;
     stopped["reports"][0]["status"] = json!("stopped");
     call(
@@ -808,6 +872,30 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         false,
     )
     .await;
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
+        .await
+        .unwrap();
+    assert_eq!((view.occupied, view.idle), (0, 4));
+    let (status, restored) = call(
+        &admin,
+        &slots,
+        Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":changed["revision"],"slots":1})),
+        None,
+        true,
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    let (status, next_poll) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(poll.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next_poll}");
+    assert_eq!(next_poll["pending_count"], 1);
+    assert_eq!(next_poll["sessions"][0]["id"], json!(next));
+    assert_eq!(next_poll["sessions"][0]["status"], "preparing");
     assert_eq!(
         call(
             &admin,

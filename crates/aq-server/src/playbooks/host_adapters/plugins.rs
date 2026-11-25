@@ -7,13 +7,13 @@ impl Service {
     pub(in crate::playbooks) async fn plugin_dispatch(
         &self,
         owner: &RuntimeOwner,
-        grant: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
         plugin_available: bool,
     ) -> Result<HostResult> {
+        let grant = command.grant;
+        let intent = command.intent;
         let name = command_plugin(&intent.command.name).ok_or(Error::Invalid)?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), grant, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         match stage {
             Some(Stage::Retained(result)) => {
                 tx.commit().await?;
@@ -34,12 +34,8 @@ impl Service {
         self.validated(intent, &result.outcome, &result.output)?;
         self.record(
             &mut tx,
-            grant,
-            revision,
-            intent,
-            &identity,
-            PLUGIN_COMPLETED,
-            &serde_json::to_value(&result)?,
+            command.retained(&identity),
+            EffectReceipt::new(PLUGIN_COMPLETED, &serde_json::to_value(&result)?),
         )
         .await?;
         for event in events {
@@ -52,8 +48,16 @@ impl Service {
             let at = event.observed_at_ms.ok_or(Error::Unknown)?;
             let retention = self.registry().events[&event.contract.name].retention_ms;
             let retain_until = at.saturating_add(i64::try_from(retention).unwrap_or(i64::MAX));
-            self.seal_outbox(&mut tx, row_id, &event, at, Some(retain_until))
-                .await?;
+            self.seal_outbox(
+                &mut tx,
+                OutboxEntry {
+                    row_id,
+                    event: &event,
+                    at,
+                    retention: Some(retain_until),
+                },
+            )
+            .await?;
         }
         if invalid {
             self.queue_plugin_notice(&mut tx, name).await?;

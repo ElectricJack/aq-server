@@ -76,7 +76,11 @@ async fn setup() -> (TestDb, SessionOwner<FixtureVerifier>) {
 async fn started(owner: &SessionOwner<FixtureVerifier>, p: &CentralPlan) -> Receipt {
     owner.prepare(p.clone(), clock(1000)).await.unwrap();
     owner
-        .start(&p.binding().unwrap(), launch(p), 120_000, clock(1000))
+        .start(
+            &p.binding().unwrap(),
+            launch(p),
+            PermitWindow::new(120_000, clock(1000)),
+        )
         .await
         .unwrap()
 }
@@ -130,7 +134,11 @@ async fn central_owner_reopens_committed_permit_without_new_generation() {
         &p
     );
     let replay = owner
-        .start(&p.binding().unwrap(), launch(&p), 120_000, clock(2000))
+        .start(
+            &p.binding().unwrap(),
+            launch(&p),
+            PermitWindow::new(120_000, clock(2000)),
+        )
         .await
         .unwrap();
     assert_eq!(replay.decision, Decision::Replayed);
@@ -149,8 +157,16 @@ async fn central_owner_serializes_start_and_successor_races() {
     assert_eq!(a.unwrap(), b.unwrap());
     let binding = p.binding().unwrap();
     let (a, b) = tokio::join!(
-        owner.start(&binding, launch(&p), 120_000, clock(1000)),
-        owner.start(&binding, launch(&p), 120_000, clock(1000))
+        owner.start(
+            &binding,
+            launch(&p),
+            PermitWindow::new(120_000, clock(1000))
+        ),
+        owner.start(
+            &binding,
+            launch(&p),
+            PermitWindow::new(120_000, clock(1000))
+        )
     );
     let (a, b) = (a.unwrap(), b.unwrap());
     assert_eq!(a.snapshot.run, b.snapshot.run);
@@ -208,7 +224,7 @@ async fn central_owner_expiry_and_cancel_survive_refused_renewal_and_running() {
     let binding = p.binding().unwrap();
     started(&owner, &p).await;
     let renewed = owner
-        .renew(&binding, 1, 120_000, clock(60_000))
+        .renew(&binding, 1, PermitWindow::new(120_000, clock(60_000)))
         .await
         .unwrap();
     assert_eq!(
@@ -216,7 +232,7 @@ async fn central_owner_expiry_and_cancel_survive_refused_renewal_and_running() {
         180_000
     );
     let late = owner
-        .renew(&binding, 2, 120_000, clock(180_000))
+        .renew(&binding, 2, PermitWindow::new(120_000, clock(180_000)))
         .await
         .unwrap();
     assert!(matches!(late.decision, Decision::Refused { .. }));
@@ -245,7 +261,7 @@ async fn central_owner_boot_clock_sequence_deadline_and_identity_fences() {
     started(&owner, &p).await;
     assert!(
         owner
-            .renew(&binding, 1, 120_001, clock(2000))
+            .renew(&binding, 1, PermitWindow::new(120_001, clock(2000)))
             .await
             .is_err()
     );
@@ -262,7 +278,7 @@ async fn central_owner_boot_clock_sequence_deadline_and_identity_fences() {
     ] {
         assert!(matches!(
             owner
-                .renew(&binding, seq, 120_000, time)
+                .renew(&binding, seq, PermitWindow::new(120_000, time))
                 .await
                 .unwrap()
                 .decision,
@@ -273,16 +289,16 @@ async fn central_owner_boot_clock_sequence_deadline_and_identity_fences() {
     foreign.plan_digest = Digest::of(b"foreign");
     assert!(
         owner
-            .renew(&foreign, 1, 120_000, clock(2000))
+            .renew(&foreign, 1, PermitWindow::new(120_000, clock(2000)))
             .await
             .is_err()
     );
     owner
-        .renew(&binding, 1, 120_000, clock(120_000))
+        .renew(&binding, 1, PermitWindow::new(120_000, clock(120_000)))
         .await
         .unwrap();
     let last = owner
-        .renew(&binding, 2, 120_000, clock(230_000))
+        .renew(&binding, 2, PermitWindow::new(120_000, clock(230_000)))
         .await
         .unwrap();
     assert_eq!(last.snapshot.run.permit().unwrap().expires_boot_ms, 301_000);
@@ -297,7 +313,7 @@ async fn central_owner_boot_clock_sequence_deadline_and_identity_fences() {
         .await
         .unwrap();
     let refused = owner
-        .renew(&binding, 3, 120_000, clock(230_002))
+        .renew(&binding, 3, PermitWindow::new(120_000, clock(230_002)))
         .await
         .unwrap();
     assert!(matches!(refused.decision, Decision::Refused { .. }));
@@ -431,7 +447,10 @@ async fn central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit()
     let p = plan();
     started(&owner, &p).await;
     let binding = p.binding().unwrap();
-    let short = owner.renew(&binding, 1, 1000, clock(2000)).await.unwrap();
+    let short = owner
+        .renew(&binding, 1, PermitWindow::new(1000, clock(2000)))
+        .await
+        .unwrap();
     assert_eq!(
         short.decision,
         Decision::Refused {
@@ -440,8 +459,8 @@ async fn central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit()
     );
     assert_eq!(short.snapshot.run.permit().unwrap().sequence, 1);
     let (a, b) = tokio::join!(
-        owner.renew(&binding, 1, 120_000, clock(60_000)),
-        owner.renew(&binding, 1, 120_000, clock(60_000))
+        owner.renew(&binding, 1, PermitWindow::new(120_000, clock(60_000))),
+        owner.renew(&binding, 1, PermitWindow::new(120_000, clock(60_000)))
     );
     let (a, b) = (a.unwrap(), b.unwrap());
     assert!(matches!(

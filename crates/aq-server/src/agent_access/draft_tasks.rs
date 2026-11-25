@@ -83,8 +83,7 @@ impl<'a> Scope<'a> {
             || project.binding.graph_adapter_reference != "aq.graph.configured"
         {
             return Err(Refusal::scope_denied(
-                spec.name,
-                &grant.operation,
+                aq_agent_grants::RequiredGrant::new(spec.name, &grant.operation),
                 a.grants.related(&grant.operation),
             ));
         }
@@ -118,8 +117,7 @@ impl<'a> Scope<'a> {
 
     fn denied(&self) -> Refusal {
         Refusal::scope_denied(
-            self.spec.name,
-            &self.grant.operation,
+            aq_agent_grants::RequiredGrant::new(self.spec.name, &self.grant.operation),
             self.a.grants.related(&self.grant.operation),
         )
     }
@@ -190,9 +188,7 @@ impl<'a> Scope<'a> {
         if let Decision::Deny(r) = aq_agent_grants::check(
             &self.a.grants,
             holder,
-            self.spec.name,
-            &self.grant.operation,
-            target,
+            aq_agent_grants::GrantRequest::new(self.spec.name, &self.grant.operation, target),
         ) {
             return Err(Box::new(r));
         }
@@ -317,7 +313,8 @@ pub(super) async fn admit(
     };
     let (decision, target) = a.authorize(state, spec, &mut serde_json::Map::new()).await;
     let grant = spec.grant.unwrap_or_default();
-    let entry = |d: &Decision| AuditEntry::agent(a.ids, spec.name, grant, target, d, request_id);
+    let checked = aq_agent_grants::GrantRequest::new(spec.name, grant, target);
+    let entry = |d: &Decision| AuditEntry::agent(a.ids, checked, d, request_id);
     if DISPATCHED.try_with(|_| ()).is_err() {
         audit(state, &entry(&decision)).await;
     }

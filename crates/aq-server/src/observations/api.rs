@@ -10,6 +10,12 @@ use axum::{
     routing::{get, post},
 };
 
+type PrivateJson<T> = ([(header::HeaderName, &'static str); 1], Json<T>);
+
+fn no_store<T>(body: T) -> PrivateJson<T> {
+    ([(header::CACHE_CONTROL, "no-store")], Json(body))
+}
+
 pub fn routes(mut state: AppState) -> Router<AppState> {
     state.store = state.store.observation_view();
     Router::new()
@@ -22,13 +28,10 @@ async fn vm_time(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(fact): ApiJson<aq_accounting::vm_time::Fact>,
-) -> std::result::Result<([(header::HeaderName, &'static str); 1], Json<Value>), AppError> {
+) -> std::result::Result<PrivateJson<Value>, AppError> {
     let node = crate::worker_api::authenticate_context(&state, &headers).await?;
     super::vm_time::record(&state, &node, &fact).await?;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(json!({"recorded": true})),
-    ))
+    Ok(no_store(json!({"recorded": true})))
 }
 /// Transport ownership only, not source catalog enrollment or execution authority.
 pub fn transport_routes(mut state: AppState) -> Router<AppState> {
@@ -45,33 +48,19 @@ async fn transport_mutation(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(request): ApiJson<aq_observation_admission::Request>,
-) -> std::result::Result<
-    (
-        [(header::HeaderName, &'static str); 1],
-        Json<aq_observation_admission::Reply>,
-    ),
-    AppError,
-> {
+) -> std::result::Result<PrivateJson<aq_observation_admission::Reply>, AppError> {
     let node = crate::worker_api::authenticate_context(&state, &headers).await?;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(transport::mutate_authenticated(&state, &node, &request).await?),
+    Ok(no_store(
+        transport::mutate_authenticated(&state, &node, &request).await?,
     ))
 }
 async fn transport_status(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> std::result::Result<
-    (
-        [(header::HeaderName, &'static str); 1],
-        Json<aq_observation_admission::Status>,
-    ),
-    AppError,
-> {
+) -> std::result::Result<PrivateJson<aq_observation_admission::Status>, AppError> {
     let node = crate::worker_api::authenticate_context(&state, &headers).await?;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(transport::status_authenticated(&state, &node).await?),
+    Ok(no_store(
+        transport::status_authenticated(&state, &node).await?,
     ))
 }
 pub fn admin_routes(mut state: AppState) -> Router<AppState> {
@@ -81,60 +70,22 @@ pub fn admin_routes(mut state: AppState) -> Router<AppState> {
         .route("/api/observations/sessions/{attempt}/usage", get(usage))
         .with_state(state)
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Page {
-    #[serde(default)]
-    after_sequence: u64,
-    through_sequence: Option<u64>,
-    #[serde(default = "page_limit")]
-    limit: u32,
-}
-fn page_limit() -> u32 {
-    16
-}
 async fn events(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(attempt): Path<Uuid>,
-    Query(page): Query<Page>,
-) -> std::result::Result<
-    (
-        [(header::HeaderName, &'static str); 1],
-        Json<inspection::EventsPage>,
-    ),
-    AppError,
-> {
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(
-            inspection::events(
-                &state,
-                user.id,
-                attempt,
-                page.after_sequence,
-                page.through_sequence,
-                page.limit,
-            )
-            .await?,
-        ),
+    Query(page): Query<inspection::EventPageQuery>,
+) -> std::result::Result<PrivateJson<inspection::EventsPage>, AppError> {
+    Ok(no_store(
+        inspection::events(&state, user.id, attempt, page).await?,
     ))
 }
 async fn usage(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(attempt): Path<Uuid>,
-) -> std::result::Result<
-    (
-        [(header::HeaderName, &'static str); 1],
-        Json<inspection::SessionUsage>,
-    ),
-    AppError,
-> {
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(inspection::usage(&state, user.id, attempt).await?),
-    ))
+) -> std::result::Result<PrivateJson<inspection::SessionUsage>, AppError> {
+    Ok(no_store(inspection::usage(&state, user.id, attempt).await?))
 }
 impl From<Error> for AppError {
     fn from(error: Error) -> Self {
@@ -190,5 +141,5 @@ async fn batch(
         }
     }
     let receipt = ingest_authenticated(&state, &node, &packet).await?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)))
+    Ok(no_store(receipt))
 }

@@ -19,13 +19,11 @@ pub struct CommitMetadata {
 }
 impl CommitMetadata {
     pub(super) fn validate(&self) -> Result<()> {
-        if self.name.is_empty()
-            || self.email.is_empty()
-            || self.message.len() > 65536
-            || self.name.contains(['\n', '\r', '\0', '<', '>'])
-            || self.email.contains(['\n', '\r', '\0', '<', '>'])
-            || self.message.contains('\0')
-        {
+        let valid_identity =
+            |value: &str| !value.is_empty() && !value.contains(['\n', '\r', '\0', '<', '>']);
+        let identity = valid_identity(&self.name) && valid_identity(&self.email);
+        let message = self.message.len() <= 65536 && !self.message.contains('\0');
+        if !identity || !message {
             return Err(DeliveryError::InvalidInput("invalid commit metadata"));
         }
         Ok(())
@@ -178,147 +176,6 @@ pub struct Receipt<T> {
 pub(super) trait WireResult: DeserializeOwned {
     fn validate(&self, context: &OperationContext, operation: &str, params: &Value) -> bool;
 }
-impl WireResult for CandidateResult {
-    fn validate(&self, c: &OperationContext, operation: &str, params: &Value) -> bool {
-        let expected = if operation == "candidate.create" {
-            c.operation_id.to_string()
-        } else {
-            params["candidate_id"].as_str().unwrap_or_default().into()
-        };
-        if self.candidate_id.to_string() != expected
-            || self.retention_handle != self.candidate_id
-            || self.clean_prefix.validate().is_err()
-            || self.clean_prefix.hex.bytes().all(|b| b == b'0')
-            || self.conflicting_paths.len() > 10_000
-            || self
-                .conflicting_paths
-                .iter()
-                .map(|p| p.value.len())
-                .sum::<usize>()
-                > 1024 * 1024
-            || self.conflicting_paths.iter().any(|p| {
-                p.encoding != "hex"
-                    || p.value.is_empty()
-                    || !p.value.len().is_multiple_of(2)
-                    || !p
-                        .value
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            })
-            || self.conflict_path_count < self.conflicting_paths.len()
-            || (!self.conflict_paths_truncated
-                && self.conflict_path_count != self.conflicting_paths.len())
-        {
-            return false;
-        }
-        match self.state {
-            CandidateState::Ready => {
-                self.candidate
-                    .as_ref()
-                    .is_some_and(|v| v.validate().is_ok() && *v == self.clean_prefix)
-                    && self.conflict_step.is_none()
-                    && self.conflicting_paths.is_empty()
-                    && self.conflict_path_count == 0
-                    && !self.conflict_paths_truncated
-            }
-            CandidateState::Conflicted => {
-                self.candidate.is_none()
-                    && self.conflict_step.is_some_and(|step| {
-                        step < 64
-                            && (operation != "candidate.create"
-                                || params["sources"].as_array().is_some_and(|s| step < s.len()))
-                    })
-            }
-        }
-    }
-}
-impl WireResult for PublishResult {
-    fn validate(&self, _: &OperationContext, _: &str, params: &Value) -> bool {
-        match self {
-            Self::Applied {
-                target,
-                old,
-                new,
-                acknowledged_at,
-            } => {
-                params["target"] == *target
-                    && serde_json::to_value(old).ok().as_ref() == Some(&params["expected_old"])
-                    && old.validate().is_ok()
-                    && new.validate().is_ok()
-                    && serde_json::to_value(new).ok().as_ref() == Some(&params["candidate"])
-                    && !new.hex.bytes().all(|b| b == b'0')
-                    && chrono::DateTime::parse_from_rfc3339(acknowledged_at).is_ok()
-            }
-            Self::AlreadyPresent {
-                observed_target,
-                observed_at,
-                caused_by_this_operation,
-            } => {
-                !caused_by_this_operation
-                    && observed_target.validate().is_ok()
-                    && !observed_target.hex.bytes().all(|b| b == b'0')
-                    && chrono::DateTime::parse_from_rfc3339(observed_at).is_ok()
-            }
-            Self::Rejected {
-                reason,
-                observed_target,
-                observed_at,
-            } => {
-                !reason.is_empty()
-                    && observed_target
-                        .as_ref()
-                        .is_none_or(|o| o.validate().is_ok())
-                    && observed_at
-                        .as_ref()
-                        .is_none_or(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
-            }
-        }
-    }
-}
-impl WireResult for ReconcileResult {
-    fn validate(&self, _: &OperationContext, operation: &str, params: &Value) -> bool {
-        if params["target_operation_id"] != self.target_operation_id.to_string()
-            || self
-                .observed_target
-                .as_ref()
-                .is_some_and(|o| o.validate().is_err())
-        {
-            return false;
-        }
-        match (&self.resolution, self.outcome.as_deref()) {
-            (None, Some("indeterminate")) => operation == "operation.reconcile",
-            (
-                Some(Resolution::AlreadyPresent {
-                    observed_target,
-                    observed_at,
-                    caused_by_this_operation,
-                }),
-                None,
-            ) => {
-                operation == "operation.reconcile"
-                    && !caused_by_this_operation
-                    && observed_target.validate().is_ok()
-                    && !observed_target.hex.bytes().all(|b| b == b'0')
-                    && chrono::DateTime::parse_from_rfc3339(observed_at).is_ok()
-            }
-            (
-                Some(Resolution::Resolved {
-                    disposition,
-                    reason,
-                    resolved_at,
-                    ..
-                }),
-                None,
-            ) => {
-                operation == "operation.resolve"
-                    && params["disposition"] == *disposition
-                    && params["reason"] == *reason
-                    && chrono::DateTime::parse_from_rfc3339(resolved_at).is_ok()
-            }
-            _ => false,
-        }
-    }
-}
 impl WireResult for OperationResult {
     fn validate(&self, c: &OperationContext, _: &str, params: &Value) -> bool {
         self.version == 1
@@ -327,66 +184,10 @@ impl WireResult for OperationResult {
             && self.payload["expected_binding_generation"] == c.binding_generation
     }
 }
-pub(super) fn decode<T: WireResult>(
-    raw: Vec<u8>,
-    c: &OperationContext,
-    operation: &str,
-    params: &Value,
-) -> Result<Receipt<T>> {
-    let v: Value = serde_json::from_slice(&raw).map_err(|_| DeliveryError::Protocol)?;
-    if v["protocol_version"] != 1
-        || v["request_id"] != c.operation_id.to_string()
-        || v.get("operation_id")
-            .is_some_and(|id| *id != c.operation_id.to_string())
-        || !v["ok"].is_boolean()
-        || (v.get("result").is_some() == v.get("error").is_some())
-    {
-        return Err(DeliveryError::Protocol);
-    }
-    let operation_state: Option<OperationStatus> = v
-        .get("operation_state")
-        .map(|value| serde_json::from_value(value.clone()))
-        .transpose()
-        .map_err(|_| DeliveryError::Protocol)?;
-    let outcome = if v["ok"] == true {
-        if matches!(operation, "candidate.create" | "publish")
-            && operation_state
-                .as_ref()
-                .is_some_and(|s| *s != OperationStatus::Complete)
-        {
-            return Err(DeliveryError::Protocol);
-        }
-        if matches!(operation, "candidate.create" | "candidate.show")
-            && (v["result"].get("candidate").is_none()
-                || v["result"].get("conflict_step").is_none())
-        {
-            return Err(DeliveryError::Protocol);
-        }
-        if matches!(operation, "candidate.create" | "publish") && v.get("operation_id").is_none() {
-            return Err(DeliveryError::Protocol);
-        }
-        let result: T =
-            serde_json::from_value(v.get("result").ok_or(DeliveryError::Protocol)?.clone())
-                .map_err(|_| DeliveryError::Protocol)?;
-        if !result.validate(c, operation, params) {
-            return Err(DeliveryError::Protocol);
-        }
-        Ok(result)
-    } else {
-        let error: GitError =
-            serde_json::from_value(v.get("error").ok_or(DeliveryError::Protocol)?.clone())
-                .map_err(|_| DeliveryError::Protocol)?;
-        if error.code.is_empty() {
-            return Err(DeliveryError::Protocol);
-        }
-        Err(error)
-    };
-    Ok(Receipt {
-        raw,
-        operation_state,
-        outcome,
-    })
-}
+mod candidate;
+mod envelope;
+mod publication;
+pub(super) use envelope::decode;
 pub(super) async fn exchange(path: &Path, request: &[u8]) -> Result<Vec<u8>> {
     exchange_within(path, request, Duration::from_secs(35)).await
 }

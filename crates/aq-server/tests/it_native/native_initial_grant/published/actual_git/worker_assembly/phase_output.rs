@@ -197,6 +197,51 @@ pub(super) async fn verify(
     let upload = &exchange.request;
     let ack: UploadAck =
         serde_json::from_value(result["phase_output"]["upload_ack"].clone()).unwrap();
+    verify_upload_ack(upload, &ack);
+    verify_watch_pull(result, upload, watched);
+
+    let path = format!(
+        "/api/v1/terminals/{}/tail?subscription_id={}&after_sequence=0",
+        watched.info.terminal.terminal_id, watched.subscription
+    );
+    let (_, response) = human(case, &path, None).await;
+    let tail: aq_server::terminal::tail::TailReply = serde_json::from_value(response).unwrap();
+    assert_eq!(tail.terminal, watched.info.terminal);
+    assert_eq!(tail.subscription_id, watched.subscription);
+    assert!(tail.initial_incomplete && tail.disconnected);
+    assert_eq!(
+        tail.availability,
+        aq_server::terminal::tail::Availability::ResidentTail
+    );
+    assert!(tail.last_observed_at_ms.is_some());
+    let bytes = verify_tail_frames(&tail, upload, watched);
+    assert_eq!(
+        result["phase_output"]["terminal_info"]["terminal"],
+        json!(tail.terminal)
+    );
+    assert!(tail.next_sequence > 0);
+    eprintln!(
+        "bounded accepted output proof: {}",
+        json!({
+            "upload_ack":ack,
+            "subscription_id":watched.subscription,
+            "terminal":tail.terminal,
+            "tail_next_sequence":tail.next_sequence,
+            "tail_disconnected":tail.disconnected,
+            "tail_initial_incomplete":tail.initial_incomplete,
+            "byte_count":bytes.len(),
+            "frames":upload.frames.iter().map(|frame|json!({
+                "sequence":frame.sequence,"byte_length":frame.byte_length,"digest":frame.digest
+            })).collect::<Vec<_>>()
+        })
+    );
+    eprintln!(
+        "actual worker output: real admin Watch, node pull, HTTP200 exact UploadAck, byte/digest/sequence-identical authorized tail after ECHILD; no Snapshot/input"
+    );
+    browser(case, watched).await;
+}
+
+fn verify_upload_ack(upload: &PeerUpload, ack: &UploadAck) {
     ack.validate().unwrap();
     assert_eq!(ack.version, upload.version);
     assert_eq!(ack.capability, upload.capability);
@@ -213,6 +258,8 @@ pub(super) async fn verify(
             && upload.gaps.is_empty()
     );
     assert!(!upload.frames.is_empty());
+}
+fn verify_watch_pull(result: &Value, upload: &PeerUpload, watched: &Watch) {
     let pull: Envelope =
         serde_json::from_value(result["phase_output"]["watch_pull"].clone()).unwrap();
     pull.validate().unwrap();
@@ -223,21 +270,12 @@ pub(super) async fn verify(
     };
     assert_eq!(subscription.terminal, watched.info.terminal);
     assert_eq!(subscription.subscription_id, watched.subscription);
-
-    let path = format!(
-        "/api/v1/terminals/{}/tail?subscription_id={}&after_sequence=0",
-        watched.info.terminal.terminal_id, watched.subscription
-    );
-    let (_, response) = human(case, &path, None).await;
-    let tail: aq_server::terminal::tail::TailReply = serde_json::from_value(response).unwrap();
-    assert_eq!(tail.terminal, watched.info.terminal);
-    assert_eq!(tail.subscription_id, watched.subscription);
-    assert!(tail.initial_incomplete && tail.disconnected);
-    assert_eq!(
-        tail.availability,
-        aq_server::terminal::tail::Availability::ResidentTail
-    );
-    assert!(tail.last_observed_at_ms.is_some());
+}
+fn verify_tail_frames(
+    tail: &aq_server::terminal::tail::TailReply,
+    upload: &PeerUpload,
+    watched: &Watch,
+) -> Vec<u8> {
     assert!(!tail.frames.is_empty());
     let mut bytes = Vec::new();
     for frame in &tail.frames {
@@ -265,30 +303,7 @@ pub(super) async fn verify(
             .windows(2)
             .all(|pair| pair[1].sequence == pair[0].sequence + 1)
     );
-    assert_eq!(
-        result["phase_output"]["terminal_info"]["terminal"],
-        json!(tail.terminal)
-    );
-    assert!(tail.next_sequence > 0);
-    eprintln!(
-        "bounded accepted output proof: {}",
-        json!({
-            "upload_ack":ack,
-            "subscription_id":watched.subscription,
-            "terminal":tail.terminal,
-            "tail_next_sequence":tail.next_sequence,
-            "tail_disconnected":tail.disconnected,
-            "tail_initial_incomplete":tail.initial_incomplete,
-            "byte_count":bytes.len(),
-            "frames":upload.frames.iter().map(|frame|json!({
-                "sequence":frame.sequence,"byte_length":frame.byte_length,"digest":frame.digest
-            })).collect::<Vec<_>>()
-        })
-    );
-    eprintln!(
-        "actual worker output: real admin Watch, node pull, HTTP200 exact UploadAck, byte/digest/sequence-identical authorized tail after ECHILD; no Snapshot/input"
-    );
-    browser(case, watched).await;
+    bytes
 }
 
 /// Optional actual browser against the same daemon runtime that received bytes.

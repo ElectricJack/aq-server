@@ -64,3 +64,30 @@ pub async fn counts(
         max_never_granted,
     })
 }
+
+/// The next held pre-grant attempts for the bounded expiry sweep.
+pub async fn ungranted_candidates(
+    pool: &sqlx::PgPool,
+    after: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<(Uuid, Uuid)>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout='2s'")
+        .execute(&mut *tx)
+        .await?;
+    let candidates = sqlx::query_as(
+        "SELECT a.attempt_id,a.node_id FROM execution_attempts a \
+             JOIN profiled_authority_hot h USING(attempt_id) \
+             WHERE a.kind='profiled_v1' AND a.holds_task \
+             AND h.state->>'status' IN ('offered','preparing') \
+             AND (h.state->'grant' IS NULL OR h.state->'grant'='null'::jsonb) \
+             AND ($1::UUID IS NULL OR a.attempt_id>$1) \
+             ORDER BY a.attempt_id LIMIT $2",
+    )
+    .bind(after)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(candidates)
+}
