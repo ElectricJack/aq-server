@@ -84,9 +84,7 @@ async fn link_export(h: &Held) {
         &h.f.state,
         &mut tx,
         &session,
-        &h.export.0,
-        &h.export.1,
-        &retention,
+        source_exports::LinkEvidence::new(&h.export.0, &h.export.1, &retention),
     )
     .await
     .unwrap();

@@ -409,7 +409,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         retained_source53::validate(&mut tx, supported).await?;
     }
     if supported >= 59 {
-        auto56::validate(&mut tx).await?;
+        auto56::validate(&mut tx, supported).await?;
     }
     if supported >= 66 {
         stopped66::validate(&mut tx, supported).await?;
@@ -420,6 +420,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) inventory_diagnostics: aq_swarm::inventory_diagnostics::Diagnostics,
     pub(crate) manual_runtime: aq_manual_sessions::Runtime,
     // Explicit constructor provenance, never inferred from missing SQL objects.
     #[cfg(feature = "test-support")]
@@ -641,6 +642,7 @@ impl Store {
             Some("aq-terminal-data"),
         );
         Ok(Store {
+            inventory_diagnostics: Default::default(),
             manual_runtime: Default::default(),
             #[cfg(feature = "test-support")]
             fixture_profile: None,

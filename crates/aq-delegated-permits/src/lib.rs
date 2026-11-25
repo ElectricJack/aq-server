@@ -1,3 +1,4 @@
+//! Delegated credential primitives (moved from aq-server to keep its lib under budget).
 use aq_admission_sandbox::sandbox::{
     ContractError, DelegatedPermit, PermitBinding, PermitContext, PermitCredential, PermitScope,
     RunnerOperation,
@@ -25,11 +26,7 @@ impl CredentialKey {
         Self(Zeroizing::new(bytes))
     }
 
-    pub(crate) fn incarnation_credential(
-        &self,
-        permit_id: Uuid,
-        boot: Uuid,
-    ) -> Result<PermitCredential> {
+    pub fn incarnation_credential(&self, permit_id: Uuid, boot: Uuid) -> Result<PermitCredential> {
         if permit_id.is_nil() || boot.is_nil() {
             return Err(ContractError::InvalidShape);
         }
@@ -104,7 +101,7 @@ impl PermitRecord {
         }
     }
 
-    pub(crate) fn verifier(&self) -> [u8; 32] {
+    pub fn verifier(&self) -> [u8; 32] {
         self.verifier
     }
 
@@ -152,7 +149,7 @@ impl PermitRecord {
             .validate_for(current, operation, now_ms)
     }
 
-    pub(crate) fn rebind(&mut self, key: &CredentialKey, boot: Uuid) -> Result<()> {
+    pub fn rebind(&mut self, key: &CredentialKey, boot: Uuid) -> Result<()> {
         let credential = key.incarnation_credential(self.permit_id, boot)?;
         self.binding.node.boot_id = boot;
         self.credential_boot = Some(boot);

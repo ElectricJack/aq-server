@@ -157,28 +157,11 @@ fn validate(matrix: &[CellLimit], levels: &[LevelCell]) -> Result<()> {
         .iter()
         .map(|c| (&c.provider, &c.intelligence_class))
         .collect();
-    if actual.len() != matrix.len() || actual != expected || matrix.len() > 4096 {
+    let valid_size = matrix.len() <= 4096 && actual.len() == matrix.len();
+    if !valid_size || actual != expected {
         return Err(invalid(
             "Save one limit for every supported provider and intelligence class",
         ));
     }
     Ok(())
-}
-
-/// Translate domain failures without coupling settings storage to a server error type.
-pub fn map_error<T>(
-    error: Error,
-    invalid: impl FnOnce(String) -> T,
-    conflict: impl FnOnce(String) -> T,
-    missing: impl FnOnce(String) -> T,
-    database: impl FnOnce(sqlx::Error) -> T,
-    internal: T,
-) -> T {
-    match error {
-        Error::Invalid(message) => invalid(message),
-        Error::Conflict(message) => conflict(message),
-        Error::NotFound(message) => missing(message),
-        Error::Database(error) => database(error),
-        Error::Internal => internal,
-    }
 }

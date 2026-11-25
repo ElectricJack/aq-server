@@ -70,25 +70,32 @@ impl Budgets {
             map.retain(|_, w| w.active > 0 || w.minute == minute);
         }
         let w = map.entry(attempt).or_default();
-        if w.minute != minute {
-            (w.minute, w.requests, w.mutations) = (minute, 0, 0);
-        }
-        if w.active >= self.limits.concurrent {
-            return Err(Exceeded::Concurrent);
-        }
-        if w.requests >= self.limits.per_minute {
-            return Err(Exceeded::Rate);
-        }
-        if mutation && w.mutations >= self.limits.mutations_per_minute {
-            return Err(Exceeded::MutationRate);
-        }
-        w.active += 1;
-        w.requests += 1;
-        w.mutations += u32::from(mutation);
+        w.acquire(self.limits, mutation, minute)?;
         Ok(Permit {
             attempt,
             windows: self.windows.clone(),
         })
+    }
+}
+
+impl Window {
+    fn acquire(&mut self, limits: Limits, mutation: bool, minute: u64) -> Result<(), Exceeded> {
+        if self.minute != minute {
+            (self.minute, self.requests, self.mutations) = (minute, 0, 0);
+        }
+        if self.active >= limits.concurrent {
+            return Err(Exceeded::Concurrent);
+        }
+        if self.requests >= limits.per_minute {
+            return Err(Exceeded::Rate);
+        }
+        if mutation && self.mutations >= limits.mutations_per_minute {
+            return Err(Exceeded::MutationRate);
+        }
+        self.active += 1;
+        self.requests += 1;
+        self.mutations += u32::from(mutation);
+        Ok(())
     }
 }
 

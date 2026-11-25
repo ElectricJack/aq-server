@@ -1,28 +1,15 @@
-//! Immutable pinned policy/budget inputs, not current admission or authorization.
-//! Callers hold current node/attempt ownership and separately fence live facts.
+//! Immutable pinned policy/budget inputs (`aq_profiled_state::continuation_policy`).
 use crate::error::AppError;
-use aq_admission::{ArtifactRef, LaunchBinding, RetainedArtifact};
+use aq_profiled_state::continuation_policy::{self as policy, PolicyError};
 use aq_profiles::SelectionPolicy;
-use aq_selection::BudgetSnapshot;
-use serde_json::Value;
-use sqlx::{Postgres, Row, Transaction};
-#[track_caller]
-fn refused() -> AppError {
-    tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
-    AppError::Conflict("pinned native policy budget unavailable or exhausted".into())
-}
-fn decode(reference: ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, AppError> {
-    let policy = policy_of(&reference, body)?;
-    policy.validate().map_err(|_| refused())?;
-    Ok(policy)
-}
-fn policy_of(reference: &ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, AppError> {
-    if body.is_empty()
-        || body.len() > 2_097_152
-        || aq_admission::Digest::of(body) != reference.digest
-    {
-        return Err(refused());
+fn error(e: PolicyError) -> AppError {
+    match e {
+        PolicyError::Refused => {
+            AppError::Conflict("pinned native policy budget unavailable or exhausted".into())
+        }
+        PolicyError::Internal => AppError::Internal,
     }
+<<<<<<< HEAD
     // The level as the attempt's offer retained it: the document and the
     // selection policy in effect for the launch (the defaults of its
     // snapshot, the level's own keys and the execution profile's limits).
@@ -78,6 +65,8 @@ fn verified_body(
         .verify(&body, descriptor.retained_at_ms)
         .map_err(|_| refused())?;
     Ok(body)
+=======
+>>>>>>> refs/remotes/central/main
 }
 /// The selection policy the attempt's launch pinned; `None` when it cannot be read (spec 0007
 /// Q1). Its limits are the task's retry budget (`replacement::limits`).
@@ -85,25 +74,13 @@ pub(crate) async fn pinned_policy(
     conn: &mut sqlx::PgConnection,
     attempt: uuid::Uuid,
 ) -> Result<Option<SelectionPolicy>, AppError> {
-    let reference: Option<Value> = sqlx::query_scalar(
-        "SELECT launch_manifest->'intelligence_profile' FROM profiled_launches WHERE attempt_id=$1",
-    )
-    .bind(attempt)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|_| AppError::Internal)?;
-    let Some(Ok(reference)) = reference.map(serde_json::from_value::<ArtifactRef>) else {
-        return Ok(None);
-    };
-    let Ok(body) = pinned_body(conn, attempt, &reference, "").await else {
-        return Ok(None);
-    };
-    Ok(policy_of(&reference, &body).ok())
+    policy::pinned_policy(conn, attempt).await.map_err(error)
 }
 pub(crate) async fn load_locked(
-    tx: &mut Transaction<'_, Postgres>,
-    binding: &LaunchBinding,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    binding: &aq_admission::LaunchBinding,
 ) -> Result<SelectionPolicy, AppError> {
+<<<<<<< HEAD
     let row=sqlx::query("SELECT l.launch_binding,l.launch_manifest->'intelligence_profile' AS policy_ref,l.launch_manifest#>>'{bindings,project_id}' AS project,l.launch_manifest#>>'{bindings,graph_id}' AS workspace,l.launch_manifest#>>'{bindings,task_id}' AS task,d.decision#>'{inputs,budget}' AS budget FROM profiled_launches l JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE l.attempt_id=$1 FOR SHARE OF l,d").bind(binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(|| refused())?;
     if row.get::<Value, _>("launch_binding")
         != serde_json::to_value(binding).map_err(|_| AppError::Internal)?
@@ -221,4 +198,7 @@ mod tests {
         corrupt[0] ^= 1;
         assert!(verified_body(&reference, descriptor, Some(corrupt)).is_err());
     }
+=======
+    policy::load_locked(tx, binding).await.map_err(error)
+>>>>>>> refs/remotes/central/main
 }

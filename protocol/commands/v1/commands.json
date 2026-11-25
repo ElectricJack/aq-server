@@ -141,6 +141,62 @@
     {
       "cli": [
         "attempt",
+        "settle-closed-launch"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "attempt.settle_closed_launch",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:8251505f0109dd13f4cafad90cd4e69a23d9dd1ece99b72390b4c4798251a42c",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The attempt's project",
+                "format": "uuid",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why the launch is over, recorded with your identity",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "attempt_id",
+              "operation_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/execution/projects/{project}/attempts/{id}/closed-launch-settlement"
+          }
+        }
+      },
+      "summary": "Settle a launch closed before the agent started whose host evidence shows it is over but not that the harness never ran; refused unless its grant expired, its node restarted, it has no history or effects and its task ref is still at the lease. Recorded with your reason; the task gets an ordinary replacement attempt",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "attempt",
         "show"
       ],
       "grant": "dashboard.read",
@@ -169,6 +225,29 @@
           "route": {
             "method": "GET",
             "path": "/api/execution/attempts/{id}"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:432ef672133f082728574353773c15bdde95b05ca57012b9853827a1bf59eb58",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "attempt_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempt_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/execution/attempts/{id}"
           }
         }
       },
@@ -4379,6 +4458,75 @@
             "method": "GET",
             "path": "/api/v1/results"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:a7a40152504de3d5ea69a325f2885514cccfb644e3543ffab6753d391a79842c",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "media": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "image",
+                  "video",
+                  "none"
+                ]
+              },
+              "mode": {
+                "default": "latest",
+                "enum": [
+                  "latest",
+                  "needs_review",
+                  "following"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "scope": {
+                "description": "project needs project_id",
+                "enum": [
+                  "all_authorized",
+                  "project"
+                ]
+              },
+              "since_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "task_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "until_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/v1/results"
+          }
         }
       },
       "summary": "The results feed",
@@ -4435,7 +4583,7 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
+          "params_digest": "sha256:682e4d4e3c1872379cb4756dfa5be5ee2226e5021f7d92837183302ce7aba96d",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
@@ -4453,7 +4601,8 @@
               },
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -4471,7 +4620,7 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
+          "params_digest": "sha256:682e4d4e3c1872379cb4756dfa5be5ee2226e5021f7d92837183302ce7aba96d",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
@@ -4489,7 +4638,8 @@
               },
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -4722,14 +4872,15 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
+          "params_digest": "sha256:c072894d23c5d6f1e54af32d0e11515fac46e7370302d6b6a9eda7c725a61774",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -4760,14 +4911,15 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
+          "params_digest": "sha256:c072894d23c5d6f1e54af32d0e11515fac46e7370302d6b6a9eda7c725a61774",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -5584,6 +5736,56 @@
         }
       },
       "summary": "A session's observed usage",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "supervisor",
+        "escalate"
+      ],
+      "grant": "message.send",
+      "kind": "mutation",
+      "name": "supervisor.escalate",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:f4fb05aee78f432f54da7c7fb12b1c7367c64267ba9cb77087a155fe14081576",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "decision_needed": {
+                "description": "The decision needed, and why it is not yours to make",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project_id": {
+                "description": "Your project's ID",
+                "format": "uuid",
+                "type": "string"
+              },
+              "task_id": {
+                "description": "The task the decision is about, if any",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "decision_needed"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{id}/escalations"
+          }
+        }
+      },
+      "summary": "Escalate a decision that is not yours to the global supervisor, naming the project, the task if any, and the decision needed (each call posts a message)",
       "target": {
         "rule": "own"
       }
@@ -6444,7 +6646,7 @@
       "principals": {
         "agent": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6465,7 +6667,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6486,7 +6688,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6506,7 +6708,7 @@
           }
         }
       },
-      "summary": "Make one task block another",
+      "summary": "Make one task block another; with resume_held, a task held at a limit waits on it instead",
       "target": {
         "rule": "subject"
       }

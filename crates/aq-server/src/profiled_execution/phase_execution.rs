@@ -144,6 +144,7 @@ async fn replay_preflight(
 ) -> Result<Option<pinned::Pinned>, AppError> {
     Ok(None)
 }
+<<<<<<< HEAD
 
 async fn observe_ready(
     state: &AppState,
@@ -186,3 +187,5 @@ mod tests {
         assert!(require_selected_registry(2, noncanonical.digest.as_str(), &noncanonical).is_err());
     }
 }
+=======
+>>>>>>> refs/remotes/central/main

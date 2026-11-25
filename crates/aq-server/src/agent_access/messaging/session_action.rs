@@ -349,11 +349,13 @@ impl ActionKind for NudgeSession {
         let sent = crate::stall::ports::nudge_as(
             &mut tx,
             &target,
-            p.operation_id,
-            &p.body,
-            false,
+            crate::stall::ports::Nudge {
+                operation_id: p.operation_id,
+                body: &p.body,
+                defer: false,
+                now: now(state),
+            },
             Some(user.id),
-            now(state),
         )
         .await;
         match sent {

@@ -209,7 +209,8 @@ pub async fn read(
 ) -> Result<AuthorityView> {
     load(state, tx, expected, policy, Rows::Snapshot).await
 }
-async fn load(
+/// `load_locked` or `read`, as `rows` says.
+pub async fn load(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     expected: &SessionIdentity,

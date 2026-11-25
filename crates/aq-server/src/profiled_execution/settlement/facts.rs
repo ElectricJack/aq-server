@@ -192,9 +192,7 @@ pub async fn record_facts(state: &AppState, report_id: Uuid) -> Result<Value> {
     let mut tx = super::automatic::begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;
     // The same per-report lock as a playbook's decision on this result.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
-        .bind(format!("aq-auto-settlement:{report_id}"))
-        .execute(&mut *tx)
+    aq_profiled_state::result_reads::lock_settlement(&mut tx, report_id)
         .await
         .map_err(db)?;
     if !super::super::has_delivery_grant(&mut *tx, r.report.binding.attempt_id).await? {

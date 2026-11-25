@@ -25,9 +25,9 @@ def ref(artifact):
     return {"id": artifact["id"], "version": artifact["version"], "digest": artifact["digest"]}
 
 
-def definition(ident, version, value=None, body=None, kind="definition"):
+def definition(ident, version, value=None, body=None):
     body = repin.canonical(value) if body is None else body
-    return {"artifact": {"id": ident, "version": version, "digest": repin.sha(body)}, "body": body, "kind": kind}
+    return {"artifact": {"id": ident, "version": version, "digest": repin.sha(body)}, "body": body, "kind": "definition"}
 
 
 class Fixture:
@@ -113,6 +113,17 @@ class RepinTests(unittest.TestCase):
         # A pin without `bytes` keeps that shape.
         self.assertEqual(json.loads(bodies[ENVIRONMENT]["body"])["helper"], {"artifact": pin["artifact"], "path": pin["path"]})
         self.assertNotIn(OLD_T, self.f.output("config.toml").replace(OPAQUE_BYTES, ""))
+
+    def test_parent_uses_final_digest_when_environment_precedes_template(self):
+        bodies = self.f.bodies
+        by_id = {b["artifact"]["id"]: b for b in bodies}
+        first = [by_id[ENVIRONMENT], by_id[TEMPLATE], by_id[INVENTORY]]
+        reordered = first + [b for b in bodies if b not in first]
+        config = self.f.config.read_text()
+        self.f.config.write_text(config.replace(repin.toml_value(bodies), repin.toml_value(reordered)))
+        self.f.run("--old-template-digest", OLD_T, "--template-digest", NEW_T,
+                   "--helper-path", str(self.f.helper))
+        self.check_chain(*self.result(), "10")
 
     def test_node_files_follow(self):
         self.f.run("--template-digest", NEW_T, "--old-template-digest", OLD_T, "--helper-path", str(self.f.helper))

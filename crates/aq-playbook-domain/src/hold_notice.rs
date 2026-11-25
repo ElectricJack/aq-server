@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 /// The commands a supervisor can answer a hold with. Names only: each
 /// command's own contract is in the command registry.
-pub const COMMANDS: &str = "Commands that apply to a held task: task.work (the hold and its reasons), task.history (its attempts), task.retry (a new attempt once the cause is resolved), attempt.abandon (release a claim whose attempt will not finish), task.edit (change the task) and task.cancel (end it).";
+pub const COMMANDS: &str = "Commands that apply to a held task: task.work (the hold and its reasons), task.history (its attempts), task.retry (a new attempt), task.create (a task that fixes the cause, for every task it holds back), task.dependency.add with \"resume_held\": true (make this task wait on that fix; it resumes when the fix completes), supervisor.escalate (a decision that is not yours to make), attempt.abandon (release a claim whose attempt will not finish), task.edit (change the task) and task.cancel (end it).";
 
 /// One attempt of the task, newest first, as a line of the notice.
 fn attempt_line((attempt, outcome, stopped, holds): (Uuid, Option<String>, bool, bool)) -> String {
@@ -63,11 +63,30 @@ pub async fn attempts(db: &mut PgConnection, task: Uuid, room: usize) -> Result<
 pub async fn complete(
     db: &mut PgConnection,
     mut body: String,
+    project: Uuid,
     task: Uuid,
     result: Option<Uuid>,
 ) -> Result<String> {
     let log = match result {
-        Some(result) => delivery_store::held_check_log(db, result).await?,
+        Some(result) => {
+            // result.detail reads the report revision pin, with no profile parameter.
+            let revision: Option<String> = sqlx::query_scalar(
+                "SELECT p.report_revision FROM result_revision_pins p
+                 JOIN profiled_result_reports r ON r.report_id=p.report_id AND r.report_digest=p.report_revision
+                 WHERE p.project_id=$1 AND p.task_id=$2 AND p.report_id=$3",
+            )
+            .bind(project)
+            .bind(task)
+            .bind(result)
+            .fetch_optional(&mut *db)
+            .await?;
+            if let Some(revision) = revision {
+                let request =
+                    serde_json::json!({"params":{"result_id":result,"revision":revision}});
+                body.push_str(&format!("\n\nRead the exact recorded result and its checks using result.detail with this command request: {request}."));
+            }
+            delivery_store::held_check_log(db, result).await?
+        }
         None => None,
     };
     let room = delivery_store::SUPERVISOR_MESSAGE_BYTES / 4;
@@ -106,6 +125,9 @@ mod tests {
             "task.work",
             "task.history",
             "task.retry",
+            "task.create",
+            "task.dependency.add with \"resume_held\": true",
+            "supervisor.escalate",
             "attempt.abandon",
             "task.edit",
             "task.cancel",
