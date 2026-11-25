@@ -474,6 +474,28 @@ fn byte_range(value: &str, total: usize) -> Option<std::ops::Range<usize>> {
 #[cfg(test)]
 mod range_tests {
     use super::*;
+
+    fn content(
+        root: &Arc<super::super::files::Root>,
+        artifact: Uuid,
+        mime: media::Mime,
+    ) -> super::super::Content {
+        let bytes = b"0123456789".to_vec();
+        let digest = media::Digest::of(&bytes);
+        super::super::Content {
+            descriptor: media::Variant {
+                digest: digest.clone(),
+                bytes: bytes.len() as u64,
+                mime,
+                width: 1,
+                height: 1,
+            },
+            receipt_digest: digest,
+            bytes,
+            _guard: root.active(artifact, false).unwrap(),
+        }
+    }
+
     #[test]
     fn single_byte_ranges_parse_and_clamp() {
         assert_eq!(byte_range("bytes=0-9", 100), Some(0..10));
@@ -520,22 +542,12 @@ mod range_tests {
                 &b""[..],
             ),
         ] {
-            let bytes = b"0123456789".to_vec();
-            let digest = media::Digest::of(&bytes);
-            let content = super::super::Content {
-                descriptor: media::Variant {
-                    digest: digest.clone(),
-                    bytes: bytes.len() as u64,
-                    mime,
-                    width: 1,
-                    height: 1,
-                },
-                receipt_digest: digest,
-                bytes,
-                _guard: root.active(artifact, false).unwrap(),
-            };
             let budget = Arc::new(Semaphore::new(1));
-            let response = content_response(content, slot(&budget).unwrap(), range);
+            let response = content_response(
+                content(&root, artifact, mime),
+                slot(&budget).unwrap(),
+                range,
+            );
             assert_eq!(response.status(), status);
             if status == StatusCode::RANGE_NOT_SATISFIABLE {
                 assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
@@ -553,6 +565,26 @@ mod range_tests {
             assert_eq!(budget.available_permits(), 0);
             assert!(root.active(artifact, true).is_err());
             drop(frame);
+            assert_eq!(budget.available_permits(), 1);
+            assert!(root.active(artifact, true).is_ok());
+        }
+    }
+
+    #[test]
+    fn dropping_unread_content_releases_reader_and_admission_guards() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = super::super::files::Root::open(directory.path(), Uuid::new_v4()).unwrap();
+        let artifact = Uuid::new_v4();
+        let budget = Arc::new(Semaphore::new(1));
+        for range in [None, Some("bytes=2-4")] {
+            let response = content_response(
+                content(&root, artifact, media::Mime::Mp4),
+                slot(&budget).unwrap(),
+                range,
+            );
+            assert_eq!(budget.available_permits(), 0);
+            assert!(root.active(artifact, true).is_err());
+            drop(response);
             assert_eq!(budget.available_permits(), 1);
             assert!(root.active(artifact, true).is_ok());
         }
