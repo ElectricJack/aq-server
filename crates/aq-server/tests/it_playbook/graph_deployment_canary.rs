@@ -174,20 +174,7 @@ impl Canary {
                 &self.container,
             ]));
             if health == "healthy" {
-                let address =
-                    command(docker(&self.directory).args(["port", &self.container, "8741/tcp"]));
-                assert!(address.starts_with("127.0.0.1:"));
-                reqwest::Client::builder()
-                    .no_proxy()
-                    .timeout(Duration::from_secs(5))
-                    .build()
-                    .unwrap()
-                    .get(format!("http://{address}/health/ready"))
-                    .send()
-                    .await
-                    .unwrap()
-                    .error_for_status()
-                    .unwrap();
+                self.assert_ready_endpoint().await;
                 // A fresh tick records the successful provider observation.
                 tick(&self.plugin, &self.directory);
                 return;
@@ -197,6 +184,22 @@ impl Canary {
         panic!("disposable Graph failed to reach readiness");
     }
 
+    async fn assert_ready_endpoint(&self) {
+        let address = command(docker(&self.directory).args(["port", &self.container, "8741/tcp"]));
+        assert!(address.starts_with("127.0.0.1:"));
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/health/ready"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+
     async fn healthy(&self, run: &str, revision: &str, generation: u64, provider: &str) -> Value {
         self.finish(run, "healthy").await;
         let observed = self.receipt(run, "healthy").await.unwrap();
@@ -204,17 +207,18 @@ impl Canary {
         assert_eq!(observed["generation"], generation);
         assert_eq!(observed["revision"], revision);
         assert_eq!(observed["provider_id"], provider);
-        assert_eq!(observed["image_digest"], evidence["image_digest"]);
-        assert_eq!(observed["image_id"], evidence["image_id"]);
-        assert_eq!(observed["observed_digest"], evidence["image_digest"]);
-        assert_eq!(
-            observed["source_archive_digest"],
-            evidence["source_archive_digest"]
-        );
-        assert_eq!(
-            observed["image_archive_digest"],
-            evidence["image_archive_digest"]
-        );
+        for (observed_field, evidence_field) in [
+            ("image_digest", "image_digest"),
+            ("image_id", "image_id"),
+            ("observed_digest", "image_digest"),
+            ("source_archive_digest", "source_archive_digest"),
+            ("image_archive_digest", "image_archive_digest"),
+        ] {
+            assert_eq!(
+                observed[observed_field], evidence[evidence_field],
+                "{observed_field}"
+            );
+        }
         assert_eq!(
             command(docker(&self.directory).args([
                 "inspect",
@@ -235,6 +239,18 @@ impl Canary {
 
 fn proof_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/graph-deployment")
+}
+
+fn deployment_artifact(root: &Path, service: &Service) -> aq_playbook_host::model::Artifact {
+    let playbook = root.join("playbook");
+    seal(&Workspace {
+        markdown: fs::read_to_string(playbook.join("source.md")).unwrap(),
+        record: serde_json::from_value(read(&playbook.join("record.json"))).unwrap(),
+        catalog: service.registry().clone(),
+        facts: serde_json::from_value(read(&playbook.join("facts.json"))).unwrap(),
+        draft: read(&playbook.join("draft.json")),
+    })
+    .unwrap_or_else(|faults| panic!("{faults:?}"))
 }
 
 async fn prepare() -> Canary {
@@ -298,15 +314,7 @@ async fn prepare() -> Canary {
         )
         .await
         .unwrap();
-    let playbook = root.join("playbook");
-    let artifact = seal(&Workspace {
-        markdown: fs::read_to_string(playbook.join("source.md")).unwrap(),
-        record: serde_json::from_value(read(&playbook.join("record.json"))).unwrap(),
-        catalog: service.registry().clone(),
-        facts: serde_json::from_value(read(&playbook.join("facts.json"))).unwrap(),
-        draft: read(&playbook.join("draft.json")),
-    })
-    .unwrap_or_else(|faults| panic!("{faults:?}"));
+    let artifact = deployment_artifact(&root, &service);
     let driver = start(&service, &f).await;
     driver.install(artifact.clone()).await.unwrap();
     let activation = driver
