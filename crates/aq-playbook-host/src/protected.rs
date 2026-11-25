@@ -33,45 +33,50 @@ impl Drop for KeyFile {
 /// Reads an operator-owned regular private file through a no-follow fd. Directory
 /// placement remains an operator responsibility; never use agent-writable roots.
 pub fn read_keyring(path: &Path) -> Result<ProtectionKeyring, Error> {
-    let load = || -> Option<ProtectionKeyring> {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(path)
-            .ok()?;
-        let meta = file.metadata().ok()?;
-        if !meta.is_file()
-            || meta.uid() != geteuid().as_raw()
-            || meta.permissions().mode() & 0o077 != 0
-            || meta.len() > 4096
-        {
-            return None;
-        }
-        let mut bytes = Zeroizing::new(Vec::new());
-        file.take(4097).read_to_end(&mut bytes).ok()?;
-        if bytes.len() > 4096 {
-            return None;
-        }
-        let mut config: KeyFile = serde_json::from_slice(&bytes).ok()?;
-        if config.keys.is_empty()
-            || config.keys.len() > 16
-            || !config.keys.contains_key(&config.active_key_id)
-            || config
-                .keys
-                .keys()
-                .any(|id| id.is_empty() || id.len() > 128 || id.contains('\0'))
-        {
+    let bytes = key_file(path).ok_or(Error::Invalid)?;
+    let config: KeyFile = serde_json::from_slice(&bytes).map_err(|_| Error::Invalid)?;
+    config.decode().ok_or(Error::Invalid)
+}
+
+fn key_file(path: &Path) -> Option<Zeroizing<Vec<u8>>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    let owned = meta.is_file() && meta.uid() == geteuid().as_raw();
+    let private = meta.permissions().mode() & 0o077 == 0 && meta.len() <= 4096;
+    if !owned || !private {
+        return None;
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(4097).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > 4096 {
+        return None;
+    }
+    Some(bytes)
+}
+
+impl KeyFile {
+    fn decode(mut self) -> Option<ProtectionKeyring> {
+        let bounded =
+            (1..=16).contains(&self.keys.len()) && self.keys.contains_key(&self.active_key_id);
+        if !bounded || !self.keys.keys().all(|id| valid_id(id)) {
             return None;
         }
         let mut keys = BTreeMap::new();
-        for (id, value) in &mut config.keys {
+        for (id, value) in &mut self.keys {
             let decoded = Zeroizing::new(hex::decode(&*value).ok()?);
             value.zeroize();
             keys.insert(id.clone(), decoded.as_slice().try_into().ok()?);
         }
-        ProtectionKeyring::new(config.active_key_id.clone(), keys).ok()
-    };
-    load().ok_or(Error::Invalid)
+        ProtectionKeyring::new(self.active_key_id.clone(), keys).ok()
+    }
+}
+
+fn valid_id(id: &str) -> bool {
+    (1..=128).contains(&id.len()) && !id.contains('\0')
 }
 /// Engine session deadlines, from `[playbooks.engine_timeouts]`: one engine
 /// statement, one lock wait and the whole engine open, in milliseconds.
@@ -133,10 +138,8 @@ pub fn storage(
     statement_timeout: Duration,
     lock_timeout: Duration,
 ) -> Result<PostgresStorage, Error> {
-    if statement_timeout.as_millis() == 0
-        || lock_timeout.as_millis() == 0
-        || lock_timeout > statement_timeout
-    {
+    let positive = statement_timeout.as_millis() > 0 && lock_timeout.as_millis() > 0;
+    if !positive || lock_timeout > statement_timeout {
         return Err(Error::Invalid);
     }
     let mut configure = || -> Result<(), postgres::Error> {

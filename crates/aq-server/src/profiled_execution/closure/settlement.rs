@@ -28,7 +28,7 @@ use crate::{
     },
 };
 use aq_admission::{ArtifactRef, Digest, LaunchBinding, Text, granted_closure};
-use aq_machine_control::lapse;
+use aq_machine_control::{closed_launch, lapse};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -58,7 +58,13 @@ pub(crate) fn reference(id: String, value: &impl Serialize) -> Result<ArtifactRe
     })
 }
 
-pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement, AppError> {
+/// With an owner's `attest`ation (`aq_machine_control::closed_launch`) a closure that does not
+/// prove nonstart settles too, when every condition of it holds under these locks.
+pub async fn settle(
+    state: &AppState,
+    attempt: Uuid,
+    attest: Option<&closed_launch::Attestation>,
+) -> Result<ClosureSettlement, AppError> {
     let mut tx = state.store.pool.begin().await.map_err(database)?;
     for sql in [
         "SET LOCAL lock_timeout='500ms'",
@@ -77,6 +83,9 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     // has expired (`aq_machine_control::lapse`).
     let binding = match &closure {
         Some(closure) => closure.get("binding"),
+        None if attest.is_some() => {
+            return Ok(ClosureSettlement::Held(closed_launch::NOT_HOST_STOPPED));
+        }
         None => match lapse::pending(&mut tx, attempt).await.map_err(mapped)? {
             Some((binding, _)) => binding,
             None => return Ok(ClosureSettlement::Unchanged),
@@ -119,8 +128,12 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         if request.binding != binding {
             return Err(AppError::Internal);
         }
-        if !request.evidence.proves_never_started() {
-            return Ok(ClosureSettlement::Held("closure_does_not_prove_nonstart"));
+        if attest.is_some() || !request.evidence.proves_never_started() {
+            let now = (state.clock)().timestamp_millis();
+            let checked = closed_launch::check(&mut tx, attempt, attest, now).await;
+            if let Err(code) = checked.map_err(mapped)? {
+                return Ok(ClosureSettlement::Held(code));
+            }
         }
     } else {
         // Sampled under the locks Started and renewal take: both refuse an expired grant, so
@@ -136,22 +149,10 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
             return Ok(ClosureSettlement::Unchanged);
         }
     }
-    let history: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM source_transfers WHERE attempt_id=$1)",
-    )
-    .bind(attempt)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(database)?;
-    if history {
-        return Ok(ClosureSettlement::Held("closure_has_execution_history"));
-    }
-    // Effects: no AQ-mediated effect may exist at all for a never-started launch.
-    if agent_effects_present(&mut tx, attempt).await? {
-        return Ok(ClosureSettlement::Held("closure_effects_present"));
+    // Neither execution history nor any AQ-mediated effect may exist for a never-started launch.
+    let used = closed_launch::used(&mut tx, attempt).await;
+    if let Some(code) = used.map_err(mapped)? {
+        return Ok(ClosureSettlement::Held(code));
     }
     // Retention: the attempt's own verified central export (its whole input).
     let linked =
@@ -210,41 +211,6 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     Ok(ClosureSettlement::Settled)
 }
 
-/// Whether the attempt's agent made any AQ-mediated effect: a graph operation, or mail sent
-/// from its session (a retry or closure would leave or repeat it).
-pub(crate) async fn agent_effects_present(
-    conn: &mut sqlx::PgConnection,
-    attempt: Uuid,
-) -> Result<bool, AppError> {
-    let operations: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(database)?;
-    let agent: Option<Value> =
-        sqlx::query_scalar("SELECT binding FROM agent_launch_bindings WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(database)?;
-    let mailed = match &agent {
-        None => false,
-        Some(binding) => {
-            let key = aq_agent_api::digest(&json!({"kind":"session","binding":binding}))
-                .map_err(|_| AppError::Internal)?;
-            sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM mailbox_operations WHERE sender_key=$1)",
-            )
-            .bind(key)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(database)?
-        }
-    };
-    Ok(operations != 0 || mailed)
-}
-
 /// Settles a closed launch, then releases its task claim through B4 when B4
 /// admits a replacement: the claim of a never-started attempt is what keeps
 /// its node from re-registering (the incarnation guard only accepts stopped
@@ -254,9 +220,10 @@ pub(crate) async fn agent_effects_present(
 pub async fn settle_and_release(
     state: &AppState,
     attempt: Uuid,
+    attest: Option<&closed_launch::Attestation>,
 ) -> Result<ClosureSettlement, AppError> {
     use crate::profiled_execution::replacement::{self, Assessment};
-    let settled = settle(state, attempt).await?;
+    let settled = settle(state, attempt, attest).await?;
     if matches!(settled, ClosureSettlement::Held(_)) {
         return Ok(settled);
     }

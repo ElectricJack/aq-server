@@ -1,6 +1,6 @@
 //! Agent task-comment routes (protocol/agent-comments/v1) under the real
 //! per-attempt credential: an agent comments on and reads only its own task.
-use crate::messaging::{send, setup_with};
+use crate::messaging::{Env, send, setup_with};
 use aq_task_comments::{self as comments, Author, Thread};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -14,6 +14,13 @@ fn uuid(v: &Value) -> Uuid {
 async fn agent_adds_and_lists_only_its_own_task_thread() {
     let e = setup_with(Some(json!([{"operation":"comment.write","scope":"task:subtree"},{"operation":"comment.read","scope":"project:self"}]))).await;
     let (project, task) = (uuid(&e.binding["project_id"]), uuid(&e.binding["task_id"]));
+    let op = verify_comment_and_replay(&e, task).await;
+    verify_input_limits(&e).await;
+    verify_thread_isolation(&e, project, task).await;
+    verify_paging(&e, op).await;
+    verify_revocation(&e).await;
+}
+async fn verify_comment_and_replay(e: &Env, task: Uuid) -> Uuid {
     let op = Uuid::new_v4();
     let request = json!({"api_version":1,"operation_id":op,"body":"Finding: the adapter drops `executions`."});
     let (status, added) = send(
@@ -50,7 +57,9 @@ async fn agent_adds_and_lists_only_its_own_task_thread() {
         (StatusCode::CONFLICT, json!("id_conflict")),
         "{body}"
     );
-
+    op
+}
+async fn verify_input_limits(e: &Env) {
     // Bounds, versions and authentication.
     for (body, expected) in [
         (
@@ -81,7 +90,8 @@ async fn agent_adds_and_lists_only_its_own_task_thread() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-
+}
+async fn verify_thread_isolation(e: &Env, project: Uuid, task: Uuid) {
     // The owner's comment on this task is visible; other tasks' threads are not.
     let now = chrono::Utc::now();
     let owner = Author::Owner {
@@ -129,7 +139,8 @@ async fn agent_adds_and_lists_only_its_own_task_thread() {
     );
     assert_eq!(page["items"][0]["author"]["kind"], "owner");
     assert_eq!(page["next_cursor"], Value::Null);
-
+}
+async fn verify_paging(e: &Env, op: Uuid) {
     // Paging by the opaque position.
     let (_, first) = send(
         &e.app,
@@ -162,7 +173,8 @@ async fn agent_adds_and_lists_only_its_own_task_thread() {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
-
+}
+async fn verify_revocation(e: &Env) {
     // A revoked credential can neither read nor write.
     sqlx::query("UPDATE agent_launch_bindings SET revoked=TRUE")
         .execute(&e.pool)

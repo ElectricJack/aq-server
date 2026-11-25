@@ -30,26 +30,38 @@ pub struct GitAuthor {
 
 impl GitAuthor {
     pub fn validate(&self) -> Result<()> {
-        let safe = |c: char| !c.is_control() && !matches!(c, '<' | '>');
-        // Git strips these characters at both ends of a signature field.
-        let stripped = |c: char| {
-            c.is_ascii_whitespace() || matches!(c, ',' | ':' | ';' | '<' | '>' | '"' | '\'' | '\\')
-        };
-        let preserves_edges = |s: &str| !s.starts_with(stripped) && !s.ends_with(stripped);
         require(
-            !self.name.trim().is_empty()
-                && self.name.chars().count() <= 120
-                && self.name.chars().all(safe)
-                && preserves_edges(&self.name)
-                && self.email.len() <= 254
-                && self.email.chars().all(|c| safe(c) && !c.is_whitespace())
-                && preserves_edges(&self.email)
-                && self.email.split_once('@').is_some_and(|(local, domain)| {
-                    !local.is_empty() && !domain.is_empty() && !domain.contains('@')
-                }),
+            valid_name(&self.name) && valid_email(&self.email),
             "invalid task git author",
         )
     }
+}
+fn signature_char(c: char) -> bool {
+    !c.is_control() && !matches!(c, '<' | '>')
+}
+fn preserves_edges(s: &str) -> bool {
+    // Git strips these characters at both ends of a signature field.
+    let stripped = |c: char| {
+        c.is_ascii_whitespace() || matches!(c, ',' | ':' | ';' | '<' | '>' | '"' | '\'' | '\\')
+    };
+    !s.starts_with(stripped) && !s.ends_with(stripped)
+}
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.chars().count() <= 120
+        && name.chars().all(signature_char)
+        && preserves_edges(name)
+}
+fn valid_email(email: &str) -> bool {
+    let address = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+    });
+    address
+        && email.len() <= 254
+        && email
+            .chars()
+            .all(|c| signature_char(c) && !c.is_whitespace())
+        && preserves_edges(email)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

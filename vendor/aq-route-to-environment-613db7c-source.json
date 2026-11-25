@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "source_repository": "aq-playbooks",
+  "source_revision": "613db7c",
+  "publication_profile": "The route-to-environment authoring example (crates/aq-playbooks-compiler/authoring-examples/route-to-environment of aq-playbooks 613db7c, PR #14): the routing document of spec 0017 section 5.4 against catalog 2.5.0. Read only by tests compiled with the cargo features delivery_playbook and project_environments.",
+  "vendor_root": "vendor/aq-route-to-environment-613db7c",
+  "files": [
+    {
+      "path": "CATALOG.md",
+      "mode": "100644",
+      "bytes": 10685,
+      "sha256": "bf5b5314248b068deee763d27c3be31786fb56f4003646a0286b0b3b4df73949"
+    },
+    {
+      "path": "cases/continuation_keeps_environment.json",
+      "mode": "100644",
+      "bytes": 2692,
+      "sha256": "803ec675f33012bcfa3fccc903906a4c141a4db8d9883ef843598234c5cf5f6f"
+    },
+    {
+      "path": "cases/default_fits.json",
+      "mode": "100644",
+      "bytes": 2685,
+      "sha256": "58c086fe0bbe73d7b37c0bf1f58f9639139394cb891bfff0e5ce66ed073777fb"
+    },
+    {
+      "path": "cases/fewest_extras.json",
+      "mode": "100644",
+      "bytes": 3298,
+      "sha256": "ca2dec3f84d3fedc6e54f7579eaade3258ec9e89c185375ccbdba677c65e5022"
+    },
+    {
+      "path": "cases/no_default.json",
+      "mode": "100644",
+      "bytes": 2685,
+      "sha256": "969d542b82e09848e05566af1af94f7de114b966f9cc419863bef1dabb08c272"
+    },
+    {
+      "path": "cases/nothing_fits_holds.json",
+      "mode": "100644",
+      "bytes": 2445,
+      "sha256": "ffd5bd5c11e63431cbe10ea6f8f84c6d8a26106ab7387674500330dfbeea297c"
+    },
+    {
+      "path": "cases/pinned_profile_wins.json",
+      "mode": "100644",
+      "bytes": 1603,
+      "sha256": "aaa6dd133f55cb690c59c92b7f1b7532494ca0ee7d985d59a6e381b36f13444d"
+    },
+    {
+      "path": "cases/route_is_stale.json",
+      "mode": "100644",
+      "bytes": 2382,
+      "sha256": "2c7d2801770bb638ead3b8c84c2a2d29c75e54f59ed43debe398d4c3ae12affa"
+    },
+    {
+      "path": "cases/task_gone.json",
+      "mode": "100644",
+      "bytes": 778,
+      "sha256": "e832d6c45e74fba24075ede6a96edd6728dba6966a75eb474be4c0fd84b72654"
+    },
+    {
+      "path": "catalog.json",
+      "mode": "100644",
+      "bytes": 10598,
+      "sha256": "14675c78a7593144849df54c8d0830f582912b357c01b93b0131477078f00f94"
+    },
+    {
+      "path": "draft.json",
+      "mode": "100644",
+      "bytes": 31008,
+      "sha256": "a95e8a635a60ad175b04767ac15bbc3226663279908698338de8bc7e2adf2e0e"
+    },
+    {
+      "path": "facts.json",
+      "mode": "100644",
+      "bytes": 823,
+      "sha256": "2e1c4efd50ec7ae72722919b0850665faa1c6e036a41d1ef368eac65ac356540"
+    },
+    {
+      "path": "record.json",
+      "mode": "100644",
+      "bytes": 390,
+      "sha256": "9966adee5bc1db7898df5327cf99108328ea22d0a06346b7807e3c110f86d5cb"
+    },
+    {
+      "path": "source.md",
+      "mode": "100644",
+      "bytes": 717,
+      "sha256": "b7d864abe0c02d3a4a98da074af72e7f5377c504d34bb3face6a1d87f4d437a3"
+    },
+    {
+      "path": "stuck/fastest.json",
+      "mode": "100644",
+      "bytes": 1479,
+      "sha256": "c88ba12301d2b18a7c9d8e8afd5334d784075562579b6cb4f5bc807ac6408042"
+    },
+    {
+      "path": "stuck/fastest.md",
+      "mode": "100644",
+      "bytes": 661,
+      "sha256": "dd8c8d2443da2ae843bf2a507f057420a9589b3dbe9f2fbe1d723e39c022b0a8"
+    }
+  ]
+}

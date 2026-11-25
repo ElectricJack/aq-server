@@ -1,15 +1,12 @@
 //! Actual phase Grant→Started→terminal HTTP registration and inspection owners.
 //! Graph/runtime/output claims are synthetic here; physical worker tests separate.
 use crate::common_phase_terminal as phase;
-use aq_server::{
-    AppState,
-    terminal::{
-        self,
-        config::Loaded,
-        protection::{KeyFile, Keyring, ProtectionConfig},
-        service,
-        tail::{self, Availability},
-    },
+use aq_server::terminal::{
+    self,
+    config::Loaded,
+    protection::{KeyFile, Keyring, ProtectionConfig},
+    service,
+    tail::{self, Availability},
 };
 use aq_session_protocol::{Capability, Digest, OutputFrame, OutputGap, TerminalIdentity, Text};
 use aq_terminal_relay::{
@@ -39,32 +36,13 @@ struct Case {
     at: Arc<AtomicI64>,
     dir: tempfile::TempDir,
 }
-async fn http(
-    state: &AppState,
-    credential: Option<&str>,
-    path: &str,
-    body: Option<Value>,
-    email: &str,
-) -> (StatusCode, axum::http::HeaderMap, Value) {
-    let app = if credential.is_some() {
-        aq_server::build_worker_router(state.clone())
-    } else {
-        aq_server::build_admin_router(state.clone())
-    };
-    let mut req = Request::builder()
-        .method(if body.is_some() { "POST" } else { "GET" })
-        .uri(path)
+type HttpReply = (StatusCode, axum::http::HeaderMap, Value);
+
+async fn send(app: axum::Router, request: axum::http::request::Builder, body: Body) -> HttpReply {
+    let request = request
         .header("content-type", "application/json")
-        .header("X-AQ-Request", "1")
-        .header("x-aq-dev-email", email);
-    if let Some(value) = credential {
-        req = req.header("authorization", format!("Bearer {value}"));
-    }
-    let body = body.map(|b| b.to_string()).unwrap_or_default();
-    let response = app
-        .oneshot(req.body(Body::from(body)).unwrap())
-        .await
-        .unwrap();
+        .header("X-AQ-Request", "1");
+    let response = app.oneshot(request.body(body).unwrap()).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -74,6 +52,14 @@ async fn http(
         serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({"invalid_body":true})),
     )
 }
+impl Case {
+    async fn owner_get(&self, path: &str) -> HttpReply {
+        let app = aq_server::build_admin_router(self.f.c.env.env.state.clone());
+        let request = Request::get(path).header("x-aq-dev-email", "owner@localhost");
+        send(app, request, Body::from(String::new())).await
+    }
+}
+
 fn config(dir: &tempfile::TempDir) -> Arc<Loaded> {
     Arc::new(Loaded {
         keyring: Keyring::load(&ProtectionConfig {
@@ -89,8 +75,40 @@ fn config(dir: &tempfile::TempDir) -> Arc<Loaded> {
         runtime: Default::default(),
     })
 }
+async fn register(f: &phase::Prepared, registration: &Register) {
+    let app = aq_server::build_worker_router(f.c.env.env.state.clone());
+    let request = Request::post("/v1/terminal-relay/register")
+        .header("x-aq-dev-email", "")
+        .header(
+            "authorization",
+            format!("Bearer {}", f.c.env.env.credential),
+        );
+    let body = serde_json::to_value(registration).unwrap().to_string();
+    let (status, _, reply) = send(app, request, Body::from(body)).await;
+    assert_eq!(status, 200, "{reply}");
+    let MutationReply::Registered { operation_id, info } = serde_json::from_value(reply).unwrap()
+    else {
+        panic!("frozen registered reply required")
+    };
+    assert_eq!(operation_id, registration.operation_id);
+    assert_eq!(info.terminal, registration.terminal);
+    assert_eq!(
+        info.session_revision,
+        registration.expected_authority_revision
+    );
+    assert!(!info.terminal_policy.input_enabled);
+}
+
 async fn setup() -> Case {
     let mut f = Box::pin(phase::prepared_terminal()).await;
+    // The genuine offer and Prepared evidence already exist. Issue, start and
+    // register against that same owner clock, then advance it at test boundaries.
+    let observed = (f.c.env.env.state.clock)().timestamp_millis();
+    let at = Arc::new(AtomicI64::new(observed));
+    let clock = at.clone();
+    f.c.env.env.state.clock = Arc::new(move || {
+        chrono::DateTime::from_timestamp_millis(clock.load(Ordering::SeqCst)).unwrap()
+    });
     let execution = phase::issue(&f).await;
     let started = phase::started_request(&f, &execution);
     let ack = aq_server::profiled_execution::phase_terminal::started::record(
@@ -107,15 +125,7 @@ async fn setup() -> Case {
         std::fs::Permissions::from_mode(0o600),
     )
     .unwrap();
-    let at = Arc::new(AtomicI64::new(
-        chrono::Utc::now()
-            .timestamp_millis()
-            .max(ack.original.recorded_at_ms as i64 + 1),
-    ));
-    let clock = at.clone();
-    f.c.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(clock.load(Ordering::SeqCst)).unwrap()
-    });
+    at.fetch_max(ack.original.recorded_at_ms as i64 + 1, Ordering::SeqCst);
     let mut cfg = (*f.c.env.env.state.config).clone();
     cfg.terminals = Some(config(&dir));
     f.c.env.env.state.config = Arc::new(cfg);
@@ -142,27 +152,7 @@ async fn setup() -> Case {
             version: 1,
         }],
     };
-    let body = serde_json::to_value(&registration).unwrap();
-    let (status, _, reply) = http(
-        &f.c.env.env.state,
-        Some(&f.c.env.env.credential),
-        "/v1/terminal-relay/register",
-        Some(body),
-        "",
-    )
-    .await;
-    assert_eq!(status, 200, "{reply}");
-    let MutationReply::Registered { operation_id, info } = serde_json::from_value(reply).unwrap()
-    else {
-        panic!("frozen registered reply required")
-    };
-    assert_eq!(operation_id, registration.operation_id);
-    assert_eq!(info.terminal, registration.terminal);
-    assert_eq!(
-        info.session_revision,
-        registration.expected_authority_revision
-    );
-    assert!(!info.terminal_policy.input_enabled);
+    register(&f, &registration).await;
     let actor = f.c.env.actor;
     Case {
         f,
@@ -236,13 +226,47 @@ async fn upload(c: &Case, frames: Vec<OutputFrame>, gaps: Vec<OutputGap>) {
     .await
     .unwrap();
 }
+async fn assert_dashboard_links(c: &Case) {
+    let (_, headers, _) = c
+        .owner_get(&format!(
+            "/api/v1/terminals/{}",
+            c.registration.terminal.terminal_id
+        ))
+        .await;
+    assert!(headers.contains_key("aq-terminal-server-time-ms"));
+    let (_, _, bootstrap) = c.owner_get("/api/v1/bootstrap").await;
+    assert!(
+        bootstrap["data"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["name"] == "terminal.watch" && a["enabled"] == true),
+        "{bootstrap}"
+    );
+    let session = match c.registration.terminal.session {
+        aq_session_protocol::SessionIdentity::Remote { session_id, .. } => session_id,
+        _ => unreachable!(),
+    };
+    let (status, _, detail) = c.owner_get(&format!("/api/v1/sessions/{session}")).await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(
+        detail["data"]["terminal"]["id"],
+        c.registration.terminal.terminal_id.to_string()
+    );
+}
+
+fn assert_no_retained_output(page: &tail::TailReply) {
+    assert_eq!(page.availability, Availability::NotRetained);
+    assert!(page.last_observed_at_ms.is_none());
+    assert!(page.frames.is_empty());
+}
+
 #[tokio::test]
 async fn actual_phase_http_registration_and_dashboard_link_expose_read_only_tail() {
     let c = Box::pin(setup()).await;
     let (id, _) = watch(&c, c.actor, 15000).await;
     let empty = read(&c, c.actor, id, 0).await.unwrap();
-    assert_eq!(empty.availability, Availability::NotRetained);
-    assert!(empty.last_observed_at_ms.is_none());
+    assert_no_retained_output(&empty);
     upload(
         &c,
         vec![frame(
@@ -257,8 +281,7 @@ async fn actual_phase_http_registration_and_dashboard_link_expose_read_only_tail
         "/api/v1/terminals/{}/tail?subscription_id={id}&after_sequence=0",
         c.registration.terminal.terminal_id
     );
-    let (status, headers, body) =
-        http(&c.f.c.env.env.state, None, &path, None, "owner@localhost").await;
+    let (status, headers, body) = c.owner_get(&path).await;
     assert_eq!(status, 200, "{body}");
     let reply: tail::TailReply = serde_json::from_value(body).unwrap();
     assert_eq!(headers["cache-control"], "no-store");
@@ -271,48 +294,7 @@ async fn actual_phase_http_registration_and_dashboard_link_expose_read_only_tail
         b"real phase scope\n<script>literal</script>\x1b[31m"
     );
     assert!(reply.initial_incomplete);
-    let (_, headers, _) = http(
-        &c.f.c.env.env.state,
-        None,
-        &format!("/api/v1/terminals/{}", c.registration.terminal.terminal_id),
-        None,
-        "owner@localhost",
-    )
-    .await;
-    assert!(headers.contains_key("aq-terminal-server-time-ms"));
-    let (_, _, bootstrap) = http(
-        &c.f.c.env.env.state,
-        None,
-        "/api/v1/bootstrap",
-        None,
-        "owner@localhost",
-    )
-    .await;
-    assert!(
-        bootstrap["data"]["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|a| a["name"] == "terminal.watch" && a["enabled"] == true),
-        "{bootstrap}"
-    );
-    let session = match c.registration.terminal.session {
-        aq_session_protocol::SessionIdentity::Remote { session_id, .. } => session_id,
-        _ => unreachable!(),
-    };
-    let (status, _, detail) = http(
-        &c.f.c.env.env.state,
-        None,
-        &format!("/api/v1/sessions/{session}"),
-        None,
-        "owner@localhost",
-    )
-    .await;
-    assert_eq!(status, 200, "{detail}");
-    assert_eq!(
-        detail["data"]["terminal"]["id"],
-        c.registration.terminal.terminal_id.to_string()
-    );
+    assert_dashboard_links(&c).await;
     assert!(
         service::mutate(
             &c.f.c.env.env.state,
@@ -329,6 +311,11 @@ async fn actual_phase_http_registration_and_dashboard_link_expose_read_only_tail
         .is_err()
     );
 }
+fn assert_page_cursor(page: &tail::TailReply, sequence: u64, more: bool) {
+    assert_eq!(page.next_sequence, sequence);
+    assert_eq!(page.more, more);
+}
+
 #[tokio::test]
 async fn maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames() {
     let c = Box::pin(setup()).await;
@@ -354,10 +341,11 @@ async fn maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames() {
     )
     .await;
     let first = read(&c, c.actor, id, 0).await.unwrap();
-    assert_eq!(first.frames.len(), 1);
-    assert_eq!(first.frames[0].bytes.len(), 65536);
-    assert_eq!(first.next_sequence, 1);
-    assert!(first.more);
+    let [maximum] = first.frames.as_slice() else {
+        panic!("expected one frame in the budgeted page")
+    };
+    assert_eq!(maximum.bytes.len(), 65536);
+    assert_page_cursor(&first, 1, true);
     assert!(first.gaps.is_empty());
     assert!(serde_json::to_vec(&first).unwrap().len() <= tail::MAX_WIRE_BYTES);
     let next = read(&c, c.actor, id, first.next_sequence).await.unwrap();
@@ -365,8 +353,7 @@ async fn maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames() {
         next.frames.iter().map(|f| f.sequence).collect::<Vec<_>>(),
         [2, 3]
     );
-    assert_eq!(next.next_sequence, 6);
-    assert!(!next.more);
+    assert_page_cursor(&next, 6, false);
     assert_eq!(next.gaps[0].first_missing, 4);
 }
 #[tokio::test]
@@ -405,10 +392,8 @@ async fn restart_forgets_output_and_never_uses_sql_activity_as_bytes() {
         .await
         .unwrap();
     let v = read(&c, c.actor, id, 0).await.unwrap();
-    assert_eq!(v.availability, Availability::NotRetained);
+    assert_no_retained_output(&v);
     assert!(v.disconnected);
-    assert!(v.last_observed_at_ms.is_none());
-    assert!(v.frames.is_empty());
 }
 #[tokio::test]
 async fn inspection_revocation_and_foreign_subscription_never_return_tail() {

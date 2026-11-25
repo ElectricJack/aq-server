@@ -59,27 +59,27 @@ pub fn render(kind: Render, value: &Value) -> String {
         Render::Messages => messages(value),
     }
 }
+fn command_row(out: &mut String, c: &Value, last: String) {
+    let cli: Vec<String> = c["cli"]
+        .as_array()
+        .map(|a| a.iter().map(s).collect())
+        .unwrap_or_default();
+    let _ = writeln!(
+        out,
+        "{:<30} {:<8} {:<34} {} {}",
+        s(&c["name"]),
+        s(&c["kind"]),
+        last,
+        crate::program(),
+        cli.join(" "),
+    );
+    let summary = s(&c["summary"]);
+    if !summary.is_empty() && summary != "-" {
+        let _ = writeln!(out, "    {summary}");
+    }
+}
 fn commands(value: &Value) -> String {
     let mut out = String::new();
-    let row = |out: &mut String, c: &Value, last: String| {
-        let cli: Vec<String> = c["cli"]
-            .as_array()
-            .map(|a| a.iter().map(s).collect())
-            .unwrap_or_default();
-        let _ = writeln!(
-            out,
-            "{:<30} {:<8} {:<34} {} {}",
-            s(&c["name"]),
-            s(&c["kind"]),
-            last,
-            crate::program(),
-            cli.join(" "),
-        );
-        let summary = s(&c["summary"]);
-        if !summary.is_empty() && summary != "-" {
-            let _ = writeln!(out, "    {summary}");
-        }
-    };
     let _ = writeln!(out, "principal: {}", s(&value["principal"]));
     let _ = writeln!(
         out,
@@ -92,19 +92,18 @@ fn commands(value: &Value) -> String {
             (g, Value::Null) => s(g),
             (g, scope) => format!("{} @ {}", s(g), s(scope)),
         };
-        row(&mut out, c, held);
+        command_row(&mut out, c, held);
     }
+    unavailable_rows(&mut out, value);
+    out.trim_end().to_owned()
+}
+fn unavailable_rows(out: &mut String, value: &Value) {
     if let Some(unavailable) = value["unavailable"].as_array().filter(|u| !u.is_empty()) {
         let _ = writeln!(out, "\nnot runnable:");
         for c in unavailable {
-            row(
-                &mut out,
-                c,
-                format!("{} ({})", s(&c["grant"]), s(&c["reason"])),
-            );
+            command_row(out, c, format!("{} ({})", s(&c["grant"]), s(&c["reason"])));
         }
     }
-    out.trim_end().to_owned()
 }
 /// Unix milliseconds as `YYYY-MM-DD HH:MM:SS UTC`.
 fn utc(ms: i64) -> String {
@@ -146,19 +145,7 @@ fn messages(value: &Value) -> String {
         if items.len() == 1 { "" } else { "s" },
     );
     for item in items {
-        let time = item["created_at_ms"]
-            .as_i64()
-            .map_or_else(|| s(&item["created_at_ms"]), utc);
-        let _ = writeln!(
-            out,
-            "{}  {}  {}",
-            s(&item["cursor"]),
-            s(&item["author"]["kind"]),
-            time
-        );
-        for line in item["body"].as_str().unwrap_or_default().lines() {
-            let _ = writeln!(out, "  {}", clean(line));
-        }
+        message_row(&mut out, item);
     }
     if let Some(next) = value["next_cursor"]
         .as_str()
@@ -172,6 +159,21 @@ fn messages(value: &Value) -> String {
         let _ = writeln!(out, "more: {flag} {}", clean(next));
     }
     out.trim_end().to_owned()
+}
+fn message_row(out: &mut String, item: &Value) {
+    let time = item["created_at_ms"]
+        .as_i64()
+        .map_or_else(|| s(&item["created_at_ms"]), utc);
+    let _ = writeln!(
+        out,
+        "{}  {}  {}",
+        s(&item["cursor"]),
+        s(&item["author"]["kind"]),
+        time
+    );
+    for line in item["body"].as_str().unwrap_or_default().lines() {
+        let _ = writeln!(out, "  {}", clean(line));
+    }
 }
 fn whoami(value: &Value) -> String {
     let mut out = String::new();

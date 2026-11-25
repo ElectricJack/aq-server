@@ -205,6 +205,40 @@ fn item(row: &sqlx::postgres::PgRow, task_title: Option<String>) -> Result<Quest
     })
 }
 
+impl ListQuery {
+    async fn rows(
+        &self,
+        pool: &sqlx::PgPool,
+        after: Option<(i64, Uuid)>,
+        limit: u16,
+    ) -> Result<(Vec<sqlx::postgres::PgRow>, &'static str)> {
+        let (filter, order, key) = match self.state {
+            InboxState::Open => (
+                "state='pending' AND ($2::bigint IS NULL OR (created_at_ms,decision_id)>($2,$3))",
+                "created_at_ms,decision_id",
+                "created_at_ms",
+            ),
+            InboxState::Closed => (
+                "state='answered' AND ($2::bigint IS NULL OR (answered_at_ms,decision_id)<($2,$3))",
+                "answered_at_ms DESC,decision_id DESC",
+                "answered_at_ms",
+            ),
+        };
+        let sql = format!(
+            "SELECT {COLUMNS} FROM question_decisions WHERE ($1::uuid IS NULL OR project_id=$1) AND {filter} ORDER BY {order} LIMIT $4"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(self.project_id)
+            .bind(after.map(|(at, _)| at))
+            .bind(after.map(|(_, id)| id))
+            .bind(i64::from(limit) + 1)
+            .fetch_all(pool)
+            .await
+            .map_err(|_| ApiError::unavailable())?;
+        Ok((rows, key))
+    }
+}
+
 async fn list(
     state: &AppState,
     runtime: &Runtime,
@@ -227,29 +261,7 @@ async fn list(
         }
         None => (None, at + CURSOR_TTL_MS),
     };
-    let (filter, order, key) = match query.state {
-        InboxState::Open => (
-            "state='pending' AND ($2::bigint IS NULL OR (created_at_ms,decision_id)>($2,$3))",
-            "created_at_ms,decision_id",
-            "created_at_ms",
-        ),
-        InboxState::Closed => (
-            "state='answered' AND ($2::bigint IS NULL OR (answered_at_ms,decision_id)<($2,$3))",
-            "answered_at_ms DESC,decision_id DESC",
-            "answered_at_ms",
-        ),
-    };
-    let sql = format!(
-        "SELECT {COLUMNS} FROM question_decisions WHERE ($1::uuid IS NULL OR project_id=$1) AND {filter} ORDER BY {order} LIMIT $4"
-    );
-    let rows = sqlx::query(&sql)
-        .bind(query.project_id)
-        .bind(after.map(|(at, _)| at))
-        .bind(after.map(|(_, id)| id))
-        .bind(i64::from(limit) + 1)
-        .fetch_all(&state.store.pool)
-        .await
-        .map_err(|_| ApiError::unavailable())?;
+    let (rows, key) = query.rows(&state.store.pool, after, limit).await?;
     let more = rows.len() > usize::from(limit);
     let page = &rows[..rows.len().min(usize::from(limit))];
     let mut titles = Titles::new(state, user);
@@ -262,17 +274,15 @@ async fn list(
         Some(last) if more => Some(
             runtime
                 .codec
-                .encode(
-                    &bind,
+                .encode(bind.position(
                     "keyset",
                     &format!(
                         "{}:{}",
                         last.get::<i64, _>(key),
                         last.get::<Uuid, _>("decision_id")
                     ),
-                    at,
-                    expires,
-                )
+                    at..expires,
+                ))
                 .map_err(cursor_error)?,
         ),
         _ => None,
@@ -304,12 +314,29 @@ async fn detail(state: &AppState, user: &User, id: Uuid) -> Result<QuestionInbox
     })
 }
 
-fn bounded<T: serde::Serialize>(value: T) -> Result<impl IntoResponse> {
+type JsonResponse<T> = ([(&'static str, &'static str); 1], Json<T>);
+fn bounded<T: serde::Serialize>(value: T) -> Result<JsonResponse<T>> {
     let bytes = serde_json::to_vec(&value).map_err(|_| ApiError::unavailable())?;
     if bytes.len() > 1_048_576 {
         return Err(ApiError::unavailable());
     }
     Ok(([("cache-control", "no-store")], Json(value)))
+}
+impl Runtime {
+    async fn read<T: serde::Serialize>(
+        &self,
+        timeout: Duration,
+        read: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<JsonResponse<T>> {
+        let _permit = self
+            .permits
+            .try_acquire()
+            .map_err(|_| ApiError::for_status(StatusCode::TOO_MANY_REQUESTS))?;
+        let value = tokio::time::timeout(timeout, read)
+            .await
+            .map_err(|_| ApiError::unavailable())??;
+        bounded(value)
+    }
 }
 async fn list_http(
     State(state): State<AppState>,
@@ -318,17 +345,12 @@ async fn list_http(
     query: std::result::Result<Query<ListQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse> {
     let Query(query) = query.map_err(|_| ApiError::invalid())?;
-    let _permit = runtime
-        .permits
-        .try_acquire()
-        .map_err(|_| ApiError::for_status(StatusCode::TOO_MANY_REQUESTS))?;
-    let page = tokio::time::timeout(
-        Duration::from_secs(5),
-        list(&state, &runtime, &user, &query),
-    )
-    .await
-    .map_err(|_| ApiError::unavailable())??;
-    bounded(page)
+    runtime
+        .read(
+            Duration::from_secs(5),
+            list(&state, &runtime, &user, &query),
+        )
+        .await
 }
 async fn detail_http(
     State(state): State<AppState>,
@@ -337,12 +359,7 @@ async fn detail_http(
     id: std::result::Result<Path<Uuid>, axum::extract::rejection::PathRejection>,
 ) -> Result<impl IntoResponse> {
     let Path(id) = id.map_err(|_| ApiError::invalid())?;
-    let _permit = runtime
-        .permits
-        .try_acquire()
-        .map_err(|_| ApiError::for_status(StatusCode::TOO_MANY_REQUESTS))?;
-    let read = tokio::time::timeout(Duration::from_secs(3), detail(&state, &user, id))
+    runtime
+        .read(Duration::from_secs(3), detail(&state, &user, id))
         .await
-        .map_err(|_| ApiError::unavailable())??;
-    bounded(read)
 }

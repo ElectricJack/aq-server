@@ -85,6 +85,7 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: request.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],
@@ -285,6 +286,7 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: request.runtime.clone(),
             qualification: artifact("synthetic-qualification", b"qualification"),
             capabilities: vec![],
@@ -464,6 +466,7 @@ async fn registration_receipt_cap_is_per_boot() {
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: request.runtime.clone(),
             qualification: artifact("synthetic-qualification", b"qualification"),
             capabilities: vec![],

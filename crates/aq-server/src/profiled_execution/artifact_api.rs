@@ -1,6 +1,7 @@
 //! Authenticated bounded ranges of already linked, retained inline artifacts.
 //! No request can nominate a file path, register source data or grant execution.
 use super::{artifacts, registration};
+use crate::worker_api::AuthenticatedNode;
 use crate::{
     AppState,
     error::AppError,
@@ -10,6 +11,7 @@ use crate::{
     },
 };
 use aq_admission::transport::{ArtifactFetch, Feature, TransportDocument};
+use aq_profiled_state::inline_artifact::storage;
 use axum::{
     Router,
     extract::{DefaultBodyLimit, State},
@@ -19,7 +21,8 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction};
+type Tx<'a> = Transaction<'a, Postgres>;
 use uuid::Uuid;
 pub const RETENTION_HEADER: &str = "aq-artifact-retention";
 pub const OFFSET_HEADER: &str = "aq-artifact-offset";
@@ -55,115 +58,180 @@ async fn fetch(
     if auth.id() != request.identity.node_id {
         return Err(AppError::Forbidden("artifact node mismatch".into()));
     }
-    let mut tx = state.store.pool.begin().await.map_err(db)?;
-    sqlx::query("SET LOCAL lock_timeout='2s'")
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?;
-    sqlx::query("SET LOCAL statement_timeout='3s'")
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?;
-    crate::worker_api::lock_current_node(&mut tx, &auth).await?;
-    let runtime =
-        registration::current_runtime_locked(&state, &mut tx, auth.id(), request.identity.boot_id)
-            .await?;
-    if state
-        .config
-        .profiled_execution
-        .as_ref()
-        .and_then(|c| {
-            c.qualified_runtimes
-                .iter()
-                .find(|r| r.runtime == runtime.runtime)
-        })
-        .is_none_or(|r| !r.features.contains(&Feature::ArtifactTransferV1))
-    {
-        return Err(refused());
+    Fetch {
+        state: &state,
+        request: &request,
+        auth: &auth,
     }
-    let view = authority::load_locked(
-        &state,
-        &mut tx,
-        &request.binding.session,
-        Policy::IdentityOnly,
-    )
-    .await?;
-    if view.kind != Kind::ProfiledV1
-        || !view.holds_task
-        || view.revoked
-        || view.cancellation_id.is_some()
-        || view.stopped
-        || view.offer_id != request.binding.offer_id
-        || view.launch_manifest_digest.as_ref() != Some(&request.binding.launch_manifest_digest)
-        || view.execution_spec_digest != request.binding.execution_spec_digest.as_str()
-    {
-        return Err(refused());
-    }
-    let hot: Value = sqlx::query_scalar(
-        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
-    )
-    .bind(request.binding.attempt_id)
-    .fetch_optional(&mut *tx)
+    .read()
     .await
-    .map_err(db)?
-    .ok_or_else(|| refused())?;
-    let hot: HotState = serde_json::from_value(hot).map_err(|_| refused())?;
-    hot.validate_against(&request.binding)
-        .map_err(|_| refused())?;
-    let sealed = sqlx::query(
-        "SELECT launch_binding,offer_expires_at_ms FROM profiled_launches WHERE attempt_id=$1",
-    )
-    .bind(request.binding.attempt_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(db)?;
-    if sealed.get::<Value, _>("launch_binding")
-        != serde_json::to_value(&request.binding).map_err(|_| AppError::Internal)?
-    {
-        return Err(refused());
+}
+struct Fetch<'a> {
+    state: &'a AppState,
+    request: &'a ArtifactFetch,
+    auth: &'a AuthenticatedNode,
+}
+impl Fetch<'_> {
+    async fn read(&self) -> Result<Response, AppError> {
+        let mut tx = self.state.store.pool.begin().await.map_err(db)?;
+        self.lock_runtime(&mut tx).await?;
+        let view = self.assignment(&mut tx).await?;
+        let hot = self.hot(&mut tx).await?;
+        let phase = self.phase_window(&mut tx, &hot).await?;
+        let item = self.linked(&mut tx, view.project_id).await?;
+        let now = u64::try_from((self.state.clock)().timestamp_millis()).map_err(|_| refused())?;
+        if now == 0 || !phase.contains(&now) {
+            return Err(refused());
+        }
+        if hot.status == Status::Granted {
+            view.active_at(now)?;
+        }
+        // load_locked verified the immutable bytes and receipt. Only time
+        // can change while these same owned bytes remain in this transaction.
+        let retained = item.descriptor.retained_at_ms..item.descriptor.retain_until_ms;
+        if !retained.contains(&now) {
+            return Err(refused());
+        }
+        let response = range_response(item, self.request)?;
+        tx.commit().await.map_err(db)?;
+        Ok(response)
     }
-    let (issued, expires) = match hot.status {
-        Status::Offered => (0, sealed.get::<i64, _>("offer_expires_at_ms") as u64),
-        Status::Preparing => super::accepted_preparation::load_preparing_locked(
-            &state,
-            &mut tx,
-            &auth,
-            &request.binding,
-            &hot,
+    async fn lock_runtime(&self, tx: &mut Tx<'_>) -> Result<(), AppError> {
+        storage::set_timeouts(tx).await.map_err(db)?;
+        crate::worker_api::lock_current_node(tx, self.auth).await?;
+        let runtime = registration::current_runtime_locked(
+            self.state,
+            tx,
+            self.auth.id(),
+            self.request.identity.boot_id,
         )
-        .await?
-        .window(),
-        Status::Granted => (
-            0,
-            hot.grant
-                .as_ref()
-                .ok_or_else(|| refused())?
-                .expires_at_ms
-                .min(hot.execution_deadline_ms.ok_or_else(|| refused())?),
-        ),
-        _ => return Err(refused()),
-    };
-    let rows=sqlx::query("SELECT a.artifact_id FROM profiled_launch_artifacts l JOIN admission_artifacts a USING(artifact_id) WHERE l.attempt_id=$1 AND a.descriptor->'artifact'=$2 LIMIT 2")
-        .bind(request.binding.attempt_id).bind(serde_json::to_value(&request.artifact).map_err(|_|AppError::Internal)?).fetch_all(&mut *tx).await.map_err(db)?;
-    if rows.len() != 1 {
-        return Err(refused());
+        .await?;
+        if self
+            .state
+            .config
+            .profiled_execution
+            .as_ref()
+            .and_then(|c| {
+                c.qualified_runtimes
+                    .iter()
+                    .find(|r| r.runtime == runtime.runtime)
+            })
+            .is_none_or(|r| !r.features.contains(&Feature::ArtifactTransferV1))
+        {
+            return Err(refused());
+        }
+        Ok(())
     }
-    let item = artifacts::load_locked(&mut tx, rows[0].get::<Uuid, _>("artifact_id")).await?;
-    if item.project_id != view.project_id || item.descriptor.artifact != request.artifact {
-        return Err(refused());
+    async fn assignment(&self, tx: &mut Tx<'_>) -> Result<authority::AuthorityView, AppError> {
+        let request = self.request;
+        let view = authority::load_locked(
+            self.state,
+            tx,
+            &request.binding.session,
+            Policy::IdentityOnly,
+        )
+        .await?;
+        let assigned = view.kind == Kind::ProfiledV1 && view.holds_task;
+        let cancelled = view.revoked || view.cancellation_id.is_some() || view.stopped;
+        let eligible = assigned && !cancelled;
+        if eligible && self.matches_offer(&view) {
+            Ok(view)
+        } else {
+            Err(refused())
+        }
     }
-    let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| refused())?;
-    if now == 0 || now < issued || now >= expires {
-        return Err(refused());
+    fn matches_offer(&self, view: &authority::AuthorityView) -> bool {
+        let requested = &self.request.binding;
+        let offer = (
+            view.offer_id,
+            view.launch_manifest_digest.as_ref(),
+            view.execution_spec_digest.as_str(),
+        );
+        offer
+            == (
+                requested.offer_id,
+                Some(&requested.launch_manifest_digest),
+                requested.execution_spec_digest.as_str(),
+            )
     }
-    if hot.status == Status::Granted {
-        view.active_at(now)?;
+    async fn hot(&self, tx: &mut Tx<'_>) -> Result<HotState, AppError> {
+        let request = self.request;
+        let hot: Value = sqlx::query_scalar(
+            "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
+        )
+        .bind(request.binding.attempt_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?
+        .ok_or_else(refused)?;
+        let hot: HotState = serde_json::from_value(hot).map_err(|_| refused())?;
+        hot.validate_against(&request.binding)
+            .map_err(|_| refused())?;
+        Ok(hot)
     }
-    // load_locked already verified the immutable bytes and receipt. Only time
-    // can change while these same owned bytes remain in this transaction.
-    if now < item.descriptor.retained_at_ms || now >= item.descriptor.retain_until_ms {
-        return Err(refused());
+    async fn phase_window(
+        &self,
+        tx: &mut Tx<'_>,
+        hot: &HotState,
+    ) -> Result<std::ops::Range<u64>, AppError> {
+        let request = self.request;
+        let sealed = sqlx::query(
+            "SELECT launch_binding,offer_expires_at_ms FROM profiled_launches WHERE attempt_id=$1",
+        )
+        .bind(request.binding.attempt_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db)?;
+        if sealed.get::<Value, _>("launch_binding")
+            != serde_json::to_value(&request.binding).map_err(|_| AppError::Internal)?
+        {
+            return Err(refused());
+        }
+        let (issued, expires) = match hot.status {
+            Status::Offered => (0, sealed.get::<i64, _>("offer_expires_at_ms") as u64),
+            Status::Preparing => super::accepted_preparation::load_preparing_locked(
+                self.state,
+                tx,
+                self.auth,
+                &request.binding,
+                hot,
+            )
+            .await?
+            .window(),
+            Status::Granted => (
+                0,
+                hot.grant
+                    .as_ref()
+                    .ok_or_else(refused)?
+                    .expires_at_ms
+                    .min(hot.execution_deadline_ms.ok_or_else(refused)?),
+            ),
+            _ => return Err(refused()),
+        };
+        Ok(issued..expires)
     }
+    async fn linked(
+        &self,
+        tx: &mut Tx<'_>,
+        project: Uuid,
+    ) -> Result<artifacts::Retained, AppError> {
+        let request = self.request;
+        let artifact = serde_json::to_value(&request.artifact).map_err(|_| AppError::Internal)?;
+        let id = storage::linked_id(tx, request.binding.attempt_id, artifact)
+            .await
+            .map_err(db)?
+            .ok_or_else(refused)?;
+        let item = artifacts::load_locked(tx, id).await?;
+        if item.project_id != project || item.descriptor.artifact != request.artifact {
+            return Err(refused());
+        }
+        Ok(item)
+    }
+}
+fn range_response(
+    item: artifacts::Retained,
+    request: &ArtifactFetch,
+) -> Result<Response, AppError> {
     let offset = usize::try_from(request.offset).map_err(|_| refused())?;
     if offset >= item.bytes.len() {
         return Err(AppError::BadRequest(
@@ -172,7 +240,7 @@ async fn fetch(
     }
     let end = offset
         .checked_add(request.length as usize)
-        .ok_or_else(|| refused())?
+        .ok_or_else(refused)?
         .min(item.bytes.len());
     let encoded = URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&item.descriptor).map_err(|_| AppError::Internal)?);
@@ -195,6 +263,5 @@ async fn fetch(
         OFFSET_HEADER,
         HeaderValue::from_str(&request.offset.to_string()).map_err(|_| AppError::Internal)?,
     );
-    tx.commit().await.map_err(db)?;
     Ok(response)
 }

@@ -256,17 +256,24 @@ pub fn within(
     }
 }
 
+pub struct BindingDefaults<'a> {
+    pub role: &'a str,
+    pub intelligence: &'a str,
+}
 /// A project binding's `default_role`, `default_intelligence` and
 /// `role_notes` against the active snapshot: both defaults exist, every note
 /// is for an existing role, and each note is within `max_note_bytes` (the
 /// store's document byte limit). The message names what exists.
 pub fn check_binding(
     snapshot: Option<&Snapshot>,
-    default_role: &str,
-    default_intelligence: &str,
+    defaults: BindingDefaults<'_>,
     role_notes: &BTreeMap<String, String>,
     max_note_bytes: usize,
 ) -> Result<(), String> {
+    let BindingDefaults {
+        role: default_role,
+        intelligence: default_intelligence,
+    } = defaults;
     named_role(snapshot, default_role).map_err(|unknown| format!("default_role: {unknown}"))?;
     if snapshot.is_none_or(|s| s.intelligence(default_intelligence).is_none()) {
         let profiles = snapshot
@@ -366,7 +373,15 @@ mod tests {
         let s = snapshot(false);
         let notes = |role: &str, bytes: usize| BTreeMap::from([(role.into(), "n".repeat(bytes))]);
         let check = |role: &str, level: &str, notes: &BTreeMap<String, String>| {
-            check_binding(Some(&s), role, level, notes, 16)
+            check_binding(
+                Some(&s),
+                BindingDefaults {
+                    role,
+                    intelligence: level,
+                },
+                notes,
+                16,
+            )
         };
         assert!(check("developer", "standard-high", &notes("reviewer", 16)).is_ok());
         assert_eq!(
@@ -386,9 +401,17 @@ mod tests {
             "role_notes: the note for role `reviewer` is 17 bytes, over the limit of 16 bytes"
         );
         assert!(
-            check_binding(None, "developer", "standard-high", &BTreeMap::new(), 16)
-                .unwrap_err()
-                .starts_with("default_role: Role `developer` does not exist")
+            check_binding(
+                None,
+                BindingDefaults {
+                    role: "developer",
+                    intelligence: "standard-high"
+                },
+                &BTreeMap::new(),
+                16
+            )
+            .unwrap_err()
+            .starts_with("default_role: Role `developer` does not exist")
         );
     }
 }

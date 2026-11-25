@@ -33,13 +33,48 @@ pub async fn lock_operation(
     tx: &mut Transaction<'_, Postgres>,
     operation: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-        .bind(format!("agent-operation:{operation}"))
+    lock_key(tx, format!("agent-operation:{operation}")).await
+}
+
+async fn lock_key(tx: &mut Transaction<'_, Postgres>, key: String) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
+        .bind(key)
         .execute(&mut **tx)
         .await?;
     Ok(())
 }
-
+pub struct SingleReservation {
+    pub ids: AttemptIds,
+    pub operation: Uuid,
+    pub parent: Option<Uuid>,
+    pub target: super::Target,
+}
+/// Reserve an agent-created task or recognize an existing reservation for this
+/// operation. The caller holds the transaction until its decision is audited.
+pub async fn reserve_single(
+    tx: &mut Transaction<'_, Postgres>,
+    row: SingleReservation,
+    ceiling: Option<u32>,
+    now: impl FnOnce() -> i64,
+) -> Result<bool, sqlx::Error> {
+    lock_key(tx, row.ids.attempt_id.to_string()).await?;
+    let (count,mine):(i64,bool)=sqlx::query_as("SELECT count(*),COALESCE(bool_or(task_id=$2),FALSE) FROM agent_created_tasks WHERE attempt_id=$1")
+        .bind(row.ids.attempt_id).bind(row.operation).fetch_one(&mut **tx).await?;
+    if !mine && count >= ceiling.map_or(i64::MAX, i64::from) {
+        return Ok(false);
+    }
+    let depth = match row.target {
+        super::Target::Task {
+            relation: super::Relation::Descendant(depth),
+            ..
+        } => Some(depth as i32),
+        _ => None,
+    };
+    sqlx::query("INSERT INTO agent_created_tasks(task_id,attempt_id,project_id,parent_id,root_task_id,depth,operation_id,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$1,$7) ON CONFLICT DO NOTHING")
+        .bind(row.operation).bind(row.ids.attempt_id).bind(row.ids.project_id).bind(row.parent).bind(row.ids.task_id).bind(depth).bind(now())
+        .execute(&mut **tx).await?;
+    Ok(true)
+}
 /// Reserve within the caller's canonical operation admission transaction.
 pub async fn reserve(
     tx: &mut Transaction<'_, Postgres>,
@@ -53,10 +88,7 @@ pub async fn reserve(
         ceiling,
     } = reservation;
     // Use the same lock as the legacy single-task creation quota.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
-        .bind(ids.attempt_id)
-        .execute(&mut **tx)
-        .await?;
+    lock_key(tx, ids.attempt_id.to_string()).await?;
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks c WHERE c.attempt_id=$1 AND NOT EXISTS (
             SELECT 1 FROM dashboard_operations d

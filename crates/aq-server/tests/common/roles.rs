@@ -69,9 +69,14 @@ pub async fn save(pool: &sqlx::PgPool, actor: Uuid, kind: Kind, id: &str, markdo
         .await
         .unwrap()
         .map_or(0, |d| d.revision);
-    aq_role_settings::save(pool, actor, kind, id, markdown, revision, Uuid::new_v4(), 1)
-        .await
-        .unwrap_or_else(|error| panic!("save {} `{id}`: {error:?}", kind.label()));
+    aq_role_settings::save(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, Uuid::new_v4()),
+        kind,
+        id,
+        markdown,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("save {} `{id}`: {error:?}", kind.label()));
 }
 /// Whether this store has the role tables. A fixture held at an earlier
 /// migration prefix (`with_store_profile`) does not until [`install`].
@@ -178,9 +183,12 @@ pub async fn install(pool: &sqlx::PgPool, actor: Uuid) -> Snapshot {
     }
     let settings = aq_role_settings::settings(pool).await.unwrap();
     let revision = settings.selection_defaults_revision;
-    aq_role_settings::save_selection_defaults(pool, actor, &defaults, revision, Uuid::new_v4(), 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_selection_defaults(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, Uuid::new_v4()),
+        &defaults,
+    )
+    .await
+    .unwrap();
     active(pool).await
 }
 /// A synthetic prepared launch for a test that asks for a selection without
