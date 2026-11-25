@@ -1,8 +1,8 @@
 //! Owner request 2026-11-24: changing which nodes may run a project (`allowed_node_ids`,
 //! `allow_enrolled_nodes`, `allowed_worker_groups`) does not strand its held tickets. After
-//! placement-only binding edits a failed attempt's replacement continues from its retained
-//! commit under the current binding; any other change since the binding the attempt pinned
-//! still holds it with `replacement_project_revision_changed`. The actual mounted poll,
+//! placement edits or an additive environment allow-list change, a failed attempt's replacement
+//! continues from its retained commit under the current binding. Other changes hold it with
+//! `replacement_project_revision_changed`. The actual mounted poll,
 //! export admission and publication run; the failure owner facts are synthetic.
 use crate::common::native_offer::{Case, assembled, fail_and_release, poll, poll_offered, setup};
 use aq_admission::control::{ControlReply, decode_reply};
@@ -168,4 +168,61 @@ async fn a_placement_edit_then_a_repository_generation_change_holds_the_replacem
     })
     .await;
     assert_eq!(assess(&c, revision).await, Assessment::Blocked(HOLD));
+}
+
+#[tokio::test]
+async fn additive_environment_permissions_keep_the_retained_source_with_current_placement() {
+    let (c, predecessor) = failed().await;
+    let prior = export(&c, predecessor).await["project_revision"]
+        .as_u64()
+        .unwrap();
+    let revision = edit(&c, |binding| {
+        binding["allowed_environments"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("postgres17-canary@1"));
+        binding["allowed_node_ids"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(Uuid::new_v4()));
+    })
+    .await;
+    assert!(replaces(&assess(&c, revision).await, predecessor));
+    assert_eq!(
+        assess(&c, prior).await,
+        Assessment::Blocked(HOLD),
+        "a stale requester cannot use its earlier binding"
+    );
+    let next = offered(&c).await;
+    continues(&c, predecessor, next, revision).await;
+}
+
+#[tokio::test]
+async fn removing_an_environment_or_editing_policy_still_holds_the_replacement() {
+    let (c, predecessor) = failed().await;
+    let mut original: Vec<Value> = sqlx::query_scalar::<_, Value>(
+        "SELECT binding->'allowed_environments' FROM project_execution_bindings WHERE project_id=$1",
+    )
+    .bind(c.env.lineage.project_id)
+    .fetch_one(&c.env.env.pool)
+    .await.unwrap().as_array().unwrap().clone();
+    original.push(json!("postgres17-canary@1"));
+    let removed = edit(&c, |b| {
+        b["allowed_environments"] = json!(["postgres17-canary@1"])
+    })
+    .await;
+    assert_eq!(assess(&c, removed).await, Assessment::Blocked(HOLD));
+    let refused = edit(&c, |b| {
+        b["allowed_environments"] = json!(original);
+        let next = b["policy"]["revision"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            + 1;
+        b["policy"]["revision"] = json!(next.to_string());
+    })
+    .await;
+    assert_eq!(assess(&c, refused).await, Assessment::Blocked(HOLD));
+    assert_ne!(export(&c, predecessor).await["project_revision"], refused);
 }
