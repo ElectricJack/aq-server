@@ -14,6 +14,9 @@ pub struct QualifiedRuntime {
     pub capabilities: Vec<aq_session_protocol::Capability>,
     pub features: Vec<Feature>,
     pub material_delivery: Option<DeliveryCapability>,
+    /// Backend attested by the daemon operator for this exact runtime qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_kind: Option<aq_selection::BackendKind>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

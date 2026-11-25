@@ -8,6 +8,8 @@ description = "Playbook fixed host contracts, typed grant scope and the HTTP err
 [features]
 # Epic 0 (spec 0016): host catalog 2.3.0 (profile 10), off by default.
 delivery_playbook = ["dep:aq-delivery", "dep:aq-machine-control", "dep:aq-role-settings", "aq-playbook-host/delivery_playbook"]
+# Spec 0017: host catalog 2.5.0 (profile 12), with `delivery_playbook` only.
+project_environments = ["aq-playbook-host/project_environments"]
 
 [dependencies]
 async-trait.workspace = true

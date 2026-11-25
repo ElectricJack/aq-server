@@ -55,6 +55,33 @@ pub struct ApiEndpoint {
     pub secret_file: PathBuf,
 }
 
+impl ApiEndpoint {
+    fn url(&self) -> Result<Url> {
+        let url = Url::parse(&self.endpoint)
+            .map_err(|_| invalid(&format!("invalid api endpoint for {}", self.provider)))?;
+        let configured = !self.provider.is_empty() && self.secret_file.is_absolute();
+        if !configured || !allowed_url(&url) {
+            return Err(invalid(&format!(
+                "api endpoint for {:?} is not allowed",
+                self.provider
+            )));
+        }
+        Ok(url)
+    }
+}
+
+fn allowed_url(url: &Url) -> bool {
+    let loopback = url
+        .host_str()
+        .map(|host| host.trim_start_matches('[').trim_end_matches(']'))
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback());
+    let secure = url.scheme() == "https" || url.scheme() == "http" && loopback;
+    let bare_authority =
+        url.host().is_some() && url.username().is_empty() && url.password().is_none();
+    secure && bare_authority && url.query().is_none() && url.fragment().is_none()
+}
+
 pub struct ApiBackend {
     endpoints: BTreeMap<String, (Url, PathBuf)>,
     client: reqwest::Client,
@@ -72,28 +99,7 @@ impl ApiBackend {
     pub fn new(endpoints: Vec<ApiEndpoint>) -> Result<Self> {
         let mut by_provider = BTreeMap::new();
         for e in endpoints {
-            let url = Url::parse(&e.endpoint)
-                .map_err(|_| invalid(&format!("invalid api endpoint for {}", e.provider)))?;
-            let loopback = url
-                .host_str()
-                .map(|h| h.trim_start_matches('[').trim_end_matches(']'))
-                .and_then(|h| h.parse::<std::net::IpAddr>().ok())
-                .is_some_and(|a| a.is_loopback());
-            // The key is only ever sent over TLS, or to a loopback endpoint.
-            if e.provider.is_empty()
-                || !(url.scheme() == "https" || url.scheme() == "http" && loopback)
-                || url.host().is_none()
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.query().is_some()
-                || url.fragment().is_some()
-                || !e.secret_file.is_absolute()
-            {
-                return Err(invalid(&format!(
-                    "api endpoint for {:?} is not allowed",
-                    e.provider
-                )));
-            }
+            let url = e.url()?;
             if by_provider
                 .insert(e.provider.clone(), (url, e.secret_file))
                 .is_some()
@@ -140,22 +146,7 @@ impl ApiBackend {
             "input": validate::prompt(&claimed.request),
             "store": false,
         });
-        let key = read_secret(secret_file).map_err(|_| {
-            (
-                Reason::ProviderUnavailable,
-                format!("api key file for {provider} is unusable"),
-            )
-        })?;
-        let value = Zeroizing::new(format!("Bearer {}", key.as_str()));
-        let mut header = HeaderValue::from_str(value.as_str()).map_err(|_| {
-            (
-                Reason::ProviderUnavailable,
-                format!("api key file for {provider} is unusable"),
-            )
-        })?;
-        header.set_sensitive(true);
-        drop(value);
-        drop(key);
+        let header = authorization(secret_file, provider)?;
         let sent = self
             .client
             .post(url.clone())
@@ -164,38 +155,61 @@ impl ApiBackend {
             .json(&body)
             .send()
             .await;
-        let mut response = sent.map_err(|_| unavailable("request to the provider failed"))?;
-        let status = response.status();
-        if !status.is_success() {
-            let reason = if status == StatusCode::TOO_MANY_REQUESTS
-                || status == StatusCode::REQUEST_TIMEOUT
-                || status.is_server_error()
-            {
-                Reason::ProviderUnavailable
-            } else {
-                Reason::ProviderError
-            };
+        let response = sent.map_err(|_| unavailable("request to the provider failed"))?;
+        provider_response(response).await
+    }
+}
+
+fn authorization(
+    path: &Path,
+    provider: &str,
+) -> std::result::Result<HeaderValue, (Reason, String)> {
+    let unusable = || unavailable(&format!("api key file for {provider} is unusable"));
+    let key = read_secret(path).map_err(|_| unusable())?;
+    let value = Zeroizing::new(format!("Bearer {}", key.as_str()));
+    let mut header = HeaderValue::from_str(value.as_str()).map_err(|_| unusable())?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
+async fn provider_response(
+    mut response: reqwest::Response,
+) -> std::result::Result<(String, Option<Usage>), (Reason, String)> {
+    validate_status(response.status())?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| unavailable("reading the provider response failed"))?
+    {
+        if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
             return Err((
-                reason,
-                format!("provider answered HTTP {}", status.as_u16()),
+                Reason::ProviderError,
+                "provider response exceeds 1 MiB".into(),
             ));
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| unavailable("reading the provider response failed"))?
-        {
-            if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                return Err((
-                    Reason::ProviderError,
-                    "provider response exceeds 1 MiB".into(),
-                ));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        parse(&bytes)
+        bytes.extend_from_slice(&chunk);
     }
+    parse(&bytes)
+}
+
+fn validate_status(status: StatusCode) -> std::result::Result<(), (Reason, String)> {
+    if status.is_success() {
+        return Ok(());
+    }
+    let retryable = matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::REQUEST_TIMEOUT
+    ) || status.is_server_error();
+    let reason = if retryable {
+        Reason::ProviderUnavailable
+    } else {
+        Reason::ProviderError
+    };
+    Err((
+        reason,
+        format!("provider answered HTTP {}", status.as_u16()),
+    ))
 }
 
 fn parse(body: &[u8]) -> std::result::Result<(String, Option<Usage>), (Reason, String)> {
@@ -253,14 +267,7 @@ fn read_secret(path: &Path) -> std::result::Result<Zeroizing<String>, ()> {
         .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
         .open(path)
         .map_err(|_| ())?;
-    let m = file.metadata().map_err(|_| ())?;
-    if !m.is_file()
-        || m.mode() & 0o077 != 0
-        || m.uid() != nix::unistd::geteuid().as_raw()
-        || m.nlink() != 1
-        || m.len() == 0
-        || m.len() > MAX_SECRET_BYTES
-    {
+    if !private_key_metadata(&file.metadata().map_err(|_| ())?) {
         return Err(());
     }
     let mut bytes = Zeroizing::new(Vec::new());
@@ -272,4 +279,13 @@ fn read_secret(path: &Path) -> std::result::Result<Zeroizing<String>, ()> {
         return Err(());
     }
     Ok(Zeroizing::new(text.to_owned()))
+}
+
+fn private_key_metadata(metadata: &std::fs::Metadata) -> bool {
+    let owner_only =
+        metadata.mode() & 0o077 == 0 && metadata.uid() == nix::unistd::geteuid().as_raw();
+    metadata.is_file()
+        && metadata.nlink() == 1
+        && owner_only
+        && (1..=MAX_SECRET_BYTES).contains(&metadata.len())
 }

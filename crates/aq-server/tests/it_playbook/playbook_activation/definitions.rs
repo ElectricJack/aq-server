@@ -1,5 +1,6 @@
 //! Actual configured startup metadata; deliberately not an engine catalog cache.
 use super::*;
+use crate::playbook_fixtures::dev_get;
 use axum::{Router, body::Body, http::Request};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -17,16 +18,7 @@ async fn read(app: &Router, email: &str, query: &str) -> (u16, Value) {
 }
 
 async fn get(app: &Router, email: &str, path: &str) -> (u16, Value) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::get(path)
-                .header("x-aq-dev-email", email)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = dev_get(app, email, path).await;
     assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
     let status = response.status().as_u16();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -34,16 +26,7 @@ async fn get(app: &Router, email: &str, path: &str) -> (u16, Value) {
 }
 
 async fn capability(app: &Router, email: &str) -> bool {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::get("/api/v1/bootstrap")
-                .header("x-aq-dev-email", email)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = dev_get(app, email, "/api/v1/bootstrap").await;
     assert_eq!(response.status(), 200);
     let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();

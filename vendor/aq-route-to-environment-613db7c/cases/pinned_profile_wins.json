@@ -1,0 +1,73 @@
+{
+  "name": "pinned_profile_wins",
+  "situation": "The owner has already chosen who takes the task, so nothing is written",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-25",
+        "revision": 1
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-25@1",
+          "subject": {
+            "id": "task-25",
+            "revision": 1
+          },
+          "facts": {
+            "kind": "",
+            "title": "Update the logo",
+            "description": "",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "owner",
+            "outcome": "",
+            "changed": false,
+            "branch": "",
+            "head": "",
+            "base": "",
+            "main_head": "",
+            "returns": 0,
+            "pull_request": null,
+            "needs": [
+              "rust"
+            ],
+            "default_environment": "rust-base",
+            "environments": [
+              {
+                "id": "rust-base",
+                "provides": [
+                  "rust",
+                  "git"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "skipped",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-25",
+            "revision": 1
+          }
+        }
+      }
+    ]
+  }
+}

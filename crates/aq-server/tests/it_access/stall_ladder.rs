@@ -56,10 +56,8 @@ impl Ports for Fake {
     async fn effect(
         &self,
         t: &Target,
-        id: Uuid,
-        intent: &Intent,
-        _: &ExecutionPolicy,
-        _: u64,
+        engine::Action { id, intent }: engine::Action<'_>,
+        _: engine::Tick<'_>,
     ) -> Result<Outcome, AppError> {
         if matches!(intent, Intent::Notify) && self.crash_notify_once.swap(false, Ordering::SeqCst)
         {
@@ -95,11 +93,11 @@ fn target(f: &common::profiled::Fixture, attempt: Uuid) -> Target {
     }
 }
 
-async fn walk(pool: &sqlx::PgPool, fake: &Fake, t: &Target, from: u64, minutes: u64) {
+async fn walk(pool: &sqlx::PgPool, fake: &Fake, t: &Target, (from, minutes): (u64, u64)) {
     let policy = ExecutionPolicy::v1();
     for m in 0..=minutes {
         // A crashed effect leaves its intent pending; the next tick resumes it.
-        let _ = engine::tick(pool, fake, t, &policy, from + m * MIN).await;
+        let _ = engine::tick(pool, fake, t, engine::Tick::new(&policy, from + m * MIN)).await;
     }
 }
 
@@ -135,7 +133,7 @@ async fn stalled_session_is_nudged_then_escalated() {
     let fake = Fake::default();
     fake.crash_notify_once.store(true, Ordering::SeqCst);
     let t1 = target(&f, first);
-    walk(&pool, &fake, &t1, NOW, 60).await;
+    walk(&pool, &fake, &t1, (NOW, 60)).await;
     assert_eq!(
         kinds(&fake, first),
         ["nudge", "nudge", "notify", "stop", "replace"]
@@ -177,14 +175,14 @@ async fn stalled_session_is_nudged_then_escalated() {
     assert_eq!(spent, 1);
 
     // A final rung is inert on later ticks.
-    walk(&pool, &fake, &t1, NOW + 61 * MIN, 30).await;
+    walk(&pool, &fake, &t1, (NOW + 61 * MIN, 30)).await;
     assert_eq!(kinds(&fake, first).len(), 5);
 
     // The replacement stalls too: the lineage ceiling (1) is spent, so after
     // a confirmed stop the ladder quarantines instead of replacing again.
     let second = successor(&pool, first).await;
     let t2 = target(&f, second);
-    walk(&pool, &fake, &t2, NOW + 100 * MIN, 60).await;
+    walk(&pool, &fake, &t2, (NOW + 100 * MIN, 60)).await;
     assert_eq!(
         kinds(&fake, second),
         ["nudge", "nudge", "notify", "stop", "quarantine"]
@@ -216,9 +214,18 @@ async fn terminal(f: &common::profiled::Fixture, pool: &sqlx::PgPool, t: &Target
 
 async fn send_nudge(pool: &sqlx::PgPool, t: &Target) -> (Uuid, Delivery) {
     let mut tx = pool.begin().await.unwrap();
-    let out = ports::nudge(&mut tx, t, Uuid::new_v4(), "AQ stall check", false, NOW)
-        .await
-        .unwrap();
+    let out = ports::nudge(
+        &mut tx,
+        t,
+        ports::Nudge {
+            operation_id: Uuid::new_v4(),
+            body: "AQ stall check",
+            defer: false,
+            now: NOW,
+        },
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     let Outcome::Nudged {
         message_id,
@@ -295,10 +302,19 @@ async fn nudge_never_injects_during_unknown_input_state() {
         .execute(&pool)
         .await
         .unwrap();
+    assert_viewer_and_input_leases(&pool, attempt, term, eligible).await;
+}
+
+async fn assert_viewer_and_input_leases(
+    pool: &sqlx::PgPool,
+    attempt: Uuid,
+    term: Uuid,
+    eligible: Uuid,
+) {
     // A viewer of the attempt's live terminal stream (the transport sandboxed
     // sessions use) can type, so it is human control too, while its lease is fresh.
     assert_eq!(
-        ports::injectable(&pool, attempt).await.unwrap(),
+        ports::injectable(pool, attempt).await.unwrap(),
         vec![eligible]
     );
     let seen = |ago: i64| {
@@ -307,18 +323,18 @@ async fn nudge_never_injects_during_unknown_input_state() {
             .bind(Uuid::new_v4())
             .bind(ago)
     };
-    seen(0).execute(&pool).await.unwrap();
-    assert!(ports::injectable(&pool, attempt).await.unwrap().is_empty());
-    seen(20_000).execute(&pool).await.unwrap();
+    seen(0).execute(pool).await.unwrap();
+    assert!(ports::injectable(pool, attempt).await.unwrap().is_empty());
+    seen(20_000).execute(pool).await.unwrap();
     assert_eq!(
-        ports::injectable(&pool, attempt).await.unwrap(),
+        ports::injectable(pool, attempt).await.unwrap(),
         vec![eligible],
         "a viewer that went away without detaching stops holding the pane"
     );
     sqlx::query("UPDATE terminal_input_receipts SET disposition='injecting' WHERE terminal_id=$1")
         .bind(term)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-    assert!(ports::injectable(&pool, attempt).await.unwrap().is_empty());
+    assert!(ports::injectable(pool, attempt).await.unwrap().is_empty());
 }

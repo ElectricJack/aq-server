@@ -57,7 +57,7 @@ impl ExecutionPolicy {
         if self.version == 0 || positive.contains(&0) {
             return Err("stall_policy_invalid_window");
         }
-        if self.nudge_limit == 0 || self.nudge_limit > 8 || self.max_deferrals == 0 {
+        if !(1..=8).contains(&self.nudge_limit) || self.max_deferrals == 0 {
             return Err("stall_policy_invalid_nudges");
         }
         if self.replacement_ceiling > 3 {

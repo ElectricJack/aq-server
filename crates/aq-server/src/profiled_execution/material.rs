@@ -131,6 +131,14 @@ mod tests {
             adapter: lease.credential_profile.clone(),
             version: 1,
         };
+        let snapshot = |backend_kind| aq_intelligence_config::material::ProvisioningSnapshot {
+            node_id,
+            boot_id,
+            delivery: &delivery,
+            observed_at_ms: 1000,
+            expires_at_ms: 2000,
+            backend_kind,
+        };
         for kind in [CredentialKind::ApiKey, CredentialKind::SubscriptionLogin] {
             let mut cfg = config(path.clone(), &lease, node_id);
             cfg.credentials[0].kind = kind;
@@ -141,50 +149,22 @@ mod tests {
                 Some(BackendKind::Boat),
                 Some(BackendKind::CloudflareContainers),
             ] {
-                assert!(
-                    provisioning_bindings(
-                        &registry, node_id, boot_id, &delivery, 1000, 2000, backend
-                    )
-                    .is_empty()
-                );
+                assert!(provisioning_bindings(&registry, snapshot(backend)).is_empty());
             }
             assert_eq!(
-                provisioning_bindings(
-                    &registry,
-                    node_id,
-                    boot_id,
-                    &delivery,
-                    1000,
-                    2000,
-                    Some(BackendKind::DockerLocal)
-                )
-                .len(),
+                provisioning_bindings(&registry, snapshot(Some(BackendKind::DockerLocal))).len(),
                 1
             );
             cfg.credentials[0].allowed_backends = aq_selection::default_allowed_backends();
             assert_eq!(
-                provisioning_bindings(
-                    &cfg.load().unwrap(),
-                    node_id,
-                    boot_id,
-                    &delivery,
-                    1000,
-                    2000,
-                    None
-                )
-                .len(),
+                provisioning_bindings(&cfg.load().unwrap(), snapshot(None)).len(),
                 1
             );
             cfg.credentials[0].allowed_node_ids.clear();
             assert!(
                 provisioning_bindings(
                     &cfg.load().unwrap(),
-                    node_id,
-                    boot_id,
-                    &delivery,
-                    1000,
-                    2000,
-                    Some(BackendKind::DockerLocal)
+                    snapshot(Some(BackendKind::DockerLocal))
                 )
                 .is_empty()
             );

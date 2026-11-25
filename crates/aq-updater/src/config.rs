@@ -120,6 +120,18 @@ impl UpdaterConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_paths()?;
+        self.validate_update_settings()?;
+        self.validate_repository()?;
+        if self.poll_interval_secs < 1 {
+            return Err(ConfigError::Invalid(
+                "poll_interval_secs must be >= 1".into(),
+            ));
+        }
+        self.validate_verifier()
+    }
+
+    fn validate_paths(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
         for (name, p) in [
             ("state_dir", &self.state_dir),
@@ -137,6 +149,11 @@ impl UpdaterConfig {
                     .into(),
             );
         }
+        Ok(())
+    }
+
+    fn validate_update_settings(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| Err(ConfigError::Invalid(m));
         if self.compose.files.is_empty() {
             return bad("compose.files must not be empty".into());
         }
@@ -154,22 +171,26 @@ impl UpdaterConfig {
         if self.channel.is_empty() {
             return bad("channel must not be empty".into());
         }
+        Ok(())
+    }
+
+    fn validate_repository(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| Err(ConfigError::Invalid(m));
         let repo = &self.release_repo;
         let last = repo.rsplit('/').next().unwrap_or("");
-        if repo.is_empty()
-            || repo.contains('@')
-            || !repo.contains('/')
-            || last.is_empty()
-            || last.contains(':')
-        {
+        let qualified_path = repo.contains('/') && !repo.contains('@');
+        let untagged_name = !last.is_empty() && !last.contains(':');
+        if !(qualified_path && untagged_name) {
             return bad(
                 "release_repo must look like host[:port]/path with no tag or digest ('@', or ':' in the last segment)"
                     .into(),
             );
         }
-        if self.poll_interval_secs < 1 {
-            return bad("poll_interval_secs must be >= 1".into());
-        }
+        Ok(())
+    }
+
+    fn validate_verifier(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| Err(ConfigError::Invalid(m));
         #[allow(irrefutable_let_patterns)]
         if let VerifierConfig::CosignKeyless {
             identity_regexp, ..

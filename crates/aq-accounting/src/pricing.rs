@@ -28,6 +28,59 @@ pub struct Pricing {
     pub missing_categories: Vec<Category>,
     pub source_incomplete: bool,
 }
+impl Category {
+    fn known_count(
+        self,
+        counters: &wire::Counters,
+        missing: &mut std::collections::BTreeSet<Category>,
+    ) -> Option<u64> {
+        match self.get(counters) {
+            wire::Counter::Known { value } => Some(*value),
+            wire::Counter::Unknown { .. } => {
+                missing.insert(self);
+                None
+            }
+        }
+    }
+}
+impl Rule {
+    fn priced_atoms(&self, layout: &Layout) -> Result<u8> {
+        if self.subtract.len() > 3 {
+            return Err(Error::Invalid);
+        }
+        let base = layout.atoms(self.category);
+        let mut subtract = 0;
+        for category in &self.subtract {
+            let atoms = layout.atoms(*category);
+            if atoms & base != atoms || atoms & subtract != 0 {
+                return Err(Error::Invalid);
+            }
+            subtract |= atoms;
+        }
+        let priced = base & !subtract;
+        if priced == 0 {
+            return Err(Error::Invalid);
+        }
+        Ok(priced)
+    }
+    fn count(
+        &self,
+        counters: &wire::Counters,
+        missing: &mut std::collections::BTreeSet<Category>,
+    ) -> Result<Option<u64>> {
+        let mut count = self.category.known_count(counters, missing);
+        for c in &self.subtract {
+            count = match (count, c.known_count(counters, missing)) {
+                (Some(total), Some(value)) => {
+                    Some(total.checked_sub(value).ok_or(Error::Conflict)?)
+                }
+                _ => None,
+            };
+        }
+        Ok(count)
+    }
+}
+
 impl RateCard {
     pub fn validate(&self) -> Result<()> {
         wire::artifact(&self.reference)?;
@@ -36,33 +89,13 @@ impl RateCard {
         self.currency.validate()?;
         self.provider.validate()?;
         self.model.validate()?;
-        if self.currency.as_str().len() != 3
-            || !self
-                .currency
-                .as_str()
-                .bytes()
-                .all(|b| b.is_ascii_uppercase())
-            || self.rules.is_empty()
-            || self.rules.len() > 5
-        {
+        if !self.valid_currency() || !(1..=5).contains(&self.rules.len()) {
             return Err(Error::Invalid);
         }
         let mut covered = 0u8;
         for rule in &self.rules {
-            if rule.subtract.len() > 3 {
-                return Err(Error::Invalid);
-            }
-            let base = self.layout.atoms(rule.category);
-            let mut subtract = 0u8;
-            for c in &rule.subtract {
-                let atoms = self.layout.atoms(*c);
-                if atoms & base != atoms || atoms & subtract != 0 {
-                    return Err(Error::Invalid);
-                }
-                subtract |= atoms;
-            }
-            let atoms = base & !subtract;
-            if atoms == 0 || covered & atoms != 0 {
+            let atoms = rule.priced_atoms(&self.layout)?;
+            if covered & atoms != 0 {
                 return Err(Error::Invalid);
             }
             covered |= atoms;
@@ -73,6 +106,14 @@ impl RateCard {
             return Err(Error::Invalid);
         }
         Ok(())
+    }
+    fn valid_currency(&self) -> bool {
+        self.currency.as_str().len() == 3
+            && self
+                .currency
+                .as_str()
+                .bytes()
+                .all(|b| b.is_ascii_uppercase())
     }
     pub fn estimate(
         &self,
@@ -91,32 +132,20 @@ impl RateCard {
             if rule.microunits_per_million_tokens == 0 {
                 continue;
             }
-            let mut count = match rule.category.get(counters) {
-                wire::Counter::Known { value } => Some(*value),
-                wire::Counter::Unknown { .. } => {
-                    missing.insert(rule.category);
-                    None
-                }
-            };
-            for c in &rule.subtract {
-                match c.get(counters) {
-                    wire::Counter::Known { value } => {
-                        if let Some(v) = count {
-                            count = Some(v.checked_sub(*value).ok_or(Error::Conflict)?);
-                        }
-                    }
-                    wire::Counter::Unknown { .. } => {
-                        missing.insert(*c);
-                        count = None;
-                    }
-                }
-            }
+            let count = rule.count(counters, &mut missing)?;
             if let Some(count) = count {
                 weighted = weighted
                     .checked_add(u128::from(count) * u128::from(rule.microunits_per_million_tokens))
                     .ok_or(Error::Overflow)?;
             }
         }
+        self.finish_estimate(weighted, missing)
+    }
+    fn finish_estimate(
+        &self,
+        weighted: u128,
+        missing: std::collections::BTreeSet<Category>,
+    ) -> Result<Pricing> {
         // Round once per canonical contribution, upwards to a microunit. All
         // calculations use integers; neither binary float nor currency guessing.
         let amount = weighted.checked_add(999_999).ok_or(Error::Overflow)? / 1_000_000;
@@ -157,12 +186,7 @@ impl RateCard {
             &fact.usage.call.model,
             &fact.contribution,
         )?;
-        if fact.complete_accounting_evidence.is_none()
-            || !matches!(
-                fact.usage.completeness,
-                wire::Completeness::ReportedComplete
-            )
-        {
+        if fact.source_incomplete() {
             pricing.source_incomplete = true;
             pricing.cost = Cost::Unknown {
                 reason: UnknownReason::Incomplete,
@@ -189,20 +213,37 @@ pub struct RateCardBook {
     chains: Vec<Vec<RateCardRevision>>,
 }
 
+fn validate_references(revisions: &[RateCardRevision]) -> Result<()> {
+    let mut references = std::collections::BTreeSet::new();
+    for r in revisions {
+        r.card.validate()?;
+        if !references.insert(serde_json::to_string(&r.card.reference).map_err(|_| Error::Invalid)?)
+        {
+            return Err(Error::Invalid);
+        }
+    }
+    Ok(())
+}
+impl RateCardRevision {
+    fn validate_correction(&self, previous: &Self) -> Result<()> {
+        let preserved_basis = self.card.layout == previous.card.layout
+            && self.card.currency == previous.card.currency;
+        let follows = self.revision == previous.revision + 1
+            && self.corrects.as_ref() == Some(&previous.card.reference);
+        if follows && preserved_basis {
+            Ok(())
+        } else {
+            Err(Error::Invalid)
+        }
+    }
+}
+
 impl RateCardBook {
     pub fn new(mut revisions: Vec<RateCardRevision>) -> Result<Self> {
         if revisions.len() > 256 {
             return Err(Error::Invalid);
         }
-        let mut references = std::collections::BTreeSet::new();
-        for r in &revisions {
-            r.card.validate()?;
-            if !references
-                .insert(serde_json::to_string(&r.card.reference).map_err(|_| Error::Invalid)?)
-            {
-                return Err(Error::Invalid);
-            }
-        }
+        validate_references(&revisions)?;
         revisions.sort_by(|a, b| {
             (a.card.provider.as_str(), a.card.model.as_str(), a.revision).cmp(&(
                 b.card.provider.as_str(),
@@ -212,27 +253,17 @@ impl RateCardBook {
         });
         let mut chains: Vec<Vec<RateCardRevision>> = Vec::new();
         for r in revisions {
-            match chains.last_mut() {
-                Some(chain)
-                    if chain[0].card.provider == r.card.provider
-                        && chain[0].card.model == r.card.model =>
-                {
-                    let previous = chain.last().expect("chains are never empty");
-                    if r.revision != previous.revision + 1
-                        || r.corrects.as_ref() != Some(&previous.card.reference)
-                        || r.card.layout != previous.card.layout
-                        || r.card.currency != previous.card.currency
-                    {
-                        return Err(Error::Invalid);
-                    }
-                    chain.push(r);
+            let chain = chains.last_mut().filter(|c| {
+                c[0].card.provider == r.card.provider && c[0].card.model == r.card.model
+            });
+            if let Some(chain) = chain {
+                r.validate_correction(chain.last().expect("chains are never empty"))?;
+                chain.push(r);
+            } else {
+                if r.revision != 1 || r.corrects.is_some() {
+                    return Err(Error::Invalid);
                 }
-                _ => {
-                    if r.revision != 1 || r.corrects.is_some() {
-                        return Err(Error::Invalid);
-                    }
-                    chains.push(vec![r]);
-                }
+                chains.push(vec![r]);
             }
         }
         Ok(Self { chains })
@@ -275,164 +306,5 @@ impl RateCard {
     }
 }
 
-/// Bounded aggregate of canonical facts for one attempt or lineage.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Summary {
-    /// At most eight components, as the usage view allows.
-    pub costs: Vec<Cost>,
-    /// Known lower-bound spend in `currency`; `None` when currencies differ.
-    pub spent_microunits: Option<u64>,
-    pub currency: Option<wire::Text>,
-    /// Every fact has a provider-reported or token-rate cost.
-    pub complete: bool,
-    pub reason: Option<String>,
-}
-
-pub const MAX_COST_COMPONENTS: usize = 8;
-
-/// Summarize canonical facts with the billing basis of the source that owns
-/// each one. A reported zero stays a `ProviderReported` component; missing
-/// evidence is an `Unknown` component; flat subscription and local-model usage
-/// is labelled `NotApplicable`, never charged at token rates.
-pub fn summarize(
-    facts: &[(Option<EstimateBasis>, &crate::reconcile::Fact)],
-    book: &RateCardBook,
-) -> Result<Summary> {
-    use std::collections::BTreeMap;
-    let key = |v: &wire::ArtifactRef| serde_json::to_string(v).map_err(|_| Error::Invalid);
-    let mut reported: BTreeMap<String, (u64, Vec<wire::ArtifactRef>)> = BTreeMap::new();
-    let mut estimated: BTreeMap<(String, String), (u64, Cost)> = BTreeMap::new();
-    let mut unknown: Vec<UnknownReason> = Vec::new();
-    let note = |unknown: &mut Vec<UnknownReason>, reason: UnknownReason| {
-        if !unknown.contains(&reason) {
-            unknown.push(reason);
-        }
-    };
-    let mut reasons = std::collections::BTreeSet::new();
-    let add = |total: &mut u64, amount: u64| -> Result<()> {
-        *total = total.checked_add(amount).ok_or(Error::Overflow)?;
-        Ok(())
-    };
-    for (basis, fact) in facts {
-        fact.validate()?;
-        match basis {
-            Some(EstimateBasis::SubscriptionAllocation) => {
-                note(&mut unknown, UnknownReason::NotApplicable);
-                reasons.insert("flat subscription usage is labelled with the subscription basis, not costed at token rates");
-                continue;
-            }
-            Some(EstimateBasis::LocalModelAllocation) => {
-                note(&mut unknown, UnknownReason::NotApplicable);
-                reasons.insert("local model usage is labelled with the local allocation basis, not costed at token rates");
-                continue;
-            }
-            _ => {}
-        }
-        if let Cost::ProviderReported {
-            amount_microunits,
-            currency,
-            receipt,
-        } = &fact.usage.cost
-        {
-            let entry = reported.entry(currency.as_str().to_owned()).or_default();
-            add(&mut entry.0, *amount_microunits)?;
-            entry.1.push(receipt.clone());
-            continue;
-        }
-        let card = match (basis, &fact.pricing_reference) {
-            (Some(EstimateBasis::TokenRates), Some(pinned)) => book.effective(pinned),
-            _ => None,
-        };
-        let Some(card) = card else {
-            note(&mut unknown, UnknownReason::NotReported);
-            reasons.insert("no provider-reported cost or pinned rate card");
-            continue;
-        };
-        match card.price(fact)?.cost {
-            cost @ Cost::NonInvoiceEstimate { .. } => {
-                let Cost::NonInvoiceEstimate {
-                    amount_microunits,
-                    currency,
-                    ..
-                } = &cost
-                else {
-                    unreachable!()
-                };
-                let entry = estimated
-                    .entry((key(&card.reference)?, currency.as_str().to_owned()))
-                    .or_insert((0, cost.clone()));
-                add(&mut entry.0, *amount_microunits)?;
-            }
-            _ => {
-                note(&mut unknown, UnknownReason::Incomplete);
-                reasons.insert("token counters or accounting evidence are incomplete");
-            }
-        }
-    }
-    let mut costs = Vec::new();
-    let mut totals: BTreeMap<String, u64> = BTreeMap::new();
-    for (currency, (amount, receipts)) in reported {
-        let receipt = if receipts.len() == 1 {
-            receipts[0].clone()
-        } else {
-            wire::ArtifactRef {
-                id: wire::Text::new("aq.accounting.reported-receipts")?,
-                version: wire::Text::new("1")?,
-                digest: crate::hash(&receipts)?,
-            }
-        };
-        add(totals.entry(currency.clone()).or_default(), amount)?;
-        costs.push(Cost::ProviderReported {
-            amount_microunits: amount,
-            currency: wire::Text::new(&currency)?,
-            receipt,
-        });
-    }
-    for ((_, currency), (amount, mut cost)) in estimated {
-        add(totals.entry(currency).or_default(), amount)?;
-        if let Cost::NonInvoiceEstimate {
-            amount_microunits, ..
-        } = &mut cost
-        {
-            *amount_microunits = amount;
-        }
-        costs.push(cost);
-    }
-    for reason in [
-        UnknownReason::NotReported,
-        UnknownReason::Unsupported,
-        UnknownReason::SourceGap,
-        UnknownReason::NotApplicable,
-        UnknownReason::Incomplete,
-    ] {
-        if unknown.contains(&reason) {
-            costs.push(Cost::Unknown { reason });
-        }
-    }
-    let complete = !facts.is_empty() && unknown.is_empty() && totals.len() <= 1;
-    if costs.len() > MAX_COST_COMPONENTS {
-        costs = vec![Cost::Unknown {
-            reason: UnknownReason::Incomplete,
-        }];
-        reasons.insert("more cost components than the usage view can carry");
-    }
-    let (spent_microunits, currency) = match totals.len() {
-        0 => (Some(0), None),
-        1 => {
-            let (c, v) = totals.into_iter().next().expect("one total");
-            (Some(v), Some(wire::Text::new(&c)?))
-        }
-        _ => {
-            reasons.insert("costs are reported in more than one currency");
-            (None, None)
-        }
-    };
-    let reason = (!reasons.is_empty()).then(|| reasons.into_iter().collect::<Vec<_>>().join("; "));
-    Ok(Summary {
-        costs,
-        spent_microunits,
-        currency,
-        complete: complete && reason.is_none(),
-        reason,
-    })
-}
+mod summary;
+pub use summary::{MAX_COST_COMPONENTS, Summary, summarize};

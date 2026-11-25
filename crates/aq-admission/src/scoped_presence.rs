@@ -407,6 +407,10 @@ impl PresenceReport {
         revision(self.sequence)?;
         self.observation.validate()?;
         require((1000..=MAX_TTL_MS).contains(&self.ttl_ms), "presence TTL")?;
+        self.validate_presence()?;
+        bytes(self, MAX_REQUEST_BYTES)
+    }
+    fn validate_presence(&self) -> Result<()> {
         if let Presence::Present {
             installation,
             observed_material_digest,
@@ -423,17 +427,19 @@ impl PresenceReport {
                     && *observed_material_bytes == installation.delivery.lease.material_bytes,
                 "fresh private byte observation mismatch",
             )?;
+            let observed_here = installation.worker == self.identity
+                && installation.kernel_boot_id == self.observation.kernel_boot_id;
+            let lease = &installation.delivery.lease;
+            let same_lease = lease.binding == self.binding && lease.lease_id == self.lease_id;
             require(
-                installation.worker == self.identity
-                    && installation.kernel_boot_id == self.observation.kernel_boot_id
-                    && installation.delivery.lease.binding == self.binding
-                    && installation.delivery.lease.lease_id == self.lease_id
+                observed_here
+                    && same_lease
                     && installation.material_synced_ns <= self.observation.read_started_ns
                     && installation.receipt()?.private_binding == self.private_binding,
                 "presence private installation scope",
             )?;
         }
-        bytes(self, MAX_REQUEST_BYTES)
+        Ok(())
     }
     pub fn validate_against(&self, lease: &MaterialLease, receipt: &MaterialReceipt) -> Result<()> {
         self.validate()?;
@@ -529,18 +535,28 @@ pub struct PresenceReceipt {
     pub disposition: Disposition,
 }
 impl PresenceReceipt {
+    fn matches_report(&self, report: &PresenceReport) -> bool {
+        let same_operation =
+            self.operation_id == report.operation_id && self.identity == report.identity;
+        self.schema_version == 1
+            && same_operation
+            && self.same_lease(report)
+            && self.negotiated_for(report)
+    }
+    fn same_lease(&self, report: &PresenceReport) -> bool {
+        self.binding == report.binding
+            && self.grant_id == report.grant_id
+            && self.lease_id == report.lease_id
+            && self.sequence == report.sequence
+    }
+    fn negotiated_for(&self, report: &PresenceReport) -> bool {
+        self.negotiation.protocol == report.negotiation.protocol
+            && self.negotiation.qualification == report.negotiation.qualification
+    }
     pub fn validate_for(&self, report: &PresenceReport) -> Result<()> {
         report.validate()?;
         require(
-            self.schema_version == 1
-                && self.operation_id == report.operation_id
-                && self.identity == report.identity
-                && self.negotiation.protocol == report.negotiation.protocol
-                && self.negotiation.qualification == report.negotiation.qualification
-                && self.binding == report.binding
-                && self.grant_id == report.grant_id
-                && self.lease_id == report.lease_id
-                && self.sequence == report.sequence
+            self.matches_report(report)
                 && self.request_digest == report.digest()?
                 && digest(&self.inventory_at_record)? == digest(&report.inventory)?,
             "presence receipt scope/digest",
@@ -552,17 +568,17 @@ impl PresenceReceipt {
 /// Independent schemas; relational checks and actual owner authorization remain
 /// mandatory in the decoder/daemon even when a JSON schema validates.
 pub fn inventory_schema() -> serde_json::Value {
-    bounded_schema(
+    schema::bounded(
         serde_json::to_value(schemars::schema_for!(InventoryV2)).expect("inventory schema"),
     )
 }
 pub fn report_schema() -> serde_json::Value {
-    bounded_schema(
+    schema::bounded(
         serde_json::to_value(schemars::schema_for!(PresenceReport)).expect("presence schema"),
     )
 }
 pub fn receipt_schema() -> serde_json::Value {
-    let mut value = bounded_schema(
+    let mut value = schema::bounded(
         serde_json::to_value(schemars::schema_for!(PresenceReceipt))
             .expect("presence receipt schema"),
     );
@@ -570,7 +586,7 @@ pub fn receipt_schema() -> serde_json::Value {
     value
 }
 pub fn inventory_receipt_schema() -> serde_json::Value {
-    let mut value = bounded_schema(
+    let mut value = schema::bounded(
         serde_json::to_value(schemars::schema_for!(InventoryReceipt))
             .expect("inventory receipt schema"),
     );
@@ -578,100 +594,11 @@ pub fn inventory_receipt_schema() -> serde_json::Value {
     value
 }
 pub fn qualification_schema() -> serde_json::Value {
-    let mut value = bounded_schema(
+    let mut value = schema::bounded(
         serde_json::to_value(schemars::schema_for!(Qualification))
             .expect("presence qualification schema"),
     );
     value["x-max-document-bytes"] = 8192.into();
     value
 }
-fn bounded_schema(mut value: serde_json::Value) -> serde_json::Value {
-    fn visit(value: &mut serde_json::Value) {
-        match value {
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    visit(item)
-                }
-            }
-            serde_json::Value::Object(object) => {
-                for (_, v) in object.iter_mut() {
-                    visit(v)
-                }
-                if let Some(defs) = object
-                    .get_mut("$defs")
-                    .and_then(serde_json::Value::as_object_mut)
-                {
-                    if let Some(text) = defs
-                        .get_mut("Text")
-                        .and_then(serde_json::Value::as_object_mut)
-                    {
-                        text.insert("minLength".into(), 1.into());
-                        text.insert("maxLength".into(), 512.into());
-                        text.insert("x-utf8-byte-limit".into(), 512.into());
-                    }
-                    if let Some(label) = defs
-                        .get_mut("Label")
-                        .and_then(serde_json::Value::as_object_mut)
-                    {
-                        label.insert("x-utf8-byte-limit".into(), 512.into());
-                    }
-                    if let Some(hash) = defs
-                        .get_mut("Digest")
-                        .and_then(serde_json::Value::as_object_mut)
-                    {
-                        hash.insert("pattern".into(), "^[0-9a-f]{64}$".into());
-                        hash.insert("minLength".into(), 64.into());
-                        hash.insert("maxLength".into(), 64.into());
-                        hash.insert("x-utf8-byte-limit".into(), 64.into());
-                    }
-                }
-                if let Some(props) = object
-                    .get_mut("properties")
-                    .and_then(serde_json::Value::as_object_mut)
-                {
-                    for (name, property) in props {
-                        if let Some(p) = property.as_object_mut() {
-                            if name.ends_with("_ns") || name.ends_with("_at_ms") {
-                                p.insert("minimum".into(), 1.into());
-                                p.insert("maximum".into(), u64::MAX.into());
-                            }
-                            match name.as_str() {
-                                "schema_version" => {
-                                    p.insert("const".into(), 1.into());
-                                }
-                                "ttl_ms" | "maximum_ttl_ms" | "maximum_age_ms" => {
-                                    p.insert("minimum".into(), 1000.into());
-                                    p.insert("maximum".into(), MAX_TTL_MS.into());
-                                }
-                                "sequence" | "revision" | "grant_revision" => {
-                                    p.insert("minimum".into(), 1.into());
-                                    p.insert("maximum".into(), (i64::MAX as u64).into());
-                                }
-                                "observed_material_bytes" => {
-                                    p.insert("minimum".into(), 1.into());
-                                    p.insert("maximum".into(), 65_536.into());
-                                }
-                                "qualification" => {
-                                    p.insert("properties".into(),serde_json::json!({"id":{"pattern":"^aq[.]scoped-material-presence-qualification/.+"}}));
-                                }
-                                "qualifications" => {
-                                    p.insert("minItems".into(), 1.into());
-                                    p.insert("maxItems".into(), 16.into());
-                                }
-                                "provisionable_only" => {
-                                    p.insert("maxItems".into(), 32.into());
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    visit(&mut value);
-    value["x-max-document-bytes"] = MAX_REQUEST_BYTES.into();
-    value["x-relational-validation-required"] = true.into();
-    value
-}
+mod schema;

@@ -42,6 +42,15 @@ pub async fn record(
     auth: &AuthenticatedNode,
     request: &InventoryV2,
 ) -> Result<InventoryReceipt, AppError> {
+    record_with_stage(state, auth, request, &mut "validate").await
+}
+
+pub(super) async fn record_with_stage(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &InventoryV2,
+    stage: &mut &'static str,
+) -> Result<InventoryReceipt, AppError> {
     let reserved = state.presence_view();
     let state = &reserved;
     request
@@ -50,15 +59,18 @@ pub async fn record(
     if auth.id() != request.identity.node_id {
         return Err(changed());
     }
+    *stage = "acquire_inventory_transaction";
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
         tx.commit().await.map_err(|_| unavailable())?;
         return Ok(old);
     }
+    *stage = "verify_registered_runtime";
     let runtime =
         registration::current_runtime_locked(state, &mut tx, auth.id(), request.identity.boot_id)
             .await?;
+    *stage = "verify_presence_qualification";
     let q = Loaded::load(state, &request.negotiation.qualification)?;
     q.matches_runtime(&runtime)?;
     if request.runtime != runtime.runtime
@@ -80,6 +92,7 @@ pub async fn record(
         .clone()
         .ok_or_else(changed)?;
     let registry = state.config.intelligence.clone().ok_or_else(changed)?;
+    *stage = "verify_harness_qualifications";
     let mut harnesses = Vec::new();
     for reference in &request.qualifications {
         harnesses.push(
@@ -92,6 +105,7 @@ pub async fn record(
                 .ok_or_else(changed)?,
         );
     }
+    *stage = "verify_credential_profiles";
     let enrolled = aq_machine_control::enrolled(&mut tx, auth.id()).await;
     let enrolled = enrolled.map_err(|_| unavailable())?;
     for profile in &request.provisionable_only {
@@ -111,6 +125,7 @@ pub async fn record(
         .checked_add(request.ttl_ms)
         .filter(|t| *t <= i64::MAX as u64)
         .ok_or_else(unavailable)?;
+    *stage = "observe_provisioning";
     let mut bindings = private_inventory::observe(
         registry,
         auth.id(),
@@ -118,9 +133,31 @@ pub async fn record(
         delivery,
         observed,
         expires,
+        runtime.backend_kind,
     )
     .await?;
+<<<<<<< HEAD
     validate_bindings(&mut bindings, request)?;
+=======
+    if !request.provisionable_only.is_empty() {
+        bindings.retain(|b| {
+            request
+                .provisionable_only
+                .iter()
+                .any(|p| p.profile == b.credential_profile && p.revision == b.credential_revision)
+        });
+        if bindings.len() != request.provisionable_only.len() {
+            return Err(changed());
+        }
+    }
+    if bindings
+        .iter()
+        .any(|b| b.available || b.preparation.is_none())
+    {
+        return Err(changed());
+    }
+    *stage = "commit_inventory";
+>>>>>>> refs/remotes/central/main
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
@@ -136,9 +173,27 @@ pub async fn record(
         return Err(changed());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
+<<<<<<< HEAD
     let revision = next_revision_locked(&mut tx, request).await?;
+=======
+    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(storage::db)?;
+    let revision = if let Some(old) = old {
+        if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
+            && old.get::<i64, _>("sequence") as u64 >= request.sequence
+        {
+            return Err(changed());
+        }
+        old.get::<i64, _>("revision")
+            .checked_add(1)
+            .ok_or_else(unavailable)? as u64
+    } else {
+        1
+    };
+    #[cfg(feature = "project_environments")]
+    let harnesses = super::super::definitions::listed(state, &mut tx, auth.id(), harnesses).await?;
+>>>>>>> refs/remotes/central/main
     let snapshot = CapabilitySnapshot {
-        backend_kind: None,
+        backend_kind: runtime.backend_kind,
         target: ExecutionTarget::Worker {
             node_id: auth.id(),
             boot_id: request.identity.boot_id,

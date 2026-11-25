@@ -220,21 +220,27 @@ impl OfferRefusal {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct RefusedTask {
+    pub task: Uuid,
+    pub project: Uuid,
+}
+
 /// Record the refusal of `task`'s offer, replacing an earlier one, and keep
 /// the newest `refusals_kept` tasks. A failure only logs: the offer is
 /// refused either way.
-pub async fn record(pool: &PgPool, task: Uuid, project: Uuid, refusal: &OfferRefusal, now_ms: i64) {
-    if let Err(error) = store(pool, task, project, refusal, now_ms).await {
-        tracing::warn!(%task, %error, "the offer refusal was not recorded");
+pub async fn record(pool: &PgPool, task: RefusedTask, refusal: &OfferRefusal, now_ms: i64) {
+    if let Err(error) = store(pool, task, refusal, now_ms).await {
+        tracing::warn!(task=%task.task, %error, "the offer refusal was not recorded");
     }
 }
 async fn store(
     pool: &PgPool,
-    task: Uuid,
-    project: Uuid,
+    subject: RefusedTask,
     refusal: &OfferRefusal,
     now_ms: i64,
 ) -> Result<()> {
+    let RefusedTask { task, project } = subject;
     let kept = crate::settings(pool).await?.limits.refusals_kept;
     let value = serde_json::to_value(refusal).map_err(|_| crate::Error::Internal)?;
     let mut tx = pool.begin().await?;

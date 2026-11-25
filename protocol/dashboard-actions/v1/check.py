@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Check the server-owned union, retained examples and replay relationships."""
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -68,6 +67,50 @@ def validate_comment(value):
     else:
         assert 'body' not in payload
     assert len(canonical(value)) <= 65536
+def validate_versioned_subject(value):
+    payload, subject, kind = value['payload'], value['subject'], value['kind']
+    key = {'task.graph.create':'project', 'task.create':'project', 'decision.resolve':'decision', 'supervisor.message.send':'conversation', 'session.message.send':'session'}.get(kind)
+    key = key or ('project' if kind == 'knowledge.author' else kind.split('.')[0])
+    field = {'task.create':'expected_project_revision', 'decision.resolve':'expected_decision_revision', 'supervisor.message.send':'expected_conversation_revision', 'knowledge.author':'expected_project_revision', 'session.message.send':'expected_generation'}.get(kind, 'expected_version')
+    revision = str(payload[field])
+    assert value['expected_versions'] == {key:revision} and subject['revision'] == revision
+    assert subject['type'] == key and UUID(subject['id']).int
+    assert 0 < int(revision) <= 2**63 - 1
+
+def validate_graph_create(payload, subject):
+    assert subject['id'] == payload['project_id'] and UUID(payload['project_id']).int
+    tasks, edges = payload['tasks'], payload.get('edges', [])
+    ids = {t['id'] for t in tasks}
+    assert len(ids) == len(tasks) and all(UUID(i).int for i in ids)
+    assert 1 <= len(tasks) + len(edges) + sum('parent_id' in t and t['parent_id'] is not None for t in tasks) <= 100
+    edge_ids, pairs = set(), set()
+    for task in tasks:
+        validate_task(task)
+        if task.get('parent_id'):
+            assert UUID(task['parent_id']).int and task['parent_id'] != task['id']
+    for edge in edges:
+        assert UUID(edge['id']).int and edge['id'] not in ids | edge_ids
+        assert UUID(edge['source']).int and UUID(edge['target']).int and edge['source'] != edge['target']
+        assert edge['source'] in ids or edge['target'] in ids
+        assert (edge['source'], edge['target']) not in pairs
+        edge_ids.add(edge['id'])
+        pairs.add((edge['source'], edge['target']))
+
+def validate_typed(value):
+    payload, subject, kind = value['payload'], value['subject'], value['kind']
+    assert UUID(payload['project_id']).int
+    if kind == 'knowledge.author':
+        assert subject['id'] == payload['project_id'] and payload['title'].strip() and payload['body'].strip()
+    if kind == 'knowledge.verify':
+        assert value['reason'].strip()
+    if kind == 'task.reprioritize':
+        assert -1_000_000 <= payload['priority'] <= 1_000_000
+    if kind == 'task.role.set' and payload.get('role') is not None:
+        assert payload['role'].strip() and len(payload['role'].encode()) <= 128
+    if kind == 'task.route.set':
+        assert payload['class'].split('-')[0] in ('simple', 'standard', 'complex', 'deep')
+        assert payload['class'].split('-')[1] in ('low', 'medium', 'high', 'max')
+
 def validate_request(value):
     validator.validate(value)
     payload, subject = value['payload'], value['subject']
@@ -85,31 +128,9 @@ def validate_request(value):
         assert subject == {'type':'swarm', 'id':'owner-availability'} and value['expected_versions'] == {}
         assert isinstance(payload['available'], bool) and 0 < int(payload['expected_generation']) <= 2**63 - 1
         return
-    key = {'task.graph.create':'project', 'task.create':'project', 'decision.resolve':'decision', 'supervisor.message.send':'conversation', 'session.message.send':'session'}.get(kind)
-    key = key or ('project' if kind == 'knowledge.author' else kind.split('.')[0])
-    field = {'task.create':'expected_project_revision', 'decision.resolve':'expected_decision_revision', 'supervisor.message.send':'expected_conversation_revision', 'knowledge.author':'expected_project_revision', 'session.message.send':'expected_generation'}.get(kind, 'expected_version')
-    revision = str(payload[field])
-    assert value['expected_versions'] == {key:revision} and subject['revision'] == revision
-    assert subject['type'] == key and UUID(subject['id']).int
-    assert 0 < int(revision) <= 2**63 - 1
+    validate_versioned_subject(value)
     if kind == 'task.graph.create':
-        assert subject['id'] == payload['project_id'] and UUID(payload['project_id']).int
-        tasks, edges = payload['tasks'], payload.get('edges', [])
-        ids = {t['id'] for t in tasks}
-        assert len(ids) == len(tasks) and all(UUID(i).int for i in ids)
-        assert 1 <= len(tasks) + len(edges) + sum('parent_id' in t and t['parent_id'] is not None for t in tasks) <= 100
-        edge_ids, pairs = set(), set()
-        for task in tasks:
-            validate_task(task)
-            if task.get('parent_id'):
-                assert UUID(task['parent_id']).int and task['parent_id'] != task['id']
-        for edge in edges:
-            assert UUID(edge['id']).int and edge['id'] not in ids | edge_ids
-            assert UUID(edge['source']).int and UUID(edge['target']).int and edge['source'] != edge['target']
-            assert edge['source'] in ids or edge['target'] in ids
-            assert (edge['source'], edge['target']) not in pairs
-            edge_ids.add(edge['id'])
-            pairs.add((edge['source'], edge['target']))
+        validate_graph_create(payload, subject)
     elif kind == 'task.create':
         validate_task(payload)
     elif kind == 'supervisor.message.send':
@@ -121,18 +142,7 @@ def validate_request(value):
         assert payload['message_id'] != value['operation_id']
         assert payload['body'].strip() and len(payload['body'].encode()) <= 16384
     elif kind in TYPED:
-        assert UUID(payload['project_id']).int
-        if kind == 'knowledge.author':
-            assert subject['id'] == payload['project_id'] and payload['title'].strip() and payload['body'].strip()
-        if kind == 'knowledge.verify':
-            assert value['reason'].strip()
-        if kind == 'task.reprioritize':
-            assert -1_000_000 <= payload['priority'] <= 1_000_000
-        if kind == 'task.role.set' and payload.get('role') is not None:
-            assert payload['role'].strip() and len(payload['role'].encode()) <= 128
-        if kind == 'task.route.set':
-            assert payload['class'].split('-')[0] in ('simple', 'standard', 'complex', 'deep')
-            assert payload['class'].split('-')[1] in ('low', 'medium', 'high', 'max')
+        validate_typed(value)
     else:
         assert payload['decision_id'] == subject['id'] and payload['schema_version'] == 1
         assert payload['expected_subject']['version'] == '1'

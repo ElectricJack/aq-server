@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[features]
+# Spec 0017: `aq environment try`. Off by default.
+project_environments = ["aq-human-http/project_environments"]
+
 [dependencies]
 anyhow.workspace = true
 aq-agent-result-local = { path = "../../vendor/aq-agent-result-local-0.1.0", version = "=0.1.0" }

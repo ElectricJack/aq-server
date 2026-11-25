@@ -70,28 +70,28 @@ async fn admin() -> Admin {
     }
 }
 
-async fn call(
+impl As<'_> {
+    /// A request to `path` with this caller's credentials.
+    fn request(&self, method: &str, path: &str) -> axum::http::request::Builder {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json");
+        match self {
+            As::Supervisor(token) => request.header("authorization", format!("Bearer {token}")),
+            As::Owner { csrf: true } => request
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1"),
+            As::Owner { csrf: false } => request.header("x-aq-dev-email", "owner@localhost"),
+        }
+    }
+}
+
+async fn send(
     app: &Router,
-    method: &str,
-    path: &str,
-    who: As<'_>,
+    request: axum::http::request::Builder,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(path)
-        .header("content-type", "application/json");
-    request = match who {
-        As::Supervisor(token) => request.header("authorization", format!("Bearer {token}")),
-        As::Owner { csrf } => {
-            let request = request.header("x-aq-dev-email", "owner@localhost");
-            if csrf {
-                request.header("x-aq-request", "1")
-            } else {
-                request
-            }
-        }
-    };
     let body = body.map_or_else(Body::empty, |v| Body::from(v.to_string()));
     let response = app
         .clone()
@@ -106,6 +106,11 @@ async fn call(
     )
 }
 
+/// The path of a run action, such as `retry`.
+fn run_action(id: Uuid, action: &str) -> String {
+    format!("/api/internal-work/runs/{id}/{action}")
+}
+
 impl Admin {
     async fn supervisor(
         &self,
@@ -114,17 +119,14 @@ impl Admin {
         body: Option<Value>,
     ) -> (StatusCode, Value) {
         let path = format!("{NEST}{path}");
-        call(
-            &self.machine,
-            method,
-            &path,
-            As::Supervisor(&self.token),
-            body,
-        )
-        .await
+        send(&self.machine, self.bearer().request(method, &path), body).await
     }
     async fn as_owner(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
-        call(&self.owner, method, path, As::Owner { csrf: true }, body).await
+        let request = As::Owner { csrf: true }.request(method, path);
+        send(&self.owner, request, body).await
+    }
+    fn bearer(&self) -> As<'_> {
+        As::Supervisor(&self.token)
     }
     /// Replaces the live credential with one issued before `settings` existed:
     /// same generation and session, the original five scopes.
@@ -178,19 +180,25 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
             .fetch_one(&a.f.pool)
             .await
             .unwrap();
-    assert_eq!(
-        issued,
-        [
-            "graph.read",
-            "graph.write",
-            "enqueue",
-            "messaging",
-            "decisions",
-            "settings"
-        ]
-    );
+    let mut six = FIVE.to_vec();
+    six.push("settings");
+    assert_eq!(issued, six);
+    saves_the_internal_work_default_for_the_approving_owner(&a).await;
+    saves_the_routing_document(&a).await;
+    saves_a_level_document(&a).await;
+    // Roles and execution profiles are not a supervisor's to change.
+    let (status, _) = a.supervisor("GET", "/api/settings/roles", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    owner_paths_keep_their_csrf_guard(&a).await;
+    // The nest exists only on the machine listener.
+    let path = format!("{NEST}{INTERNAL}");
+    let owner_listener = send(&a.owner, a.bearer().request("GET", &path), None).await;
+    assert_eq!(owner_listener.0, StatusCode::NOT_FOUND);
+}
 
-    // The internal work default, saved without the CSRF header.
+/// The internal work default, saved without the CSRF header and attributed
+/// to the owner who approved the supervisor.
+async fn saves_the_internal_work_default_for_the_approving_owner(a: &Admin) {
     let (status, snapshot) = a.supervisor("GET", INTERNAL, None).await;
     assert_eq!(status, StatusCode::OK, "{snapshot}");
     let body = internal_save(&snapshot, json!("standard-high"));
@@ -199,28 +207,23 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
     assert_eq!(saved["disposition"], "saved");
     let (_, read) = a.as_owner("GET", INTERNAL, None).await;
     assert_eq!(read["default_profile_id"], "standard-high");
-    let id = body["operation_id"].as_str().unwrap();
+    let id: Uuid = body["operation_id"].as_str().unwrap().parse().unwrap();
     let receipt = a
         .supervisor("GET", &format!("{INTERNAL}/operations/{id}"), None)
         .await;
     assert_eq!(receipt, (StatusCode::OK, saved));
-    // The save is attributed to the owner who approved the supervisor.
     let actor: Uuid = sqlx::query_scalar(
         "SELECT actor_id FROM internal_work_settings_operations WHERE operation_id=$1",
     )
-    .bind(
-        body["operation_id"]
-            .as_str()
-            .unwrap()
-            .parse::<Uuid>()
-            .unwrap(),
-    )
+    .bind(id)
     .fetch_one(&a.f.pool)
     .await
     .unwrap();
     assert_eq!(actor, a.f.user.id);
+}
 
-    // The routing document, saved with PUT as the owner saves it.
+/// The routing document, saved with PUT as the owner saves it.
+async fn saves_the_routing_document(a: &Admin) {
     let (status, document) = a.supervisor("GET", DOCUMENT, None).await;
     assert_eq!(status, StatusCode::OK, "{document}");
     assert_eq!(document, json!({"markdown": "", "revision": "0"}));
@@ -231,8 +234,9 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
     let (_, read) = a.as_owner("GET", DOCUMENT, None).await;
     assert_eq!(read["markdown"], "Route a one-line fix to simple.");
     assert_eq!(read["revision"], saved["revision"]);
+}
 
-    // A level document.
+async fn saves_a_level_document(a: &Admin) {
     let (status, level) = a.supervisor("GET", LEVEL, None).await;
     assert_eq!(status, StatusCode::OK, "{level}");
     let markdown = level["markdown"].as_str().unwrap();
@@ -245,38 +249,19 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
     assert_eq!(status, StatusCode::OK, "{saved}");
     let (_, read) = a.as_owner("GET", LEVEL, None).await;
     assert_eq!(read["fields"]["name"], "Supervisor standard");
-    // Roles and execution profiles are not a supervisor's to change.
-    let (status, _) = a.supervisor("GET", "/api/settings/roles", None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+}
 
-    // The owner paths keep their CSRF guard: a browser-style request without
-    // the header is refused, and a supervisor bearer does not stand in for it.
+/// The owner paths keep their CSRF guard: a browser-style request without
+/// the header is refused, and a supervisor bearer does not stand in for it.
+async fn owner_paths_keep_their_csrf_guard(a: &Admin) {
     let (_, before) = a.as_owner("GET", INTERNAL, None).await;
     let body = internal_save(&before, Value::Null);
-    let browser = call(
-        &a.owner,
-        "POST",
-        INTERNAL,
-        As::Owner { csrf: false },
-        Some(body.clone()),
-    )
-    .await;
-    assert_eq!(browser.0, StatusCode::FORBIDDEN, "{}", browser.1);
-    let bearer = call(
-        &a.owner,
-        "POST",
-        INTERNAL,
-        As::Supervisor(&a.token),
-        Some(body),
-    )
-    .await;
-    assert_eq!(bearer.0, StatusCode::FORBIDDEN, "{}", bearer.1);
+    for who in [As::Owner { csrf: false }, a.bearer()] {
+        let refused = send(&a.owner, who.request("POST", INTERNAL), Some(body.clone())).await;
+        assert_eq!(refused.0, StatusCode::FORBIDDEN, "{}", refused.1);
+    }
     let (_, after) = a.as_owner("GET", INTERNAL, None).await;
     assert_eq!(after, before);
-    // The nest exists only on the machine listener.
-    let path = format!("{NEST}{INTERNAL}");
-    let owner_listener = call(&a.owner, "GET", &path, As::Supervisor(&a.token), None).await;
-    assert_eq!(owner_listener.0, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -284,14 +269,8 @@ async fn supervisor_without_settings_scope_gets_403_on_the_admin_nest() {
     let mut a = admin().await;
     let snapshot = a.supervisor("GET", INTERNAL, None).await.1;
     a.reissue_with_five_scopes().await;
-    let (status, projects) = call(
-        &a.machine,
-        "GET",
-        "/v1/supervisor/projects",
-        As::Supervisor(&a.token),
-        None,
-    )
-    .await;
+    let projects = a.bearer().request("GET", "/v1/supervisor/projects");
+    let (status, projects) = send(&a.machine, projects, None).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -309,11 +288,7 @@ async fn supervisor_without_settings_scope_gets_403_on_the_admin_nest() {
         ),
         ("GET", DOCUMENT.to_string(), None),
         ("GET", "/api/internal-work/runs".to_string(), None),
-        (
-            "POST",
-            format!("/api/internal-work/runs/{failed}/retry"),
-            None,
-        ),
+        ("POST", run_action(failed, "retry"), None),
     ] {
         let (status, out) = a.supervisor(method, &path, body).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {out}");
@@ -323,14 +298,8 @@ async fn supervisor_without_settings_scope_gets_403_on_the_admin_nest() {
         .await
         .unwrap();
     assert_eq!(tasks, 1, "no retry was submitted");
-    let (status, _) = call(
-        &a.machine,
-        "GET",
-        &format!("{NEST}{INTERNAL}"),
-        As::Owner { csrf: true },
-        None,
-    )
-    .await;
+    let unauthenticated = As::Owner { csrf: true }.request("GET", &format!("{NEST}{INTERNAL}"));
+    let (status, _) = send(&a.machine, unauthenticated, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "no bearer");
 }
 
@@ -352,10 +321,13 @@ async fn admin_nest_refuses_paths_outside_settings_and_internal_work() {
     // The owner handlers take no PUT; the router refuses it before the gate.
     let (status, _) = a.supervisor("PUT", INTERNAL, None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    gate_refuses_before_the_inner_router(&a).await;
+}
 
-    // The gate itself, over an inner router that serves more than it may
-    // forward: an outside path is 404, and PUT, DELETE or PATCH on a path
-    // that takes none is 403, both before the inner router is reached.
+/// The gate itself, over an inner router that serves more than it may
+/// forward: an outside path is 404, and PUT, DELETE or PATCH on a path
+/// that takes none is 403, both before the inner router is reached.
+async fn gate_refuses_before_the_inner_router(a: &Admin) {
     let reached = Arc::new(AtomicUsize::new(0));
     let hit = |reached: Arc<AtomicUsize>| {
         any(move || async move {
@@ -370,29 +342,32 @@ async fn admin_nest_refuses_paths_outside_settings_and_internal_work() {
         .route("/api/internal-work/runs", hit(reached.clone()));
     let gate =
         aq_supervisor_control::admin::routes(inner, a.f.pool.clone(), Arc::new(|| 1_000_000));
+    let through_gate = |method: &str, path: &str| {
+        let request = a.bearer().request(method, &format!("{NEST}{path}"));
+        let gate = &gate;
+        async move { send(gate, request, None).await.0 }
+    };
     for path in [
         "/api/worker-logins",
         "/api/settings/routing-document-extra",
         "/api/internal-work",
     ] {
-        let (status, _) = call(
-            &gate,
-            "GET",
-            &format!("{NEST}{path}"),
-            As::Supervisor(&a.token),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            through_gate("GET", path).await,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
     }
-    let path = format!("{NEST}/api/internal-work/runs");
+    let runs = "/api/internal-work/runs";
     for method in ["PUT", "DELETE", "PATCH"] {
-        let (status, _) = call(&gate, method, &path, As::Supervisor(&a.token), None).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{method}");
+        assert_eq!(
+            through_gate(method, runs).await,
+            StatusCode::FORBIDDEN,
+            "{method}"
+        );
     }
     assert_eq!(reached.load(Ordering::SeqCst), 0);
-    let (status, _) = call(&gate, "GET", &path, As::Supervisor(&a.token), None).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(through_gate("GET", runs).await, StatusCode::OK);
     assert_eq!(reached.load(Ordering::SeqCst), 1);
 }
 
@@ -411,11 +386,7 @@ async fn supervisor_can_list_and_retry_internal_runs() {
     assert_eq!(status, StatusCode::OK, "{run}");
     assert_eq!(run["status"], "failed");
     let (status, retried) = a
-        .supervisor(
-            "POST",
-            &format!("/api/internal-work/runs/{failed}/retry"),
-            None,
-        )
+        .supervisor("POST", &run_action(failed, "retry"), None)
         .await;
     assert_eq!(status, StatusCode::OK, "{retried}");
     let new: Uuid = retried["id"].as_str().unwrap().parse().unwrap();
@@ -428,22 +399,19 @@ async fn supervisor_can_list_and_retry_internal_runs() {
         (original.supervisor_attempts, row.supervisor_attempts),
         (1, 1)
     );
-    let (status, _) = a
-        .as_owner(
-            "POST",
-            &format!("/api/internal-work/runs/{new}/retry"),
-            None,
-        )
-        .await;
+    let (status, _) = a.as_owner("POST", &run_action(new, "retry"), None).await;
     assert_eq!(status, StatusCode::OK);
     let row = store::get(&a.f.pool, new).await.unwrap().unwrap();
     assert_eq!(row.supervisor_attempts, 1);
+    escalates_then_resolves(&a, new).await;
+}
 
+async fn escalates_then_resolves(a: &Admin, run: Uuid) {
     let diagnosis = "profile internal has no working model";
     let (status, escalated) = a
         .supervisor(
             "POST",
-            &format!("/api/internal-work/runs/{new}/escalate"),
+            &run_action(run, "escalate"),
             Some(json!({"diagnosis": diagnosis})),
         )
         .await;
@@ -453,11 +421,7 @@ async fn supervisor_can_list_and_retry_internal_runs() {
         (&json!("owner"), &json!(diagnosis))
     );
     let (status, resolved) = a
-        .supervisor(
-            "POST",
-            &format!("/api/internal-work/runs/{new}/resolve"),
-            None,
-        )
+        .supervisor("POST", &run_action(run, "resolve"), None)
         .await;
     assert_eq!(status, StatusCode::OK, "{resolved}");
     assert_eq!(resolved["escalation"], "resolved");
@@ -490,12 +454,13 @@ async fn supervisor_reads_and_switches_routing_through_the_admin_nest() {
     assert_eq!(a.as_owner("GET", ROUTING, None).await.1, body);
 }
 
+const SOURCES: &str = "/api/playbooks/sources";
+
 /// Playbook sources (spec 0013 §4.4): a supervisor reaches the owner's
 /// handlers through the nest, with PUT and DELETE there and nowhere else. A
 /// worker, or anyone without the bearer, does not.
 #[tokio::test]
 async fn a_supervisor_can_register_and_rerun_but_not_as_a_worker() {
-    const SOURCES: &str = "/api/playbooks/sources";
     let a = admin().await;
     let (status, list) = a.supervisor("GET", SOURCES, None).await;
     assert_eq!((status, &list), (StatusCode::OK, &json!({"items": []})));
@@ -506,6 +471,22 @@ async fn a_supervisor_can_register_and_rerun_but_not_as_a_worker() {
     let (status, out) = a.supervisor("POST", SOURCES, Some(body.clone())).await;
     assert_eq!(status, StatusCode::CONFLICT, "{out}");
     assert!(out.to_string().contains("not running"), "{out}");
+    registered_source_reaches_its_handlers(&a).await;
+    // The owner has the same routes on the admin listener.
+    let (status, list) = a.as_owner("GET", SOURCES, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    sources_are_unreachable_without_the_bearer_or_the_nest(&a, body).await;
+    let sources: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_sources")
+        .fetch_one(&a.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(sources, 1);
+}
+
+/// The registered source's view, run, markdown and delete handlers answer
+/// through the nest.
+async fn registered_source_reaches_its_handlers(a: &Admin) {
     let (status, view) = a
         .supervisor("GET", &format!("{SOURCES}/triage"), None)
         .await;
@@ -530,37 +511,19 @@ async fn a_supervisor_can_register_and_rerun_but_not_as_a_worker() {
         .supervisor("DELETE", &format!("{SOURCES}/nobody"), None)
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    // The owner has the same routes on the admin listener.
-    let (status, list) = a.as_owner("GET", SOURCES, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+}
 
-    // Without the supervisor bearer nothing is reached.
+/// Without the supervisor bearer nothing is reached, and the machine
+/// listener has no such route outside the nest.
+async fn sources_are_unreachable_without_the_bearer_or_the_nest(a: &Admin, body: Value) {
     let nested = format!("{NEST}{SOURCES}");
-    let (status, _) = call(
-        &a.machine,
-        "POST",
-        &nested,
-        As::Owner { csrf: true },
-        Some(body),
-    )
-    .await;
+    let owner = As::Owner { csrf: true }.request("POST", &nested);
+    let (status, _) = send(&a.machine, owner, Some(body)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = call(
-        &a.machine,
-        "GET",
-        &nested,
-        As::Supervisor("not-a-credential"),
-        None,
-    )
-    .await;
+    let forged = As::Supervisor("not-a-credential").request("GET", &nested);
+    let (status, _) = send(&a.machine, forged, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // The machine listener has no such route outside the nest.
-    let (status, _) = call(&a.machine, "GET", SOURCES, As::Supervisor(&a.token), None).await;
+    let outside = a.bearer().request("GET", SOURCES);
+    let (status, _) = send(&a.machine, outside, None).await;
     assert_ne!(status, StatusCode::OK);
-    let sources: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_sources")
-        .fetch_one(&a.f.pool)
-        .await
-        .unwrap();
-    assert_eq!(sources, 1);
 }

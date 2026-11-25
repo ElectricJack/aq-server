@@ -79,26 +79,51 @@ fn one_line(s: &str) -> String {
         .join("\n  ")
 }
 
+impl Thread {
+    fn is_empty(&self) -> bool {
+        self.comments.is_empty()
+            && self.questions.is_empty()
+            && self.messages.is_empty()
+            && self.commands.is_empty()
+    }
+
+    fn footer(&self) -> String {
+        let mut footer = String::from(
+            "\n\nFor more, use `aq comment list`, `aq question show <decision_id>` and `aq message inbox`.",
+        );
+        if !self.commands.is_empty() {
+            footer.push_str("\n\nThe `aq` command is available. Commands this attempt may run (`aq commands`):\n");
+            footer.push_str(&self.commands.join(", "));
+        }
+        footer
+    }
+}
+
+impl Question {
+    fn line(&self) -> String {
+        let mut line = format!(
+            "- decision {} ({}): {}",
+            self.decision_id,
+            self.state,
+            one_line(&clip(&self.question, ITEM_BYTES).0)
+        );
+        if let Some(answer) = &self.answer {
+            line.push_str(&format!(
+                "\n  Answer: {}",
+                one_line(&clip(answer, ITEM_BYTES).0)
+            ));
+        }
+        line
+    }
+}
+
 /// The rendered block, or `None` when the thread is empty and there are no
 /// commands to list.
 pub fn render(t: &Thread, budget: usize) -> Option<String> {
-    if t.comments.is_empty()
-        && t.questions.is_empty()
-        && t.messages.is_empty()
-        && t.commands.is_empty()
-    {
+    if t.is_empty() {
         return None;
     }
-    let footer = {
-        let mut f = String::from(
-            "\n\nFor more, use `aq comment list`, `aq question show <decision_id>` and `aq message inbox`.",
-        );
-        if !t.commands.is_empty() {
-            f.push_str("\n\nThe `aq` command is available. Commands this attempt may run (`aq commands`):\n");
-            f.push_str(&t.commands.join(", "));
-        }
-        f
-    };
+    let footer = t.footer();
     let mut out = String::from(HEADER);
     let room = budget.saturating_sub(footer.len());
     let mut omitted = 0usize;
@@ -134,23 +159,11 @@ pub fn render(t: &Thread, budget: usize) -> Option<String> {
         })
         .collect();
     section(&mut out, "Comments (newest first)", comments);
-    let questions = t
-        .questions
-        .iter()
-        .map(|q| {
-            let mut line = format!(
-                "- decision {} ({}): {}",
-                q.decision_id,
-                q.state,
-                one_line(&clip(&q.question, ITEM_BYTES).0)
-            );
-            if let Some(a) = &q.answer {
-                line.push_str(&format!("\n  Answer: {}", one_line(&clip(a, ITEM_BYTES).0)));
-            }
-            line
-        })
-        .collect();
-    section(&mut out, "Questions", questions);
+    section(
+        &mut out,
+        "Questions",
+        t.questions.iter().map(Question::line).collect(),
+    );
     let messages = t
         .messages
         .iter()

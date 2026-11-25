@@ -120,15 +120,20 @@ impl Layout {
             },
         )
     }
+    fn counted_by_parent(&self, category: Category) -> bool {
+        match category {
+            Category::CacheRead => self.input_includes_cache_read,
+            Category::CacheWrite => self.input_includes_cache_write,
+            Category::Reasoning => self.output_includes_reasoning,
+            _ => false,
+        }
+    }
     pub fn unique_total(&self, c: &wire::Counters) -> Result<wire::Counter> {
         self.check_counters(c)?;
         let mut total = 0u64;
         let mut unknown = None;
         for category in Category::ALL {
-            if (category == Category::CacheRead && self.input_includes_cache_read)
-                || (category == Category::CacheWrite && self.input_includes_cache_write)
-                || (category == Category::Reasoning && self.output_includes_reasoning)
-            {
+            if self.counted_by_parent(category) {
                 continue;
             }
             match category.get(c) {
