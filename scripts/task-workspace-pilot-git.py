@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage two local repository identities behind a private real aq-git server."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import socket
 import subprocess
 import threading
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 GIT_IMAGE = "sha256:d93060ac2e0d87f5ec5785e58dc6371c9e210d44dfe386188e5b2991f615424d"
 
@@ -73,6 +74,20 @@ def request(binary, address, operation, repository, params, generation=None):
     return result["result"]
 
 
+def verify_export(directory, name, artifact, manifest):
+    bundle = directory / "state" / "artifacts" / str(UUID(artifact)) / "objects.bundle"
+    if hashlib.sha256(bundle.read_bytes()).hexdigest() != manifest["bundle_sha256"]:
+        raise RuntimeError("pilot bundle bytes disagree with the retained manifest")
+    receiver = directory / f"{name}-bundle-proof"
+    run("git", "init", "--bare", "--quiet", receiver)
+    run("git", "-C", receiver, "bundle", "unbundle", bundle, stdout=subprocess.DEVNULL)
+    run("git", "-C", receiver, "cat-file", "-e", manifest["base"]["hex"] + "^{commit}")
+    content = run("git", "-C", receiver, "show",
+                  manifest["source"]["hex"] + ":pilot-change.txt", capture_output=True)
+    if content.stdout != f"Retained change in {name}\n".encode():
+        raise RuntimeError("fresh Git receiver did not recover the repository-specific change")
+
+
 def retain(binary, address, directory, name, repository, base):
     base_object = {"algorithm": "sha1", "hex": base}
     workspace = request(binary, address, "workspace.create", repository,
@@ -100,6 +115,7 @@ def retain(binary, address, directory, name, repository, base):
     manifest = exported["manifest"]
     if manifest["repository_id"] != repository or manifest["source"] != checkpoint["source"]:
         raise RuntimeError("exported pilot artifact changed repository or commit")
+    verify_export(directory, name, exported["artifact_handle"], manifest)
     base_handle = workspace["workspace_id"]
     binding = request(binary, address, "retention.inspect", repository,
                       {"handle_id": base_handle})

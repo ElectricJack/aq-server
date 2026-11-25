@@ -47,7 +47,8 @@ native launch binding and target policy in the fixture. It does not attest
 worker eviction, successor hydration, forge PR creation, or task results.
 
 The aq-git stage fetches only `file:` sources created under its own private
-directory. It exports and checks one distinct local checkpoint bundle per repository and
+directory. It exports one checkpoint bundle per repository, verifies the bundle bytes,
+restores each into an empty bare receiver, and
 prints the exact base and head objects, logical repository IDs, and retention
 handles. The sibling pin is on an orphan branch, so its default branch history
 cannot supply the exact pinned object. These bundles demonstrate the Git substrate and are separate from
