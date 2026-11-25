@@ -280,7 +280,7 @@ class Fixture:
         if embedded != candidate:
             raise ValueError(role + " image provenance differs from selected immutable candidate")
         version = self.run(["docker", "run", "--rm", image, "--version"], name=role + "-version").strip()
-        if version != "aq-worker " + candidate["version"]:
+        if version != workers_smoke.worker_executable_version(candidate):
             raise ValueError(role + " executable version differs from selected candidate")
 
     def verify_fixture_interface(self, fixture):
