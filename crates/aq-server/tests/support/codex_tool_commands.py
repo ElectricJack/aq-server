@@ -179,6 +179,25 @@ def _observe_session(text, sessions, active):
     sessions[active] = session
 
 
+def _validate_exec_call(call, definitions):
+    if call not in definitions:
+        return
+    tool, arguments = definitions[call]
+    command = edit_command() if call == EDIT_CALL_ID else submit_command()
+    _require(tool == "exec_command" and arguments.get("cmd") == command,
+             "fixture command differs")
+
+
+def _validate_poll_call(call, definitions, session):
+    # A poll is admitted only for the actual session returned by the
+    # controlled tool, never an invented/fallback process identifier.
+    _require(call in definitions
+             and definitions[call] == ("write_stdin", {
+                 "session_id": session, "chars": "",
+                 "yield_time_ms": 1000, "max_output_tokens": 2048}),
+             "poll differs from observed session")
+
+
 def _trace(requests):
     outputs, definitions, order = _tool_history(requests)
     streams = {EDIT_CALL_ID: "", SUBMIT_CALL_ID: ""}
@@ -193,22 +212,12 @@ def _trace(requests):
                 _require(_EDIT_DONE in streams[EDIT_CALL_ID].splitlines(),
                          "submit preceded genuine edit/check output")
             active = call
-            if call in definitions:
-                _require(definitions[call][0] == "exec_command"
-                         and definitions[call][1].get("cmd") == (
-                             edit_command() if call == EDIT_CALL_ID else submit_command()),
-                         "fixture command differs")
+            _validate_exec_call(call, definitions)
         else:
             polls += 1
             _require(call == f"call_gate04_poll_{polls}" and active in sessions,
                      "poll has no observed original session")
-            # A poll is admitted only for the actual session returned by the
-            # controlled tool, never an invented/fallback process identifier.
-            _require(call in definitions
-                     and definitions[call] == ("write_stdin", {
-                         "session_id": sessions[active], "chars": "",
-                         "yield_time_ms": 1000, "max_output_tokens": 2048}),
-                     "poll differs from observed session")
+            _validate_poll_call(call, definitions, sessions[active])
         streams[active] += text + "\n"
         _observe_session(text, sessions, active)
         done = _EDIT_DONE if active == EDIT_CALL_ID else _DONE
