@@ -542,6 +542,27 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     let attempt = h.attempt;
     super::super::replacement::seed_native_offer_clock(&h.pool, attempt).await;
     let project = env.f.selection.lineage.project_id;
+    // The normal offer fence also requires a source export linked to the
+    // predecessor's pinned binding. This fixture otherwise seeds result custody only.
+    let export = Uuid::new_v4();
+    let mut tx = h.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state)
+         SELECT $1,project_id,v,encode(sha256(v),'hex'),1048577,1048577,'pending'
+         FROM project_execution_bindings, LATERAL (SELECT convert_to(jsonb_build_object('project_revision',revision)::text,'UTF8') v) pinned
+         WHERE project_id=$2").bind(export).bind(project).execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "INSERT INTO profiled_launch_source_exports(attempt_id,operation_id) VALUES($1,$2)",
+    )
+    .bind(attempt)
+    .bind(export)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
     let version = env.expected_version.to_string();
     let original = Uuid::new_v4();
     let publication = Uuid::new_v4();
@@ -646,7 +667,20 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     .await;
     stop.send(true).unwrap();
     sweep.await.unwrap();
-    check.expect("durable original retry confirms without another owner request");
+    if check.is_err() {
+        let receipt: Value = sqlx::query_scalar(
+            "SELECT jsonb_build_object('disposition',d.disposition,'receipt',d.response,
+               'checks',i.checks,'wait_reason',i.wait_reason,'released',i.released_at,
+               'holds_task',a.holds_task) FROM dashboard_operations d
+             JOIN owner_task_retry_intents i USING(operation_id)
+             JOIN execution_attempts a ON a.attempt_id=i.predecessor WHERE d.operation_id=$1",
+        )
+        .bind(original)
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+        panic!("durable original retry did not confirm: {receipt}");
+    }
     assert!(!env.holds_task().await);
     let (reason, evidence): (String, Value) = sqlx::query_as("SELECT reason,evidence FROM profiled_auto_settlements WHERE report_id=$1 AND disposition='rework_required'")
         .bind(report).fetch_one(&h.pool).await.unwrap();
