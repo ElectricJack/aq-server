@@ -33,13 +33,25 @@ def fixture_repo(directory, name):
     repo = directory / name
     git = ("git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false")
     run(*git, "init", "--quiet", "--initial-branch=main", repo)
-    (repo / "README.md").write_text(f"Disposable {name} pilot fixture\n")
-    run(*git, "-C", repo, "add", "README.md")
-    run(*git, "-C", repo, "-c", "user.name=AQ Pilot",
-        "-c", "user.email=aq-pilot@example.test", "commit", "-qm", "Seed pilot base")
-    oid = run(*git, "-C", repo, "rev-parse", "HEAD",
-              text=True, capture_output=True).stdout.strip()
-    return repo, oid
+    def commit(marker):
+        (repo / "README.md").write_text(marker + "\n")
+        run(*git, "-C", repo, "add", "README.md")
+        run(*git, "-C", repo, "-c", "user.name=AQ Pilot",
+            "-c", "user.email=aq-pilot@example.test", "commit", "-qm", "Seed pilot base")
+        return run(*git, "-C", repo, "rev-parse", "HEAD",
+                   text=True, capture_output=True).stdout.strip()
+
+    main = commit(f"Disposable {name} main fixture")
+    if name == "aq-server":
+        return repo, main, main, ["refs/heads/main"]
+    run(*git, "-C", repo, "switch", "--quiet", "--orphan", "workspace-source")
+    pin = commit("Disposable dashboard pin with unrelated history")
+    run(*git, "-C", repo, "switch", "--quiet", "main")
+    unrelated = subprocess.run((*git, "-C", repo, "merge-base", main, pin),
+                               capture_output=True, check=False)
+    if unrelated.returncode != 1:
+        raise RuntimeError("sibling fixture pin must be independent of its default branch")
+    return repo, pin, main, ["refs/heads/main", "refs/heads/workspace-source"]
 
 
 def request(binary, address, operation, repository, params, generation=None):
@@ -102,7 +114,7 @@ def retain(binary, address, directory, name, repository, base):
 
 
 def seed(binary, address, directory, name):
-    repo, oid = fixture_repo(directory, name)
+    repo, oid, main, refs = fixture_repo(directory, name)
     repo_id = str(uuid4())
     request(binary, address, "repo.register", repo_id, {
         "binding": {
@@ -111,7 +123,7 @@ def seed(binary, address, directory, name):
             "binding_generation": 1,
             "remote_url": repo.as_uri(),
             "allow_file_transport": True,
-            "allowed_refs": ["refs/heads/main"],
+            "allowed_refs": refs,
         },
     }, generation=0)
     request(binary, address, "repo.sync", repo_id, {}, generation=1)
@@ -120,6 +132,7 @@ def seed(binary, address, directory, name):
     if inspected["oid"] != {"algorithm": "sha1", "hex": oid}:
         raise RuntimeError("aq-git returned an unrelated commit")
     return {"repository_id": repo_id, "binding_generation": 1, "commit_oid": oid,
+            "default_head": main,
             "retained_fixture": retain(binary, address, directory, name, repo_id, oid)}
 
 
