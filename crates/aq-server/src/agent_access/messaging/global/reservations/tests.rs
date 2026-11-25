@@ -109,12 +109,14 @@ impl Fixture {
         );
         message
     }
-    async fn preview(&self, after: u64) -> Preview {
-        let a = self
-            .owner
+    async fn inspect(&self) -> ActorView {
+        self.owner
             .inspect_actor(&self.user, self.actor)
             .await
-            .unwrap();
+            .unwrap()
+    }
+    async fn preview(&self, after: u64) -> Preview {
+        let a = self.inspect().await;
         self.owner
             .preview_batch(
                 &self.user,
@@ -247,7 +249,7 @@ async fn actual_mail_reservation_recovers_replays_and_cancels_without_runtime() 
         lookup.current_reservation.unwrap().state,
         ReservationState::CancelledBeforePlan
     );
-    let a = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let a = f.inspect().await;
     assert!(a.current_reservation.is_none());
     assert_eq!(
         f.owner
@@ -403,7 +405,7 @@ async fn count_utf8_body_budget_partial_scans_and_head_integrity_are_truthful() 
         .execute(&f.state.store.pool)
         .await
         .unwrap();
-    let a = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let a = f.inspect().await;
     assert!(matches!(
         f.owner
             .preview_batch(
@@ -573,18 +575,12 @@ async fn sql_requires_exact_original_reserve_and_cancel_operation_views() {
         reason: None,
         reservation: Some(wrong),
     };
-    writes::finish(
-        &mut tx,
-        &a,
-        &f.user,
-        writes::Mutation {
-            kind: "reserve",
-            request: &raw,
-            receipt: &result,
-        },
-        Some(request.reservation_id),
-        None,
-    )
+    writes::Mutation {
+        kind: "reserve",
+        request: &raw,
+        receipt: &result,
+    }
+    .finish(&mut tx, &a, &f.user, Some(request.reservation_id), None)
     .await
     .unwrap();
     let error = tx.commit().await.unwrap_err();
@@ -620,18 +616,12 @@ async fn sql_requires_exact_original_reserve_and_cancel_operation_views() {
         reason: None,
         reservation: None,
     };
-    writes::finish(
-        &mut tx,
-        &a,
-        &f.user,
-        writes::Mutation {
-            kind: "configure",
-            request: &raw,
-            receipt: &result,
-        },
-        None,
-        Some(&configure.policy),
-    )
+    writes::Mutation {
+        kind: "configure",
+        request: &raw,
+        receipt: &result,
+    }
+    .finish(&mut tx, &a, &f.user, None, Some(&configure.policy))
     .await
     .unwrap();
     let error = tx.commit().await.unwrap_err();
@@ -641,16 +631,7 @@ async fn sql_requires_exact_original_reserve_and_cancel_operation_views() {
             .contains("original cancel operation proof"),
         "{error}"
     );
-    assert_eq!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .current_reservation
-            .unwrap()
-            .id,
-        active.id
-    );
+    assert_eq!(f.inspect().await.current_reservation.unwrap().id, active.id);
 }
 // A valid synthetic persisted metadata-only journal at the lifetime boundary.
 // It records no Run, host effect, provider call or assistant reply. Actual actor,
@@ -727,14 +708,7 @@ async fn last_operation_slot_preserves_exact_cancellation_but_no_other_writer() 
     f.seed("Last available reserve").await;
     let (raw, accepted) = f.reserve().await;
     let reservation = accepted.reservation.unwrap();
-    assert_eq!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .retained_operations,
-        4095
-    );
+    assert_eq!(f.inspect().await.retained_operations, 4095);
     assert!(matches!(
         f.configure(false, 4095).await,
         Err(AppError::Maintenance(_))
@@ -760,14 +734,7 @@ async fn last_operation_slot_preserves_exact_cancellation_but_no_other_writer() 
     let bytes = serde_json::to_vec(&cancel).unwrap();
     let cancelled = f.owner.cancel_reservation(&f.user, &bytes).await.unwrap();
     assert_eq!(cancelled.disposition, Disposition::CancelledBeforePlan);
-    assert_eq!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .retained_operations,
-        4096
-    );
+    assert_eq!(f.inspect().await.retained_operations, 4096);
     assert_eq!(
         f.owner.cancel_reservation(&f.user, &bytes).await.unwrap(),
         cancelled
@@ -780,14 +747,7 @@ async fn last_operation_slot_preserves_exact_cancellation_but_no_other_writer() 
             .disposition,
         Disposition::Reserved
     );
-    assert!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .current_reservation
-            .is_none()
-    );
+    assert!(f.inspect().await.current_reservation.is_none());
     let fresh = f.reserve_request(&f.preview(0).await);
     assert!(matches!(
         f.owner.reserve_batch(&f.user, &fresh).await,
@@ -802,7 +762,7 @@ async fn protected_control_bytes_allow_cancel_after_ordinary_byte_capacity_exhau
     let saved = accepted.reservation.unwrap();
     let mut reached = false;
     for _ in 0..32 {
-        let a = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+        let a = f.inspect().await;
         match f.configure(true, a.revision).await {
             Ok(_) => {}
             Err(AppError::Maintenance(_)) => {
@@ -813,11 +773,11 @@ async fn protected_control_bytes_allow_cancel_after_ordinary_byte_capacity_exhau
         }
     }
     assert!(reached);
-    let before = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let before = f.inspect().await;
     assert!(before.retained_bytes <= (MAX_BYTES - CONTROL_BYTES) as u64);
     let cancelled = f.cancel(&saved).await;
     assert_eq!(cancelled.disposition, Disposition::CancelledBeforePlan);
-    let after = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let after = f.inspect().await;
     assert!(after.retained_bytes > before.retained_bytes);
     assert!(after.retained_bytes <= MAX_BYTES as u64);
     assert!(after.current_reservation.is_none());
@@ -847,16 +807,102 @@ fn closed_commands_reject_fake_execution_fields_duplicates_and_fractional_revisi
     assert!(parse::<Configure>(&vec![b' '; 16385]).is_err());
 }
 
-#[test]
-fn normative_documents_decode_and_bind_exact_reservation_request_and_batch() {
-    let examples: Value = serde_json::from_slice(
+fn normative_examples() -> Value {
+    serde_json::from_slice(
         &std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../protocol/central-reservation/v1/examples.json"),
         )
         .unwrap(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn retained_outcomes_require_matching_command_kind_and_reason() {
+    let mut receipt: Receipt =
+        serde_json::from_value(normative_examples()["reserve_receipt"]["data"].clone()).unwrap();
+    for (disposition, command, success) in [
+        (Disposition::Configured, "configure", true),
+        (Disposition::NotConfigured, "configure", false),
+        (Disposition::Reserved, "reserve", true),
+        (Disposition::NotReserved, "reserve", false),
+        (Disposition::CancelledBeforePlan, "cancel", true),
+        (Disposition::NotCancelled, "cancel", false),
+    ] {
+        receipt.disposition = disposition;
+        for kind in ["configure", "reserve", "cancel", "unknown"] {
+            for reason in [None, Some(Reason::RevisionChanged)] {
+                receipt.reason = reason;
+                assert_eq!(
+                    writes::validate_outcome(kind, &receipt).is_ok(),
+                    kind == command && success == reason.is_none(),
+                    "{kind} {disposition:?} {reason:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn retained_reservation_replay_preserves_original_and_current_lifecycle_views() {
+    let examples = normative_examples();
+    let receipt: Receipt =
+        serde_json::from_value(examples["reserve_receipt"]["data"].clone()).unwrap();
+    let saved = receipt.reservation.as_ref().unwrap();
+    for state in [
+        ReservationState::AwaitingPreparedPlan,
+        ReservationState::CancelledBeforePlan,
+        ReservationState::Consumed,
+    ] {
+        let mut current = saved.clone();
+        current.state = state;
+        if state != ReservationState::AwaitingPreparedPlan {
+            current.revision = 2;
+        }
+        if state == ReservationState::CancelledBeforePlan {
+            current.cancel_operation_id = Some(Uuid::new_v4());
+        }
+        writes::validate_saved_reservation(&receipt, &current).unwrap();
+        // Lifecycle changes are allowed; the original batch and admission
+        // identity must still match every field of the retained view.
+        for (field, value) in [
+            ("id", json!(Uuid::new_v4())),
+            ("reserve_operation_id", json!(Uuid::new_v4())),
+            (
+                "admission_actor_revision",
+                json!(receipt.actor_revision + 1),
+            ),
+            ("policy_revision", json!(saved.policy_revision + 1)),
+            ("body_bytes", json!(saved.body_bytes + 1)),
+            ("batch_digest", json!(Digest::of(b"changed batch"))),
+        ] {
+            let mut changed = json!(current);
+            changed[field] = value;
+            let changed = serde_json::from_value(changed).unwrap();
+            assert!(
+                matches!(
+                    writes::validate_saved_reservation(&receipt, &changed),
+                    Err(AppError::IdentityUnavailable(_))
+                ),
+                "{state:?} {field}"
+            );
+        }
+    }
+    let cancelled: Receipt =
+        serde_json::from_value(examples["cancel_receipt"]["data"].clone()).unwrap();
+    let mut current = cancelled.reservation.clone().unwrap();
+    writes::validate_saved_reservation(&cancelled, &current).unwrap();
+    current.cancel_operation_id = Some(Uuid::new_v4());
+    assert!(writes::validate_saved_reservation(&cancelled, &current).is_err());
+    current = cancelled.reservation.clone().unwrap();
+    current.state = ReservationState::Consumed;
+    assert!(writes::validate_saved_reservation(&cancelled, &current).is_err());
+}
+
+#[test]
+fn normative_documents_decode_and_bind_exact_reservation_request_and_batch() {
+    let examples = normative_examples();
     for value in examples.as_object().unwrap().values() {
         let _: Document = serde_json::from_value(value.clone()).unwrap();
     }

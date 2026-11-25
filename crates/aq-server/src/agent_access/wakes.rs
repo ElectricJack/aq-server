@@ -295,6 +295,81 @@ async fn hold(
     Ok(())
 }
 
+struct WakeBudget {
+    limits: aq_profiles::roles::SelectionDefaults,
+    started: i64,
+    retries: u32,
+    elapsed: u64,
+}
+
+// Budgets carry forward from the lineage; they are never reset. Owner and
+// service handoffs are exempt only up to the configured continuation limit.
+async fn lineage_budget(
+    tx: &mut Transaction<'_, Postgres>,
+    task_id: Uuid,
+    launch_failures: i32,
+    wait_created: i64,
+    now: u64,
+) -> Result<WakeBudget> {
+    let limits = aq_role_settings::selection_defaults(tx)
+        .await
+        .map_err(|_| WaitError("internal"))?;
+    let format: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&mut **tx)
+            .await?;
+    let exempt = if format
+        .parse()
+        .is_ok_and(|v: u32| v >= aq_machine_control::FORMAT)
+    {
+        format!(
+            "-LEAST({},count(*) FILTER (WHERE EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))))",
+            limits.max_uncharged_continuations
+        )
+    } else {
+        String::new()
+    };
+    let started: i64 = sqlx::query_scalar(&format!("SELECT count(*){exempt} FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1"))
+        .bind(task_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    let lineage_start: Option<i64> = sqlx::query_scalar("SELECT min((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT) FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1")
+        .bind(task_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    let (retries, elapsed) = remaining_budget(
+        &limits,
+        started,
+        launch_failures,
+        lineage_start,
+        wait_created,
+        now,
+    );
+    Ok(WakeBudget {
+        limits,
+        started,
+        retries,
+        elapsed,
+    })
+}
+
+fn remaining_budget(
+    limits: &aq_profiles::roles::SelectionDefaults,
+    started: i64,
+    launch_failures: i32,
+    lineage_start: Option<i64>,
+    wait_created: i64,
+    now: u64,
+) -> (u32, u64) {
+    let spent = u32::try_from(started.max(1))
+        .unwrap_or(u32::MAX)
+        .saturating_add(u32::try_from(launch_failures).unwrap_or(0));
+    let retries = limits.max_wake_attempts.saturating_sub(spent);
+    let start = u64::try_from(lineage_start.unwrap_or(wait_created).min(wait_created)).unwrap_or(0);
+    let elapsed = (limits.max_wake_lineage_elapsed_ms).saturating_sub(now.saturating_sub(start));
+    (retries, elapsed)
+}
+
 /// Admit one wake in one transaction. Every early return commits the
 /// recorded disposition; only the winner insert makes the wake running.
 async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
@@ -404,42 +479,12 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
     if !lc::has_migratable_refs(&retained) {
         return held_or_escalated(tx, intent, holds, "retention_missing", now).await;
     }
-    // Budgets carry forward from the lineage; they are never reset.
-    // Owner and service handoffs are not charged (spec 0007 Q1), as in B4,
-    // up to `max_uncharged_continuations` per lineage (review I1). The wake
-    // limits are Settings › Selection defaults; the server has none of its own.
-    let limits = aq_role_settings::selection_defaults(&mut tx)
-        .await
-        .map_err(|_| WaitError("internal"))?;
-    let format: String =
-        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-            .fetch_one(&mut *tx)
-            .await?;
-    let exempt = if format
-        .parse()
-        .is_ok_and(|v: u32| v >= aq_machine_control::FORMAT)
-    {
-        format!(
-            "-LEAST({},count(*) FILTER (WHERE EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))))",
-            limits.max_uncharged_continuations
-        )
-    } else {
-        String::new()
-    };
-    let started: i64 = sqlx::query_scalar(&format!("SELECT count(*){exempt} FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1"))
-        .bind(task_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let spent = u32::try_from(started.max(1))
-        .unwrap_or(u32::MAX)
-        .saturating_add(u32::try_from(launch_failures).unwrap_or(0));
-    let retries = limits.max_wake_attempts.saturating_sub(spent);
-    let lineage_start: Option<i64> = sqlx::query_scalar("SELECT min((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT) FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1")
-        .bind(task_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let start = u64::try_from(lineage_start.unwrap_or(wait_created).min(wait_created)).unwrap_or(0);
-    let elapsed = (limits.max_wake_lineage_elapsed_ms).saturating_sub(now.saturating_sub(start));
+    let WakeBudget {
+        limits,
+        started,
+        retries,
+        elapsed,
+    } = lineage_budget(&mut tx, task_id, launch_failures, wait_created, now).await?;
     if retries == 0 || elapsed == 0 {
         finish(&mut tx, intent, "escalated", "budget_exhausted", at).await?;
         tx.commit().await?;
@@ -623,6 +668,55 @@ pub async fn run(state: AppState, mut stop: tokio::sync::watch::Receiver<bool>) 
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
             _ = stop.changed() => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limits() -> aq_profiles::roles::SelectionDefaults {
+        aq_profiles::roles::SelectionDefaults {
+            max_wake_attempts: 3,
+            max_wake_lineage_elapsed_ms: 1000,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn lineage_retries_charge_predecessor_and_failures_without_overflow() {
+        for (started, failures, retries) in [
+            (0, 0, 2),
+            (1, 0, 2),
+            (2, 0, 1),
+            (1, 1, 1),
+            (1, -1, 2),
+            (3, 0, 0),
+            (i64::MAX, i32::MAX, 0),
+        ] {
+            assert_eq!(
+                remaining_budget(&limits(), started, failures, None, 100, 100),
+                (retries, 1000)
+            );
+        }
+    }
+
+    #[test]
+    fn lineage_deadline_uses_earliest_offer_or_wait_and_never_resets() {
+        for (offered, waited, now, remaining) in [
+            (None, 100, 600, 500),
+            (Some(50), 100, 600, 450),
+            (Some(200), 100, 600, 500),
+            (None, 100, 1100, 0),
+            (Some(-1), 100, 600, 400),
+            (None, 100, 50, 1000),
+            (Some(0), 100, u64::MAX, 0),
+        ] {
+            assert_eq!(
+                remaining_budget(&limits(), 1, 0, offered, waited, now),
+                (2, remaining)
+            );
         }
     }
 }
