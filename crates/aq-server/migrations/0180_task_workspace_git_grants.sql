@@ -18,3 +18,5 @@ CREATE TABLE task_workspace_git_grants (
 CREATE TRIGGER task_workspace_git_grants_immutable
     BEFORE UPDATE ON task_workspace_git_grants
     FOR EACH ROW EXECUTE FUNCTION review_immutable_record();
+
+UPDATE meta SET value='180' WHERE key='state_format_version';
