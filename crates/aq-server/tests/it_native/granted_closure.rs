@@ -680,16 +680,12 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         "the stop proof is the closure receipt"
     );
     assert!(!held().await, "the claim is released");
-<<<<<<< HEAD
-    let (status, replay) = disposition(state, attempt, "owner@localhost", body).await;
-=======
     assert_eq!(
         history_live().await,
         (false, false),
         "the same closure discharges live history after verified abandonment"
     );
-    let (status, replay) = abandon("owner@localhost", body).await;
->>>>>>> refs/remotes/central/main
+    let (status, replay) = disposition(state, attempt, "owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
 
