@@ -42,6 +42,11 @@ async fn seed_stall_and_nudges(pool: &sqlx::PgPool, attempt: Uuid, task: Uuid) -
     sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'replacement_ceiling','owner','{}',$3,$4)")
         .bind(attempt).bind(task).bind(Uuid::new_v4()).bind((NOW + 30) as i64)
         .execute(pool).await.unwrap();
+    seed_nudges(pool, attempt, ep.episode_id).await
+}
+
+/// One delivered owner nudge and one deferred stall action in the inbox.
+async fn seed_nudges(pool: &sqlx::PgPool, attempt: Uuid, episode: Uuid) -> (Uuid, Uuid) {
     sqlx::query("INSERT INTO mailbox_heads(mailbox_key,next_cursor) VALUES('g10-ops',3)")
         .execute(pool)
         .await
@@ -53,7 +58,7 @@ async fn seed_stall_and_nudges(pool: &sqlx::PgPool, attempt: Uuid, task: Uuid) -
         let action = if inbox_only {
             let action = Uuid::new_v4();
             sqlx::query("INSERT INTO stall_actions(action_id,episode_id,kind,ordinal,expected_revision,intent,created_at_ms,receipt,receipted_at_ms,delivery) VALUES($1,$2,'nudge',1,1,'{}',$3,'{}',$3,'deferred')")
-                .bind(action).bind(ep.episode_id).bind(NOW as i64).execute(pool).await.unwrap();
+                .bind(action).bind(episode).bind(NOW as i64).execute(pool).await.unwrap();
             Some(action)
         } else {
             None
