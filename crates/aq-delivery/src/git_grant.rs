@@ -138,19 +138,35 @@ pub async fn offer(
     };
     let task_ref = task_branch(task);
     let lease = git.show_ref(&target, &task_ref).await?;
-    let project_revision =
-        i64::try_from(source.project_revision).map_err(|_| GitFailure::transport())?;
-    let update_from_main =
+    let binding = serde_json::json!({
+        "repository_id": repository,
+        "binding_generation": source.repository_binding_generation,
+    });
+    let (refresh, publication_retry): (bool, bool) =
+        sqlx::query_as(include_str!("git_grant/refresh.sql"))
+            .bind(task)
+            .bind(lease.as_deref())
+            .bind(&binding)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| GitFailure::transport())?;
+    // Older stores can produce ordinary grants without the owner retry intent table.
+    let update_from_main = if !refresh && publication_retry {
+        let project_revision =
+            i64::try_from(source.project_revision).map_err(|_| GitFailure::transport())?;
         sqlx::query_scalar(include_str!("git_grant/publication_retry_refresh.sql"))
             .bind(task)
             .bind(lease.as_deref())
-            .bind(serde_json::json!({"repository_id":repository,"binding_generation":source.repository_binding_generation}))
+            .bind(binding)
             .bind(source.project_id)
             .bind(project_revision)
             .bind(&task_ref)
             .fetch_one(pool)
             .await
-            .map_err(|_| GitFailure::transport())?;
+            .map_err(|_| GitFailure::transport())?
+    } else {
+        refresh
+    };
     Ok(GitGrant {
         endpoint: endpoint(repository),
         repository_id: repository,
