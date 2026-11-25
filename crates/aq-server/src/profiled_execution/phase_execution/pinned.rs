@@ -112,18 +112,7 @@ async fn load_for_locked(
         registration::current_runtime_locked(state, tx, auth.id(), q.original.identity.boot_id)
             .await?;
     let qualification = policy::current(state, &h, &runtime)?;
-    let current_registration =
-        registration::admitted_runtime_locked(tx, auth.id(), q.original.identity.boot_id).await?;
-    if current_registration.request.identity != q.original.identity {
-        return Err(refused());
-    }
-    let registration =
-        super::super::closure::history::for_attempt_locked(tx, &q.original.binding).await?;
-    if registration.metadata.semantic_digest != current_registration.semantic_digest
-        || registration.metadata.request.identity != q.original.identity
-    {
-        return Err(refused());
-    }
+    let (current_registration, registration_id) = load_registration_locked(tx, auth, q).await?;
     let (view, hot, versions) = load_authority_locked(state, tx, q, &h, mode).await?;
     let offer =
         super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
@@ -188,10 +177,32 @@ async fn load_for_locked(
         capabilities: current_registration.request.capabilities.clone(),
         hot,
         versions,
-        registration_id: registration.id,
+        registration_id,
         qualification,
         issuance_ceiling: ceiling,
     })
+}
+
+// Tie the current admitted runtime to the attempt's immutable registration
+// before loading execution authority under the authenticated node lock.
+async fn load_registration_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    q: &PrepareRequest,
+) -> Result<(registration::NativeRegistration, Uuid), AppError> {
+    let current =
+        registration::admitted_runtime_locked(tx, auth.id(), q.original.identity.boot_id).await?;
+    if current.request.identity != q.original.identity {
+        return Err(refused());
+    }
+    let retained =
+        super::super::closure::history::for_attempt_locked(tx, &q.original.binding).await?;
+    if retained.metadata.semantic_digest != current.semantic_digest
+        || retained.metadata.request.identity != q.original.identity
+    {
+        return Err(refused());
+    }
+    Ok((current, retained.id))
 }
 
 // Authenticate preparation or retained issuance before consulting current runtime
