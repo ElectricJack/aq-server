@@ -15,17 +15,16 @@ pub async fn run(state: crate::AppState, mut stop: tokio::sync::watch::Receiver<
         tokio::select! {
             _ = notices.tick(), if cfg!(feature = "delivery_playbook") => {
                 #[cfg(feature = "delivery_playbook")]
-<<<<<<< HEAD
-                if let Err(error) = aq_playbook_domain::scheduling_notices::notify(
+                if let Err(error) = aq_playbook_domain::scheduling_notices::notify_with_graph(
                     &state.store.pool,
                     (state.clock)().timestamp_millis(),
+                    |workspace, task| {
+                        let runtime = state.agent_access.clone();
+                        async move { runtime.closed(workspace, task).await }
+                    },
                     crate::agent_access::supervisor_conversation::system_message_in,
                 ).await {
                     tracing::warn!(?error, "scheduler supervisor escalation deferred");
-=======
-                if let Err(e) = aq_playbook_domain::scheduling_notices::notify_with_graph(&state.store.pool, (state.clock)().timestamp_millis(), |workspace, task| { let runtime = state.agent_access.clone(); async move { runtime.closed(workspace, task).await } }, crate::agent_access::supervisor_conversation::system_message_in).await {
-                    tracing::warn!(error=?e, "scheduler supervisor escalation deferred");
->>>>>>> refs/remotes/central/main
                 }
             },
             changed = stop.changed() => {

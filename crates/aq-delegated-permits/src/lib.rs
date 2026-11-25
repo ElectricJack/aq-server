@@ -26,28 +26,8 @@ impl CredentialKey {
         Self(Zeroizing::new(bytes))
     }
 
-<<<<<<< HEAD:crates/aq-server/src/delegated_permits/model.rs
-    pub(crate) fn incarnation_credential(
-        &self,
-        permit_id: Uuid,
-        boot: Uuid,
-    ) -> Result<PermitCredential> {
-        self.derive_credential(b"aq.delegated-permit.incarnation/v1\0", &[permit_id, boot])
-=======
     pub fn incarnation_credential(&self, permit_id: Uuid, boot: Uuid) -> Result<PermitCredential> {
-        if permit_id.is_nil() || boot.is_nil() {
-            return Err(ContractError::InvalidShape);
-        }
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_slice())
-            .map_err(|_| ContractError::InvalidShape)?;
-        mac.update(b"aq.delegated-permit.incarnation/v1\0");
-        mac.update(permit_id.as_bytes());
-        mac.update(boot.as_bytes());
-        let bytes = Zeroizing::new(mac.finalize().into_bytes().to_vec());
-        let token = Zeroizing::new(format!("aqp_{}", URL_SAFE_NO_PAD.encode(bytes.as_slice())));
-        serde_json::from_value(serde_json::Value::String(token.to_string()))
-            .map_err(|_| ContractError::InvalidShape)
->>>>>>> refs/remotes/central/main:crates/aq-delegated-permits/src/lib.rs
+        self.derive_credential(b"aq.delegated-permit.incarnation/v1\0", &[permit_id, boot])
     }
 
     pub fn credential(&self, permit_id: Uuid) -> Result<PermitCredential> {
