@@ -105,6 +105,12 @@ impl Fixture {
                     let mut items = vec![&root];
                     items.extend(sibling_ready.then_some(&sibling_node));
                     json!({"items":items,"next_cursor":null})
+                } else if uri.path().ends_with(&format!("/ready/{task}")) {
+                    json!({"items":[root],"next_cursor":null})
+                } else if uri.path().ends_with(&format!("/ready/{sibling}")) {
+                    let items: Vec<_> =
+                        sibling_ready.then_some(&sibling_node).into_iter().collect();
+                    json!({"items":items,"next_cursor":null})
                 } else if uri.path().ends_with(&format!("/nodes/{task}/context")) {
                     match peer_reads.fetch_add(1, Ordering::SeqCst) {
                         0 if peer_late.load(Ordering::SeqCst) => initial_context.clone(),
@@ -615,9 +621,12 @@ async fn settings_can_stop_requiring_landed_results() {
         require_landed_results: false,
         ..Default::default()
     };
-    aq_role_settings::save_delivery_limits(pool, f.case.env.actor, &limits, 0, Uuid::new_v4(), 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_delivery_limits(
+        aq_role_settings::Writer::new(pool, f.case.env.actor, 1).edit(0, Uuid::new_v4()),
+        &limits,
+    )
+    .await
+    .unwrap();
     let offered = f.offer().await;
     assert_eq!(
         offered.offered.lifecycle_binding.task_id,

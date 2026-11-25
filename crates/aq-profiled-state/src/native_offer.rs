@@ -29,6 +29,76 @@ pub struct ReadyPage {
     pub next_cursor: Option<String>,
     pub stamp: GraphReadStamp,
 }
+pub fn bounded_cursor(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
+}
+pub fn graph_task_revision(node: &Value, workspace: Uuid) -> Result<TaskRevision> {
+    let task_id = node["id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or(Invalid("invalid Graph task observation"))?;
+    if node["workspace_id"] != workspace.to_string() || node["kind"] != "task" {
+        return Err(Invalid("invalid Graph task observation"));
+    }
+    let revision = TaskRevision {
+        workspace_id: workspace,
+        task_id,
+        version: node["version"]
+            .as_u64()
+            .ok_or(Invalid("invalid Graph task observation"))?,
+        content_revision: node["content_revision"]
+            .as_u64()
+            .ok_or(Invalid("invalid Graph task observation"))?,
+    };
+    revision
+        .validate()
+        .map_err(|_| Invalid("invalid Graph task observation"))?;
+    Ok(revision)
+}
+pub fn graph_ready_page(
+    workspace: Uuid,
+    limit: u16,
+    cursor: Option<&str>,
+    value: &Value,
+    stamp: GraphReadStamp,
+) -> Result<ReadyPage> {
+    let raw = value["items"]
+        .as_array()
+        .ok_or(Invalid("invalid Graph task observation"))?;
+    if raw.len() > limit as usize {
+        return Err(Invalid("invalid Graph task observation"));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut items = Vec::new();
+    for node in raw {
+        let revision = graph_task_revision(node, workspace)?;
+        if node["task_state"] != "active"
+            || node["retired"] != false
+            || node["deleted"] != false
+            || !ids.insert(revision.task_id)
+        {
+            return Err(Invalid("invalid Graph task observation"));
+        }
+        items.push(ReadyTask {
+            revision,
+            node: node.clone(),
+        });
+    }
+    let next_cursor = value["next_cursor"].as_str().map(str::to_owned);
+    if next_cursor
+        .as_ref()
+        .is_some_and(|c| !bounded_cursor(c) || Some(c.as_str()) == cursor)
+    {
+        return Err(Invalid("invalid Graph task observation"));
+    }
+    Ok(ReadyPage {
+        workspace_id: workspace,
+        items,
+        next_cursor,
+        stamp,
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskContext {
     pub revision: TaskRevision,
@@ -53,31 +123,52 @@ pub struct ReadProvenance {
     pub context_expires_at_ms: u64,
     pub authorized_context_digest: Digest,
 }
-impl ReadProvenance {
-    pub fn capture(
-        task: &TaskRevision,
-        ready: &ReadyPage,
-        context: &TaskContext,
-        authorized: Digest,
-        now: u64,
-    ) -> Result<Self> {
+pub struct GraphReads<'a> {
+    pub ready: &'a ReadyPage,
+    pub context: &'a TaskContext,
+}
+impl GraphReads<'_> {
+    fn validate_task(&self, task: &TaskRevision) -> Result<()> {
+        let (ready, context) = (self.ready, self.context);
         let selected = ready
             .items
             .iter()
             .find(|v| &v.revision == task)
             .ok_or(Invalid("invalid Graph read provenance"))?;
-        if &context.revision != task
-            || ready.workspace_id != task.workspace_id
-            || canonical(&selected.node)? != canonical(&context.context["node"])?
-            || context.stamp.response_digest != Digest::of(context.raw_json.as_bytes()).as_str()
-            || context.digest != context.stamp.response_digest
-            || context.truncated
-            || serde_json::from_str::<Value>(&context.raw_json)
-                .map_err(|_| Invalid("invalid Graph read provenance"))?
-                != context.context
-        {
+        if &context.revision != task || ready.workspace_id != task.workspace_id {
             return Err(Invalid("invalid Graph read provenance"));
         }
+        if canonical(&selected.node)? != canonical(&context.context["node"])? {
+            return Err(Invalid("invalid Graph read provenance"));
+        }
+        context.validate_response()
+    }
+}
+impl TaskContext {
+    fn validate_response(&self) -> Result<()> {
+        let digest = &self.stamp.response_digest;
+        let byte_digest = Digest::of(self.raw_json.as_bytes());
+        let consistent = digest == byte_digest.as_str() && &self.digest == digest;
+        if self.truncated || !consistent {
+            return Err(Invalid("invalid Graph read provenance"));
+        }
+        let value = serde_json::from_str::<Value>(&self.raw_json)
+            .map_err(|_| Invalid("invalid Graph read provenance"))?;
+        if value != self.context {
+            return Err(Invalid("invalid Graph read provenance"));
+        }
+        Ok(())
+    }
+}
+impl ReadProvenance {
+    pub fn capture(
+        task: &TaskRevision,
+        reads: GraphReads<'_>,
+        authorized: Digest,
+        now: u64,
+    ) -> Result<Self> {
+        reads.validate_task(task)?;
+        let GraphReads { ready, context } = reads;
         let result = Self {
             schema_version: 1,
             task: task.clone(),
@@ -119,17 +210,17 @@ impl ReadProvenance {
                 self.context_expires_at_ms,
             ),
         ] {
-            if requested == 0
-                || requested > received
-                || received > now
-                || now >= expires
-                || expires.checked_sub(received).is_none_or(|d| d > 30_000)
-            {
+            if !fresh_read(requested, received, expires, now) {
                 return Err(Invalid("invalid Graph read provenance"));
             }
         }
         Ok(())
     }
+}
+fn fresh_read(requested: u64, received: u64, expires: u64, now: u64) -> bool {
+    let observed = requested != 0 && requested <= received && received <= now;
+    let fresh = now < expires && expires.checked_sub(received).is_some_and(|d| d <= 30_000);
+    observed && fresh
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,31 +284,34 @@ mod tests {
             },
         )
     }
+    fn capture(
+        task: &TaskRevision,
+        ready: &ReadyPage,
+        context: &TaskContext,
+        authorized: &Digest,
+    ) -> Result<ReadProvenance> {
+        ReadProvenance::capture(task, GraphReads { ready, context }, authorized.clone(), 120)
+    }
     #[test]
     fn same_authorized_context_digest_does_not_replace_exact_read_provenance() {
         let (task, ready, context) = reads();
         let authorized = Digest::of(b"same authorized snapshot");
-        let original =
-            ReadProvenance::capture(&task, &ready, &context, authorized.clone(), 120).unwrap();
+        let original = capture(&task, &ready, &context, &authorized).unwrap();
         let mut changed = ready.clone();
         changed.items[0].revision.version += 1;
-        assert!(
-            ReadProvenance::capture(&task, &changed, &context, authorized.clone(), 120).is_err()
-        );
+        assert!(capture(&task, &changed, &context, &authorized).is_err());
         let mut changed = context.clone();
         changed.revision.content_revision += 1;
-        assert!(ReadProvenance::capture(&task, &ready, &changed, authorized.clone(), 120).is_err());
+        assert!(capture(&task, &ready, &changed, &authorized).is_err());
         let mut changed = ready.clone();
         changed.items[0].node["body"] = json!("changed content at same CAS");
-        assert!(
-            ReadProvenance::capture(&task, &changed, &context, authorized.clone(), 120).is_err()
-        );
+        assert!(capture(&task, &changed, &context, &authorized).is_err());
         let mut changed = context.clone();
         changed.context["node"]["body"] = json!("mutated decoded response");
-        assert!(ReadProvenance::capture(&task, &ready, &changed, authorized.clone(), 120).is_err());
+        assert!(capture(&task, &ready, &changed, &authorized).is_err());
         let mut changed = context.clone();
         changed.stamp.response_digest = Digest::of(b"different raw response").as_str().into();
-        assert!(ReadProvenance::capture(&task, &ready, &changed, authorized, 120).is_err());
+        assert!(capture(&task, &ready, &changed, &authorized).is_err());
         assert!(original.validate_at(30110).is_err());
         assert!(original.validate_at(109).is_err());
     }
@@ -226,11 +320,11 @@ mod tests {
         let (task, mut ready, context) = reads();
         let digest = Digest::of(b"authorized");
         ready.workspace_id = Uuid::new_v4();
-        assert!(ReadProvenance::capture(&task, &ready, &context, digest.clone(), 120).is_err());
+        assert!(capture(&task, &ready, &context, &digest).is_err());
         ready.workspace_id = task.workspace_id;
         ready.stamp.expires_at_ms = 120;
-        assert!(ReadProvenance::capture(&task, &ready, &context, digest.clone(), 120).is_err());
+        assert!(capture(&task, &ready, &context, &digest).is_err());
         ready.stamp.expires_at_ms = 30111;
-        assert!(ReadProvenance::capture(&task, &ready, &context, digest, 120).is_err());
+        assert!(capture(&task, &ready, &context, &digest).is_err());
     }
 }

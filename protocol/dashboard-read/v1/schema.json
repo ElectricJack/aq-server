@@ -1103,6 +1103,41 @@
       ],
       "type": "string"
     },
+    "InventoryRejection": {
+      "additionalProperties": false,
+      "description": "The latest authenticated inventory refusal observed by this server.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "observed_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "status": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_id",
+        "observed_at_ms",
+        "stage",
+        "status",
+        "code"
+      ],
+      "type": "object"
+    },
     "Limits": {
       "additionalProperties": false,
       "properties": {
@@ -3802,6 +3837,16 @@
             "null"
           ]
         },
+        "capability_observed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "health": {
           "$ref": "#/$defs/WorkerHealth"
         },
@@ -3810,6 +3855,16 @@
             "$ref": "#/$defs/HoldReason"
           },
           "type": "array"
+        },
+        "inventory_rejection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InventoryRejection"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "last_seen_at": {
           "anyOf": [

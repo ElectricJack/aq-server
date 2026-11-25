@@ -6,6 +6,8 @@ publish = false
 
 [features]
 loopback-development = []
+# Spec 0017: a channel client also reaches the agent routes (`/v1/agent/`). Off by default.
+project_environments = []
 
 [dependencies]
 tokio.workspace = true

@@ -192,10 +192,12 @@ impl<D: Desired> ActionKind for SetDesired<D> {
                 &mut tx,
                 &p.machine,
                 D::DESIRED,
-                expected,
-                user.id,
-                p.operation_id,
-                now,
+                mc::OwnerChange {
+                    expected_generation: expected,
+                    actor: user.id,
+                    operation_id: p.operation_id,
+                    now,
+                },
             )
             .await?;
             if D::HANDOFF {

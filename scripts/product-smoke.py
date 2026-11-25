@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import tomllib
+from typing import NamedTuple
 import urllib.error
 import urllib.request
 import uuid
@@ -36,6 +37,11 @@ CONTROLLER_CONFIG = "/etc/aq-worker/controller.json"
 # profile (no ThinLTO, low optimization; Cargo.toml [profile.ci-image]).
 IMAGE_PROFILE = os.environ.get("AQ_IMAGE_CARGO_PROFILE", "ci-image")
 SANDBOX_SOCKET = "/run/aq-sandbox/podman.sock"
+PROJECT_RESOURCE_COMMANDS = {
+    "containers": (["docker", "ps", "-aq"], ["docker", "rm", "-fv"]),
+    "volumes": (["docker", "volume", "ls", "-q"], ["docker", "volume", "rm"]),
+    "networks": (["docker", "network", "ls", "-q"], ["docker", "network", "rm"]),
+}
 
 
 # This older product fixture exercises the server/worker foundation. Production
@@ -71,6 +77,12 @@ def sha(data):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+class Images(NamedTuple):
+    server: str | None
+    worker: str | None
+    fixture: str | None
 
 
 class Fixture:
@@ -168,6 +180,15 @@ class Fixture:
         official = os.environ.get("AQ_SMOKE_OFFICIAL") == "1"
         candidate = checker.candidate(official)
         self.record["worker_candidate"] = candidate
+        images = self.requested_images(official)
+        snapshot = self.snapshot_source()
+        images = self.prepare_images(snapshot, candidate, images)
+        self.verify_worker_images(candidate, images)
+        self.verify_git_images(snapshot, images)
+        self.prepare_stack_files(images)
+        self.start_stack(snapshot, images)
+
+    def requested_images(self, official):
         server = os.environ.get("AQ_SMOKE_SERVER_IMAGE")
         worker = os.environ.get("AQ_SMOKE_WORKER_IMAGE")
         # The synthetic-runtime harness is a separate CI-only image, never the
@@ -175,9 +196,17 @@ class Fixture:
         fixture = os.environ.get("AQ_SMOKE_FIXTURE_IMAGE")
         if bool(server) != bool(worker):
             raise ValueError("set both AQ_SMOKE_SERVER_IMAGE and AQ_SMOKE_WORKER_IMAGE, or neither")
-        if official and (not server or any(not re.fullmatch(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}", image)
-                                          for image in (server, worker))):
+        if official and not self.release_images_are_pinned(server, worker):
             raise ValueError("official acceptance requires digest-pinned server and worker images")
+        return Images(server, worker, fixture)
+
+    def release_images_are_pinned(self, server, worker):
+        if not server:
+            return False
+        digest = r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}"
+        return all(re.fullmatch(digest, image) for image in (server, worker))
+
+    def snapshot_source(self):
         snapshot = self.temp / "source"
         snapshot.mkdir()
         for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "Dockerfile", "Dockerfile.worker",
@@ -193,6 +222,10 @@ class Fixture:
         self.record["source_tree_sha256"] = sha(canonical(inventory))
         self.record["source_revision"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         self.record["working_tree_dirty"] = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
+        return snapshot
+
+    def prepare_images(self, snapshot, candidate, images):
+        server, worker, fixture = images
         state = str(migration_state_format(snapshot))
         worker_args = ["--build-arg", "AQ_SOURCE_REVISION=" + candidate["source_revision"],
                        "--build-arg", "AQ_WORKER_ARCHIVE_SHA256=" + candidate["archive_sha256"],
@@ -220,20 +253,16 @@ class Fixture:
                 if subprocess.run(["docker", "image", "inspect", image], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL).returncode:
                     self.run(["docker", "pull", image], name="pull-" + role, timeout=600)
+        return Images(server, worker, fixture)
+
+    def verify_worker_images(self, candidate, images):
+        server, worker, fixture = images
         self.fixture_image = fixture
         self.record["images"] = json.loads(self.run(["docker", "image", "inspect", server, worker, fixture],
                                                     name="image-identities"))
         for role, image in [("worker", worker), ("fixture", fixture)]:
-            embedded = json.loads(self.run(["docker", "run", "--rm", "--entrypoint", "cat", image,
-                                            "/usr/share/agent-q/worker-candidate.json"], name=role + "-provenance"))
-            if embedded != candidate:
-                raise ValueError(role + " image provenance differs from selected immutable candidate")
-            version = self.run(["docker", "run", "--rm", image, "--version"], name=role + "-version").strip()
-            if version != "aq-worker " + candidate["version"]:
-                raise ValueError(role + " executable version differs from selected candidate")
-        help_text = self.run(["docker", "run", "--rm", fixture, "run-execution", "--help"], name="fixture-execution-cli")
-        if "--drop-acceptance-response-once" not in help_text or "--drop-report-response-once" not in help_text:
-            raise ValueError("fixture executable lacks the selected execution candidate interface")
+            self.verify_worker_release(role, image, candidate)
+        self.verify_fixture_interface(fixture)
         self.record["fixture_binary_sha256"] = self.run([
             "docker", "run", "--rm", "--entrypoint", "sha256sum", fixture,
             "/usr/local/bin/aq-worker", "/usr/local/bin/aq-fixture-agent"], name="fixture-binary-identities")
@@ -243,12 +272,32 @@ class Fixture:
         # Recovery drives only its own fixture build; the product worker must
         # not ship the synthetic harness at all.
         if "recovery_build" not in self.record:
-            shipped = self.run(["docker", "run", "--rm", worker, "run-execution", "--help"],
-                               name="worker-has-no-execution-cli", check=False)
-            if "--fixture-agent" in shipped or self.run(
-                    ["docker", "run", "--rm", "--entrypoint", "sh", worker, "-c", "if test -e /usr/local/bin/aq-fixture-agent; then echo present; fi"],
-                    name="worker-has-no-fixture-agent", check=False).strip():
-                raise ValueError("production worker image ships the synthetic-runtime harness")
+            self.verify_product_worker_has_no_fixture(worker)
+
+    def verify_worker_release(self, role, image, candidate):
+        embedded = json.loads(self.run(["docker", "run", "--rm", "--entrypoint", "cat", image,
+                                        "/usr/share/agent-q/worker-candidate.json"], name=role + "-provenance"))
+        if embedded != candidate:
+            raise ValueError(role + " image provenance differs from selected immutable candidate")
+        version = self.run(["docker", "run", "--rm", image, "--version"], name=role + "-version").strip()
+        if version != "aq-worker " + candidate["version"]:
+            raise ValueError(role + " executable version differs from selected candidate")
+
+    def verify_fixture_interface(self, fixture):
+        help_text = self.run(["docker", "run", "--rm", fixture, "run-execution", "--help"], name="fixture-execution-cli")
+        if "--drop-acceptance-response-once" not in help_text or "--drop-report-response-once" not in help_text:
+            raise ValueError("fixture executable lacks the selected execution candidate interface")
+
+    def verify_product_worker_has_no_fixture(self, worker):
+        shipped = self.run(["docker", "run", "--rm", worker, "run-execution", "--help"],
+                           name="worker-has-no-execution-cli", check=False)
+        if "--fixture-agent" in shipped or self.run(
+                ["docker", "run", "--rm", "--entrypoint", "sh", worker, "-c", "if test -e /usr/local/bin/aq-fixture-agent; then echo present; fi"],
+                name="worker-has-no-fixture-agent", check=False).strip():
+            raise ValueError("production worker image ships the synthetic-runtime harness")
+
+    def verify_git_images(self, snapshot, images):
+        server, worker, _ = images
         git_candidate = json.loads((snapshot / "vendor/git-candidate.json").read_text())
         self.record["git_candidate"] = git_candidate
         self.record["git_runtime"] = {}
@@ -271,6 +320,9 @@ class Fixture:
                 "/usr/local/bin/aq-git", "/opt/aq-git-runtime/bin/git"], name=role + "-git-binary-identities")
             self.record["git_runtime"][role] = {"version": git_version, "binary_sha256": binary,
                                                "capabilities": capabilities}
+
+    def prepare_stack_files(self, images):
+        server, worker, _ = images
         for name in ["vault", "secrets", "spool/requests", "spool/status"]:
             (self.temp / name).mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "vault.example/config.toml", self.temp / "vault/config.toml")
@@ -287,6 +339,24 @@ class Fixture:
             secret.chmod(0o644)
         self.env.update(AQ_SERVER_IMAGE=server, AQ_WORKER_IMAGE=worker, AQ_VAULT_DIR=str(self.temp / "vault"),
                         AQ_SECRETS_DIR=str(self.temp / "secrets"), AQ_UPDATER_SPOOL=str(self.temp / "spool"))
+
+    def start_stack(self, snapshot, images):
+        services = self.stack_services(images)
+        overlay = {"services": services, "volumes": {"worker_config": {}, "worker_state": {}}}
+        file = self.temp / "compose.smoke.json"
+        file.write_text(json.dumps(overlay))
+        foundation = self.temp / "compose.foundation.yaml"
+        foundation.write_text(FOUNDATION_OVERRIDE)
+        self.dc = ["docker", "compose", "-p", self.project, "-f", str(snapshot / "compose.yaml"),
+                   "-f", str(foundation), "-f", str(file)]
+        if "worker-volume-init" in services:
+            self.compose("run", "--rm", "-T", "--no-deps", "worker-volume-init", name="worker-volume-init")
+        self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "server", name="start-server")
+        self.address()
+        self.record["postgres_image"] = self.compose("images", "--format", "json", name="compose-images")
+
+    def stack_services(self, images):
+        _, worker, fixture = images
         hardened = {"read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"]}
         volumes = ["worker_config:/config", "worker_state:/state"]
         worker_service = {"image": worker, "networks": ["edge"], "volumes": volumes, **hardened}
@@ -326,18 +396,7 @@ class Fixture:
                 "image": worker, "user": "0:0", "entrypoint": ["chown", "-R", user, "/config", "/state"],
                 "volumes": volumes, "network_mode": "none", "profiles": ["init"], **hardened,
                 "cap_add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"]}
-        overlay = {"services": services, "volumes": {"worker_config": {}, "worker_state": {}}}
-        file = self.temp / "compose.smoke.json"
-        file.write_text(json.dumps(overlay))
-        foundation = self.temp / "compose.foundation.yaml"
-        foundation.write_text(FOUNDATION_OVERRIDE)
-        self.dc = ["docker", "compose", "-p", self.project, "-f", str(snapshot / "compose.yaml"),
-                   "-f", str(foundation), "-f", str(file)]
-        if "worker-volume-init" in services:
-            self.compose("run", "--rm", "-T", "--no-deps", "worker-volume-init", name="worker-volume-init")
-        self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "server", name="start-server")
-        self.address()
-        self.record["postgres_image"] = self.compose("images", "--format", "json", name="compose-images")
+        return services
 
     def foundation(self):
         self.say("enroll the selected standalone worker and verify probe/compatibility")
@@ -347,15 +406,23 @@ class Fixture:
         self.compose("up", "-d", "--no-build", "worker", name="start-worker")
         self.heartbeat_container = self.compose("ps", "-q", "worker", name="heartbeat-container").strip()
         assert re.fullmatch(r"[0-9a-f]{64}", self.heartbeat_container), "expected one heartbeat connector container"
-        def online():
-            row = self.worker_row()
-            return row if row and row["status"] == "online" and row.get("last_seen_at") else None
-        row = self.poll("first heartbeat", online)
+        row = self.poll("first heartbeat", self.online_worker)
         self.node = row["id"]
         saved = self.config()
         assert saved["node_id"] == self.node
         self.credential = saved["credential"]
         self.record["node_id"] = self.node
+        self.verify_worker_protocols()
+        before, after = self.verify_reconnect(row, saved)
+        self.record["foundation"] = {"first_heartbeat": before, "later_heartbeat": after["last_seen_at"],
+                                     "identity_preserved": True, "probe": "passed", "unsupported_protocol": "passed"}
+        self.record["foundation"]["unsupported_execution_preserves_connectivity"] = "passed"
+
+    def online_worker(self):
+        row = self.worker_row()
+        return row if row and row["status"] == "online" and row.get("last_seen_at") else None
+
+    def verify_worker_protocols(self):
         response = self.http("/v1/worker/probe", {"nonce": "product-smoke"}, machine=True, credential=self.credential)
         assert response["nonce"] == "product-smoke"
         response = self.http("/v1/worker/heartbeat", {"worker_version": "fixture", "protocol_version": 99},
@@ -368,20 +435,32 @@ class Fixture:
             machine=True, credential=self.credential, expected=426)
         assert execution_error["code"] == "unsupported_protocol"
         assert self.worker_row()["status"] == "online"
+
+    def verify_reconnect(self, row, saved):
         self.say("restart daemon and PostgreSQL; preserve node identity and advance heartbeat")
         before = row["last_seen_at"]
         self.compose("restart", "server", "postgres", name="restart")
         self.address()
         def advanced():
-            current = online()
+            current = self.online_worker()
             return current if current and current["id"] == self.node and current["last_seen_at"] > before else None
         after = self.poll("same-node reconnect", advanced)
         assert self.config() == saved
-        self.record["foundation"] = {"first_heartbeat": before, "later_heartbeat": after["last_seen_at"],
-                                     "identity_preserved": True, "probe": "passed", "unsupported_protocol": "passed"}
-        self.record["foundation"]["unsupported_execution_preserves_connectivity"] = "passed"
+        return before, after
 
     def execute(self):
+        identity = self.start_execution()
+        attempt, spec, cancelled = self.offer_execution(identity)
+        launch_id = self.wait_for_execution()
+        state = self.verify_execution_result(attempt, spec, launch_id)
+        self.record["execution"] = {"attempt_id": attempt["attempt_id"], "boot_id": identity["boot_id"],
+                                    "launch_id": launch_id, "launch_count": 1, "result": state,
+                                    "acceptance_response_loss": "passed", "report_response_loss": "passed",
+                                    "report_replay": "passed", "daemon_restart": "passed", "graph_completion": "not exercised"}
+        self.record["execution"]["cancelled_unaccepted_attempt_id"] = cancelled["attempt"]["attempt_id"]
+        self.record["execution"]["cancel_before_poll_then_acquire"] = "passed"
+
+    def start_execution(self):
         self.say("run synthetic assignment with lost acceptance and report acknowledgements")
         self.runtime = self.project + "-execution"
         self.compose("run", "-d", "--no-deps", "--name", self.runtime, "-e", "AQ_FIXTURE_HOLD=1", "runtime",
@@ -399,6 +478,9 @@ class Fixture:
                     pass
         identity = self.poll("execution registration", registration)
         assert identity["node_id"] == self.node
+        return identity
+
+    def offer_execution(self, identity):
         attempt = {"attempt_id": str(uuid.uuid4()), "session_id": str(uuid.uuid4()), "generation": 1}
         spec = {"project_id": str(uuid.uuid4()), "harness": "deterministic-agent-v1", "fixture_output": "product synthetic success",
                 "resources": {"slots": 1, "cpu_millis": 100, "memory_bytes": 1048576, "disk_bytes": 1048576},
@@ -419,6 +501,9 @@ class Fixture:
             self.http("/api/execution/fixtures", {"task_id": str(uuid.uuid4()), "offer": offer})
         finally:
             self.run(["docker", "unpause", self.runtime], name="unpause-after-offers", check=False)
+        return attempt, spec, cancelled
+
+    def wait_for_execution(self):
         def claim():
             value = self.compose("run", "--rm", "-T", "--no-deps", "--entrypoint", "sh", "runtime", "-ec",
                                  "find /state/runtime/launches -name started.claim -print", name="launch-claim", check=False)
@@ -436,6 +521,9 @@ class Fixture:
                 return state
         self.poll("execution report acknowledgement", exited)
         self.run(["docker", "logs", self.runtime], name="execution-log")
+        return launch_id
+
+    def verify_execution_result(self, attempt, spec, launch_id):
         state = self.http("/api/execution/attempts/" + attempt["attempt_id"])
         assert state["status"] == "finished" and state["stopped"]
         assert state["disposition"]["disposition"] == "accepted"
@@ -453,12 +541,7 @@ class Fixture:
         self.address()
         recovered = self.poll("durable accepted result", lambda: self.http("/api/execution/attempts/" + attempt["attempt_id"]))
         assert recovered == state
-        self.record["execution"] = {"attempt_id": attempt["attempt_id"], "boot_id": identity["boot_id"],
-                                    "launch_id": launch_id, "launch_count": 1, "result": state,
-                                    "acceptance_response_loss": "passed", "report_response_loss": "passed",
-                                    "report_replay": "passed", "daemon_restart": "passed", "graph_completion": "not exercised"}
-        self.record["execution"]["cancelled_unaccepted_attempt_id"] = cancelled["attempt"]["attempt_id"]
-        self.record["execution"]["cancel_before_poll_then_acquire"] = "passed"
+        return state
 
     def revoke(self):
         self.say("revoke credential; verify machine rejection and connector exit")
@@ -476,38 +559,14 @@ class Fixture:
     def cleanup(self):
         errors = []
         confirmed = True
-
-        def attempt(action):
-            try:
-                return action()
-            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                errors.append(str(error))
-
         try:
-            if self.dc:
-                attempt(lambda: self.compose("logs", "--no-color", "--tail", "100", name="stack-logs", check=False))
-                attempt(lambda: self.compose("down", "-v", "--remove-orphans", name="teardown", check=False))
-            if self.runtime:
-                attempt(lambda: self.run(["docker", "rm", "-fv", self.runtime], name="runtime-teardown", check=False))
-            # Each operation proceeds even when Compose or log collection fails.
-            # Selection is restricted to this fixture's random project label.
-            for kind, listing, removal in [
-                ("containers", ["docker", "ps", "-aq"], ["docker", "rm", "-fv"]),
-                ("volumes", ["docker", "volume", "ls", "-q"], ["docker", "volume", "rm"]),
-                ("networks", ["docker", "network", "ls", "-q"], ["docker", "network", "rm"]),
-            ]:
-                command = [*listing, "--filter", "label=com.docker.compose.project=" + self.project]
-                try:
-                    ids = self.run(command, name="remaining-" + kind).split()
-                    if ids:
-                        self.run([*removal, *ids], name="fallback-remove-" + kind)
-                    if self.run(command, name="verified-" + kind).strip():
-                        confirmed = False
-                except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                    errors.append(str(error))
+            self.cleanup_stack(errors)
+            for kind in PROJECT_RESOURCE_COMMANDS:
+                if not self.remove_owned_resource(kind, errors):
                     confirmed = False
             if self.images:
-                attempt(lambda: self.run(["docker", "image", "rm", *self.images], name="image-teardown", check=False))
+                self.attempt_cleanup(errors, lambda: self.run(
+                    ["docker", "image", "rm", *self.images], name="image-teardown", check=False))
         finally:
             try:
                 self.directory.cleanup()
@@ -521,6 +580,36 @@ class Fixture:
             (self.logs / "evidence.json").write_text(json.dumps(self.record, indent=2) + "\n")
             self.say("evidence " + str(self.logs))
         return confirmed
+
+    def attempt_cleanup(self, errors, action):
+        try:
+            action()
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            errors.append(str(error))
+
+    def cleanup_stack(self, errors):
+        if self.dc:
+            self.attempt_cleanup(errors, lambda: self.compose(
+                "logs", "--no-color", "--tail", "100", name="stack-logs", check=False))
+            self.attempt_cleanup(errors, lambda: self.compose(
+                "down", "-v", "--remove-orphans", name="teardown", check=False))
+        if self.runtime:
+            self.attempt_cleanup(errors, lambda: self.run(
+                ["docker", "rm", "-fv", self.runtime], name="runtime-teardown", check=False))
+
+    def remove_owned_resource(self, kind, errors):
+        # Each operation proceeds even when Compose or log collection fails.
+        # Selection is restricted to this fixture's random project label.
+        listing, removal = PROJECT_RESOURCE_COMMANDS[kind]
+        command = [*listing, "--filter", "label=com.docker.compose.project=" + self.project]
+        try:
+            ids = self.run(command, name="remaining-" + kind).split()
+            if ids:
+                self.run([*removal, *ids], name="fallback-remove-" + kind)
+            return not self.run(command, name="verified-" + kind).strip()
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            errors.append(str(error))
+            return False
 
 
 def main():

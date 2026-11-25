@@ -157,6 +157,65 @@ async fn empty_inventory_derives_only_actual_authorized_backing_and_never_instal
     assert_eq!(epoch(&c).await, (1, "scoped_v1".into(), 1));
 }
 #[tokio::test]
+async fn only_qualified_docker_runtime_offers_docker_only_credentials() {
+    let mut c = setup().await;
+    let mut config = (*c.c.env.env.state.config).clone();
+    let mut registry = config.intelligence.as_ref().unwrap().config.clone();
+    registry.revision += 1;
+    registry.credentials[0].allowed_backends = vec![aq_selection::BackendKind::DockerLocal];
+    config.intelligence = Some(std::sync::Arc::new(registry.load().unwrap()));
+    c.c.env.env.state.config = std::sync::Arc::new(config);
+    let app = aq_server::build_admin_router(c.c.env.env.state.clone());
+    assert_eq!(
+        common::selection::call(
+            &app,
+            "/api/intelligence/register",
+            Some(json!({})),
+            "owner@localhost",
+        )
+        .await
+        .0,
+        200
+    );
+    c.request.provisionable_only.clear();
+
+    for (sequence, backend, expected) in [
+        (2, None, 0),
+        (3, Some(aq_selection::BackendKind::Boat), 0),
+        (4, Some(aq_selection::BackendKind::DockerLocal), 1),
+    ] {
+        let mut config = (*c.c.env.env.state.config).clone();
+        let mut profile = (**config.profiled_execution.as_ref().unwrap()).clone();
+        profile.qualified_runtimes[0].backend_kind = backend;
+        profile.revision += 1;
+        config.profiled_execution = Some(std::sync::Arc::new(profile));
+        c.c.env.env.state.config = std::sync::Arc::new(config);
+        policies::install(&c.c.env.env.state).await.unwrap();
+        c.request.sequence = sequence;
+        c.request.operation_id = Uuid::new_v4();
+        record(&c, &c.request).await;
+
+        let snapshot: aq_selection::CapabilitySnapshot =
+            sqlx::query_scalar::<_, sqlx::types::Json<aq_selection::CapabilitySnapshot>>(
+                "SELECT snapshot FROM intelligence_node_snapshots WHERE node_id=$1",
+            )
+            .bind(c.request.identity.node_id)
+            .fetch_one(&c.c.env.env.pool)
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(snapshot.backend_kind, backend);
+        let restricted_profile = &c.c.env.input.credentials[0].profile;
+        let restricted = snapshot
+            .credential_bindings
+            .iter()
+            .filter(|b| &b.credential_profile == restricted_profile)
+            .count();
+        assert_eq!(restricted, expected);
+    }
+}
+
+#[tokio::test]
 async fn qualification_change_then_restore_retains_barrier_and_exact_retry_cannot_reset_it() {
     let c = setup().await;
     record(&c, &c.request).await;

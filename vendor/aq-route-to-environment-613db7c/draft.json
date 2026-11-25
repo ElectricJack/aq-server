@@ -1,0 +1,1222 @@
+{
+  "purpose": "Choose the environment a task runs in",
+  "entries": {
+    "main": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "max_length": 4096
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ]
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "outcomes": {
+        "routed": {
+          "type": "null"
+        },
+        "unroutable": {
+          "type": "null"
+        },
+        "skipped": {
+          "type": "null"
+        },
+        "refused": {
+          "type": "null"
+        },
+        "failed": {
+          "type": "null"
+        }
+      },
+      "start": "read"
+    }
+  },
+  "triggers": [
+    {
+      "id": "task-ready",
+      "event": "aq.work.route_needed",
+      "entry": "main",
+      "input": {
+        "op": "object",
+        "fields": {
+          "task": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "subject"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "steps": {
+    "read": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.read",
+        "bind": "task",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "observed": "owned",
+        "refused": "skipped"
+      },
+      "on_error": "failed"
+    },
+    "owned": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "eq",
+          "left": {
+            "op": "ref",
+            "root": "task",
+            "path": [
+              "facts",
+              "route"
+            ]
+          },
+          "right": {
+            "op": "literal",
+            "value": "owner"
+          }
+        }
+      },
+      "edges": {
+        "true": "skipped",
+        "false": "tried",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "tried": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "lt",
+          "left": {
+            "op": "literal",
+            "value": 0
+          },
+          "right": {
+            "op": "ref",
+            "root": "task",
+            "path": [
+              "facts",
+              "ended_attempts"
+            ]
+          }
+        }
+      },
+      "edges": {
+        "true": "keep",
+        "false": "default_each",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "keep": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.route",
+        "bind": "keep_route",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "level": {
+              "op": "literal",
+              "value": "standard-high"
+            },
+            "harnesses": {
+              "op": "literal",
+              "value": []
+            },
+            "providers": {
+              "op": "literal",
+              "value": []
+            },
+            "prefer": {
+              "op": "literal",
+              "value": []
+            },
+            "hold": {
+              "op": "literal",
+              "value": false
+            },
+            "reasons": {
+              "op": "literal",
+              "value": [
+                {
+                  "code": "policy",
+                  "detail": "A retry or a continuation keeps the environment of the attempt it continues."
+                }
+              ]
+            },
+            "classification": {
+              "op": "literal",
+              "value": null
+            }
+          }
+        }
+      },
+      "edges": {
+        "routed": "routed",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "default_each": {
+      "op": {
+        "kind": "for_each",
+        "collection": {
+          "op": "ref",
+          "root": "task",
+          "path": [
+            "facts",
+            "environments"
+          ]
+        },
+        "item": "e",
+        "body": "default_fits",
+        "next": "tier_each",
+        "max_items": 64,
+        "concurrency": 1,
+        "on_failure": "stop"
+      },
+      "edges": {},
+      "on_error": "failed"
+    },
+    "default_fits": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "and",
+          "values": [
+            {
+              "op": "eq",
+              "left": {
+                "op": "ref",
+                "root": "e",
+                "path": [
+                  "id"
+                ]
+              },
+              "right": {
+                "op": "ref",
+                "root": "task",
+                "path": [
+                  "facts",
+                  "default_environment"
+                ]
+              }
+            },
+            {
+              "op": "eq",
+              "left": {
+                "op": "filter",
+                "collection": {
+                  "op": "ref",
+                  "root": "task",
+                  "path": [
+                    "facts",
+                    "needs"
+                  ]
+                },
+                "item": "n",
+                "predicate": {
+                  "op": "not",
+                  "value": {
+                    "op": "contains",
+                    "collection": {
+                      "op": "ref",
+                      "root": "e",
+                      "path": [
+                        "provides"
+                      ]
+                    },
+                    "value": {
+                      "op": "ref",
+                      "root": "n",
+                      "path": []
+                    }
+                  }
+                },
+                "max_items": 64
+              },
+              "right": {
+                "op": "literal",
+                "value": []
+              }
+            }
+          ]
+        }
+      },
+      "edges": {
+        "true": "route_default",
+        "false": "default_each",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "route_default": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.route",
+        "bind": "default_route",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "level": {
+              "op": "literal",
+              "value": "standard-high"
+            },
+            "harnesses": {
+              "op": "literal",
+              "value": []
+            },
+            "providers": {
+              "op": "literal",
+              "value": []
+            },
+            "prefer": {
+              "op": "literal",
+              "value": []
+            },
+            "hold": {
+              "op": "literal",
+              "value": false
+            },
+            "reasons": {
+              "op": "literal",
+              "value": [
+                {
+                  "code": "policy",
+                  "detail": "The project's default environment provides everything the task needs."
+                }
+              ]
+            },
+            "classification": {
+              "op": "literal",
+              "value": null
+            },
+            "environment": {
+              "op": "ref",
+              "root": "e",
+              "path": [
+                "id"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "routed": "routed",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "tier_each": {
+      "op": {
+        "kind": "for_each",
+        "collection": {
+          "op": "literal",
+          "value": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31
+          ]
+        },
+        "item": "m",
+        "body": "env_each",
+        "next": "nobody",
+        "max_items": 32,
+        "concurrency": 1,
+        "on_failure": "stop"
+      },
+      "edges": {},
+      "on_error": "failed"
+    },
+    "env_each": {
+      "op": {
+        "kind": "for_each",
+        "collection": {
+          "op": "ref",
+          "root": "task",
+          "path": [
+            "facts",
+            "environments"
+          ]
+        },
+        "item": "f",
+        "body": "lean_fits",
+        "next": "tier_each",
+        "max_items": 64,
+        "concurrency": 1,
+        "on_failure": "stop"
+      },
+      "edges": {},
+      "on_error": "failed"
+    },
+    "lean_fits": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "and",
+          "values": [
+            {
+              "op": "eq",
+              "left": {
+                "op": "filter",
+                "collection": {
+                  "op": "ref",
+                  "root": "task",
+                  "path": [
+                    "facts",
+                    "needs"
+                  ]
+                },
+                "item": "n",
+                "predicate": {
+                  "op": "not",
+                  "value": {
+                    "op": "contains",
+                    "collection": {
+                      "op": "ref",
+                      "root": "f",
+                      "path": [
+                        "provides"
+                      ]
+                    },
+                    "value": {
+                      "op": "ref",
+                      "root": "n",
+                      "path": []
+                    }
+                  }
+                },
+                "max_items": 64
+              },
+              "right": {
+                "op": "literal",
+                "value": []
+              }
+            },
+            {
+              "op": "lookup",
+              "key": {
+                "op": "ref",
+                "root": "m",
+                "path": []
+              },
+              "cases": [
+                {
+                  "when": 0,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "0"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 1,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "1"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 2,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "2"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 3,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "3"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 4,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "4"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 5,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "5"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 6,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "6"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 7,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "7"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 8,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "8"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 9,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "9"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 10,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "10"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 11,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "11"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 12,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "12"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 13,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "13"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 14,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "14"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 15,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "15"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 16,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "16"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 17,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "17"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 18,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "18"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 19,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "19"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 20,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "20"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 21,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "21"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 22,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "22"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 23,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "23"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 24,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "24"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 25,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "25"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 26,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "26"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 27,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "27"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 28,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "28"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 29,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "29"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 30,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "30"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "when": 31,
+                  "then": {
+                    "op": "not",
+                    "value": {
+                      "op": "exists",
+                      "value": {
+                        "op": "ref",
+                        "root": "f",
+                        "path": [
+                          "provides",
+                          "31"
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
+              "default": {
+                "op": "literal",
+                "value": false
+              }
+            }
+          ]
+        }
+      },
+      "edges": {
+        "true": "route_lean",
+        "false": "env_each",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "route_lean": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.route",
+        "bind": "lean_route",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "level": {
+              "op": "literal",
+              "value": "standard-high"
+            },
+            "harnesses": {
+              "op": "literal",
+              "value": []
+            },
+            "providers": {
+              "op": "literal",
+              "value": []
+            },
+            "prefer": {
+              "op": "literal",
+              "value": []
+            },
+            "hold": {
+              "op": "literal",
+              "value": false
+            },
+            "reasons": {
+              "op": "literal",
+              "value": [
+                {
+                  "code": "policy",
+                  "detail": "The default environment lacks something the task needs, so the allowed environment with the fewest extra capabilities is used."
+                }
+              ]
+            },
+            "classification": {
+              "op": "literal",
+              "value": null
+            },
+            "environment": {
+              "op": "ref",
+              "root": "f",
+              "path": [
+                "id"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "routed": "routed",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "nobody": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.unroutable",
+        "bind": "nobody_result",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "reasons": {
+              "op": "literal",
+              "value": [
+                {
+                  "code": "policy",
+                  "detail": "No environment the project allows provides everything the task needs."
+                }
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "recorded": "unroutable",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "routed": {
+      "op": {
+        "kind": "return",
+        "outcome": "routed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "unroutable": {
+      "op": {
+        "kind": "return",
+        "outcome": "unroutable",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "skipped": {
+      "op": {
+        "kind": "return",
+        "outcome": "skipped",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "refused": {
+      "op": {
+        "kind": "return",
+        "outcome": "refused",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "failed": {
+      "op": {
+        "kind": "return",
+        "outcome": "failed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    }
+  },
+  "source_map": {
+    "read": 3,
+    "owned": 3,
+    "tried": 6,
+    "keep": 6,
+    "default_each": 9,
+    "route_default": 9,
+    "tier_each": 10,
+    "route_lean": 10,
+    "nobody": 12
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "task_gone",
+  "situation": "The task was deleted before it could be read",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-28",
+        "revision": 1
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "refused",
+        "output": {
+          "reference": "task-28@1",
+          "subject": {
+            "id": "task-28",
+            "revision": 1
+          },
+          "reason": "unknown_task"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "skipped",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-28",
+            "revision": 1
+          }
+        }
+      }
+    ]
+  }
+}

@@ -135,16 +135,3 @@ async fn replay_preflight(
 ) -> Result<Option<pinned::Pinned>, AppError> {
     Ok(None)
 }
-
-async fn observe_ready(
-    state: &AppState,
-    graph: &crate::agent_access::Runtime,
-    workspace: uuid::Uuid,
-) -> Result<
-    crate::agent_access::scheduling::ReadyPage,
-    crate::agent_access::scheduling::SchedulingReadError,
-> {
-    graph
-        .scheduling_ready_current(workspace, 8, None, state.clock.as_ref())
-        .await
-}

@@ -20,80 +20,32 @@ use crate::{
 };
 use async_trait::async_trait;
 use axum::http::StatusCode;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use uuid::Uuid;
 
-const RUN: &str = "playbook_run";
-const BINDING: &str = "playbook_binding";
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RunCancel {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(length(min = 1, max = 128))]
-    pub run_id: String,
-}
-
-/// One scalar run input.
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub(crate) enum Input {
-    Bool(bool),
-    Number(serde_json::Number),
-    Text(#[schemars(length(max = 4096))] String),
-}
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RunStart {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    /// The binding's activation revision, as shown in the catalog.
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,19}$"))]
-    pub expected_version: String,
-    #[schemars(length(min = 1, max = 128))]
-    pub binding: String,
-    /// The binding's currently active artifact digest.
-    #[schemars(length(min = 1, max = 128))]
-    pub artifact: String,
-    #[schemars(length(min = 1, max = 128))]
-    pub entry: String,
-    #[serde(default)]
-    #[schemars(extend("maxProperties" = 32))]
-    pub inputs: BTreeMap<String, Input>,
-}
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct BindingChange {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    /// The binding's activation revision, as shown in the catalog.
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,19}$"))]
-    pub expected_version: String,
-    #[schemars(length(min = 1, max = 128))]
-    pub binding: String,
-    /// Activate: the artifact to make active. Rollback: the active artifact.
-    #[schemars(length(min = 1, max = 128))]
-    pub artifact: String,
-}
-
+use aq_dashboard_contract::action_contract::playbooks::{
+    BINDING, BindingChange, RUN, RunCancel, RunStart, version,
+};
 pub(crate) struct StartRun(Arc<Driver>);
 pub(crate) struct CancelRun(Arc<Driver>);
-pub(crate) struct Activate(Arc<Driver>);
-pub(crate) struct Rollback(Arc<Driver>);
+pub(crate) struct UpdateBinding<const ROLLBACK: bool>(Arc<Driver>);
+type Activate = UpdateBinding<false>;
+type Rollback = UpdateBinding<true>;
+
+impl<const ROLLBACK: bool> UpdateBinding<ROLLBACK> {
+    fn new(driver: Arc<Driver>) -> Self {
+        Self(driver)
+    }
+}
 
 pub(crate) fn register(driver: Arc<Driver>, r: &mut Registry) {
     r.register(StartRun(driver.clone()))
         .expect("playbook start adapter");
     r.register(CancelRun(driver.clone()))
         .expect("playbook cancel adapter");
-    r.register(Activate(driver.clone()))
+    r.register(Activate::new(driver.clone()))
         .expect("playbook activate adapter");
-    r.register(Rollback(driver))
+    r.register(Rollback::new(driver))
         .expect("playbook rollback adapter");
 }
 pub(crate) fn schemas(r: &mut Registry) {
@@ -107,76 +59,61 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("playbook rollback schema");
 }
 
-fn id_ok(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+/// Dashboard actor and mounted playbook namespace for one authority lookup.
+struct ActionOwner<'a> {
+    state: &'a AppState,
+    driver: &'a Driver,
+    user: &'a User,
 }
-fn version(value: &str) -> Option<u64> {
-    value
-        .parse::<u64>()
-        .ok()
-        .filter(|v| *v > 0 && v.to_string() == value)
-}
-/// Owner of the mounted namespace, in the namespace's project.
-async fn owner(
-    state: &AppState,
-    driver: &Driver,
-    user: &User,
-    request: &ActionRequest,
-    operation_id: Uuid,
-    project_id: Uuid,
-) -> std::result::Result<Scope, ApiError> {
-    if request.operation_id != operation_id {
-        return Err(ApiError::invalid());
+impl<'a> ActionOwner<'a> {
+    fn new(state: &'a AppState, driver: &'a Driver, user: &'a User) -> Self {
+        Self {
+            state,
+            driver,
+            user,
+        }
     }
-    existing::owner(state, user).await?;
-    let ns = &driver.service.namespace;
-    if user.id != ns.owner_user_id {
-        return Err(ApiError::for_status(StatusCode::FORBIDDEN));
+    async fn require_owner(&self) -> std::result::Result<(), ApiError> {
+        existing::owner(self.state, self.user).await?;
+        if self.user.id != self.driver.service.namespace.owner_user_id {
+            return Err(ApiError::for_status(StatusCode::FORBIDDEN));
+        }
+        Ok(())
     }
-    if project_id != ns.project_id {
-        return Err(ApiError::for_status(StatusCode::NOT_FOUND));
+    async fn scope(
+        &self,
+        request: &ActionRequest,
+        operation_id: Uuid,
+        project_id: Uuid,
+    ) -> std::result::Result<Scope, ApiError> {
+        if request.operation_id != operation_id {
+            return Err(ApiError::invalid());
+        }
+        self.require_owner().await?;
+        if project_id != self.driver.service.namespace.project_id {
+            return Err(ApiError::for_status(StatusCode::NOT_FOUND));
+        }
+        Ok(Scope::Project { project_id })
     }
-    Ok(Scope::Project { project_id })
-}
-async fn lookup(
-    state: &AppState,
-    driver: &Driver,
-    user: &User,
-    scope: &Scope,
-    operation: Option<&actions::Operation>,
-    kind: &str,
-) -> std::result::Result<(), ApiError> {
-    existing::owner(state, user).await?;
-    let ns = &driver.service.namespace;
-    if user.id != ns.owner_user_id {
-        return Err(ApiError::for_status(StatusCode::FORBIDDEN));
+    async fn lookup(
+        &self,
+        scope: &Scope,
+        operation: Option<&actions::Operation>,
+        kind: &str,
+    ) -> std::result::Result<(), ApiError> {
+        self.require_owner().await?;
+        if !matches!(scope, Scope::Project {project_id} if *project_id == self.driver.service.namespace.project_id)
+        {
+            return Err(ApiError::invalid());
+        }
+        if let Some(op) = operation {
+            match op.subject_refs.as_slice() {
+                [subject] if subject.entity_type == kind => {}
+                _ => return Err(ApiError::invalid()),
+            }
+        }
+        Ok(())
     }
-    if !matches!(scope, Scope::Project { project_id } if *project_id == ns.project_id) {
-        return Err(ApiError::invalid());
-    }
-    if let Some(op) = operation
-        && (op.subject_refs.len() != 1 || op.subject_refs[0].entity_type != kind)
-    {
-        return Err(ApiError::invalid());
-    }
-    Ok(())
-}
-/// Versioned binding subject: `playbook_binding@expected_version`.
-fn binding_subject(
-    request: &ActionRequest,
-    binding: &str,
-    expected: &str,
-) -> std::result::Result<u64, ApiError> {
-    let v = version(expected).ok_or_else(ApiError::invalid)?;
-    if !id_ok(binding)
-        || request.subject.entity_type != BINDING
-        || request.subject.id != binding
-        || request.subject.revision.as_deref() != Some(expected)
-        || request.expected_versions != BTreeMap::from([(BINDING.into(), expected.into())])
-    {
-        return Err(ApiError::invalid());
-    }
-    Ok(v)
 }
 fn outcome(error: Error) -> Outcome {
     existing::disposition(match error {
@@ -269,15 +206,12 @@ impl ActionKind for CancelRun {
         request: &ActionRequest,
         p: &RunCancel,
     ) -> std::result::Result<Scope, ApiError> {
-        if !id_ok(&p.run_id)
-            || request.subject.entity_type != RUN
-            || request.subject.id != p.run_id
-            || request.subject.revision.is_some()
-            || !request.expected_versions.is_empty()
-        {
+        if !p.matches(request) {
             return Err(ApiError::invalid());
         }
-        owner(state, &self.0, user, request, p.operation_id, p.project_id).await
+        ActionOwner::new(state, &self.0, user)
+            .scope(request, p.operation_id, p.project_id)
+            .await
     }
     async fn authorize_lookup(
         &self,
@@ -286,7 +220,9 @@ impl ActionKind for CancelRun {
         scope: &Scope,
         operation: Option<&actions::Operation>,
     ) -> std::result::Result<(), ApiError> {
-        lookup(state, &self.0, user, scope, operation, RUN).await
+        ActionOwner::new(state, &self.0, user)
+            .lookup(scope, operation, RUN)
+            .await
     }
     async fn execute(
         &self,
@@ -316,15 +252,12 @@ impl ActionKind for StartRun {
         request: &ActionRequest,
         p: &RunStart,
     ) -> std::result::Result<Scope, ApiError> {
-        binding_subject(request, &p.binding, &p.expected_version)?;
-        if !id_ok(&p.artifact)
-            || !id_ok(&p.entry)
-            || p.inputs.len() > 32
-            || p.inputs.keys().any(|k| !id_ok(k))
-        {
+        if !p.matches(request) {
             return Err(ApiError::invalid());
         }
-        owner(state, &self.0, user, request, p.operation_id, p.project_id).await
+        ActionOwner::new(state, &self.0, user)
+            .scope(request, p.operation_id, p.project_id)
+            .await
     }
     async fn authorize_lookup(
         &self,
@@ -333,7 +266,9 @@ impl ActionKind for StartRun {
         scope: &Scope,
         operation: Option<&actions::Operation>,
     ) -> std::result::Result<(), ApiError> {
-        lookup(state, &self.0, user, scope, operation, BINDING).await
+        ActionOwner::new(state, &self.0, user)
+            .lookup(scope, operation, BINDING)
+            .await
     }
     async fn reconcile(
         &self,
@@ -411,9 +346,13 @@ impl ActionKind for StartRun {
 }
 
 #[async_trait]
-impl ActionKind for Activate {
+impl<const ROLLBACK: bool> ActionKind for UpdateBinding<ROLLBACK> {
     type Payload = BindingChange;
-    const KIND: &'static str = "playbook.activation.activate";
+    const KIND: &'static str = if ROLLBACK {
+        "playbook.activation.rollback"
+    } else {
+        "playbook.activation.activate"
+    };
     const GRANT: &'static str = "playbook.activate";
     const TARGET: aq_command_registry::TargetRule = aq_command_registry::TargetRule::Subject;
     async fn authorize(
@@ -423,11 +362,12 @@ impl ActionKind for Activate {
         request: &ActionRequest,
         p: &BindingChange,
     ) -> std::result::Result<Scope, ApiError> {
-        binding_subject(request, &p.binding, &p.expected_version)?;
-        if !id_ok(&p.artifact) {
+        if !p.matches(request) {
             return Err(ApiError::invalid());
         }
-        owner(state, &self.0, user, request, p.operation_id, p.project_id).await
+        ActionOwner::new(state, &self.0, user)
+            .scope(request, p.operation_id, p.project_id)
+            .await
     }
     async fn authorize_lookup(
         &self,
@@ -436,7 +376,9 @@ impl ActionKind for Activate {
         scope: &Scope,
         operation: Option<&actions::Operation>,
     ) -> std::result::Result<(), ApiError> {
-        lookup(state, &self.0, user, scope, operation, BINDING).await
+        ActionOwner::new(state, &self.0, user)
+            .lookup(scope, operation, BINDING)
+            .await
     }
     async fn reconcile(
         &self,
@@ -456,7 +398,8 @@ impl ActionKind for Activate {
         let Some(expected) = version(&p.expected_version) else {
             return rejected();
         };
-        let live = match current(&self.0, &p.binding, expected, None).await {
+        let active_artifact = ROLLBACK.then_some(p.artifact.as_str());
+        let live = match current(&self.0, &p.binding, expected, active_artifact).await {
             Ok(live) => live,
             Err(outcome) => return outcome,
         };
@@ -469,76 +412,15 @@ impl ActionKind for Activate {
             revision,
         };
         let op = p.operation_id.to_string();
-        match artifacts::activate(&catalog, &ledger(&self.0), &op, &p.binding, &p.artifact).await {
+        let result = if ROLLBACK {
+            artifacts::rollback(&catalog, &ledger(&self.0), &op, &p.binding).await
+        } else {
+            artifacts::activate(&catalog, &ledger(&self.0), &op, &p.binding, &p.artifact).await
+        };
+        match result {
             Ok(_) => changed(&self.0, &p.binding, &op).await,
-            Err(e) => outcome(e),
-        }
-    }
-}
-
-#[async_trait]
-impl ActionKind for Rollback {
-    type Payload = BindingChange;
-    const KIND: &'static str = "playbook.activation.rollback";
-    const GRANT: &'static str = "playbook.activate";
-    const TARGET: aq_command_registry::TargetRule = aq_command_registry::TargetRule::Subject;
-    async fn authorize(
-        &self,
-        state: &AppState,
-        user: &User,
-        request: &ActionRequest,
-        p: &BindingChange,
-    ) -> std::result::Result<Scope, ApiError> {
-        binding_subject(request, &p.binding, &p.expected_version)?;
-        if !id_ok(&p.artifact) {
-            return Err(ApiError::invalid());
-        }
-        owner(state, &self.0, user, request, p.operation_id, p.project_id).await
-    }
-    async fn authorize_lookup(
-        &self,
-        state: &AppState,
-        user: &User,
-        scope: &Scope,
-        operation: Option<&actions::Operation>,
-    ) -> std::result::Result<(), ApiError> {
-        lookup(state, &self.0, user, scope, operation, BINDING).await
-    }
-    async fn reconcile(
-        &self,
-        _state: &AppState,
-        _user: &User,
-        operation: &actions::Operation,
-    ) -> std::result::Result<Option<Outcome>, ApiError> {
-        recorded(&self.0, operation).await
-    }
-    async fn execute(
-        &self,
-        _state: &AppState,
-        _user: &User,
-        _request: &ActionRequest,
-        p: BindingChange,
-    ) -> Outcome {
-        let Some(expected) = version(&p.expected_version) else {
-            return rejected();
-        };
-        let live = match current(&self.0, &p.binding, expected, Some(&p.artifact)).await {
-            Ok(live) => live,
-            Err(outcome) => return outcome,
-        };
-        let Ok((grant, revision)) = grant_actor(&live.authority) else {
-            return rejected();
-        };
-        let catalog = DriverCatalog {
-            driver: &self.0,
-            grant,
-            revision,
-        };
-        let op = p.operation_id.to_string();
-        match artifacts::rollback(&catalog, &ledger(&self.0), &op, &p.binding).await {
-            Ok(_) => changed(&self.0, &p.binding, &op).await,
-            // Nothing recorded to roll back to.
-            Err(Error::Conflict) => rejected(),
+            // No recorded revision to roll back to.
+            Err(Error::Conflict) if ROLLBACK => rejected(),
             Err(e) => outcome(e),
         }
     }
