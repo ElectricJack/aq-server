@@ -28,6 +28,11 @@ impl PolicyDefinition {
         self.phase.validate().map_err(|_| "phase policy limits")?;
         super::super::phase_profile::Profile::for_contract(&self.contract, true)
             .map_err(|_| "phase policy parser unavailable")?;
+        self.validate_profiles()?;
+        self.validate_owners()
+    }
+
+    fn validate_profiles(&self) -> Result<(), String> {
         use aq_session_protocol::Validate;
         for a in [&self.runtime, &self.qualification, &self.source_profile] {
             a.id.validate().map_err(|_| "phase profile identity")?;
@@ -36,7 +41,10 @@ impl PolicyDefinition {
                 return Err("phase profile bound".into());
             }
         }
+        Ok(())
+    }
 
+    fn validate_owners(&self) -> Result<(), String> {
         let mut kinds = BTreeSet::new();
         for x in &self.owners {
             use aq_session_protocol::Validate;

@@ -75,7 +75,7 @@ fn all_known_registry_floors_reject_rollback_even_above_the_original_revision() 
     assert!(a.validate_for(&c.accept, &c.proposal).is_err());
 }
 #[test]
-fn canonical_signed64_registry_revisions_and_exact_owner_configuration_are_required() {
+fn registry_revisions_are_canonical_signed64() {
     for text in [
         "0",
         "01",
@@ -92,6 +92,9 @@ fn canonical_signed64_registry_revisions_and_exact_owner_configuration_are_requi
         }
     }
     registry_revision(&registry(i64::MAX as u64)).unwrap();
+}
+#[test]
+fn registry_chain_requires_the_exact_owner_configuration() {
     for mode in 0..3 {
         let mut current = registry(4);
         match mode {

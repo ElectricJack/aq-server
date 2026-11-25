@@ -22,6 +22,7 @@ Refuses to create anything unless the target project is PAUSED.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import subprocess
 import sys
@@ -30,18 +31,11 @@ from pathlib import Path
 
 import yaml
 
-REPO_KIND = {
-    "aq-server": "project-repo",
-    "aq-worker": "aq-worker-repo",
-    "aq-dashboard": "aq-dashboard-repo",
-    "aq-graph": "aq-graph-repo",
-    "aq-git": "aq-git-repo",
-    "aq-playbooks": "aq-playbooks-repo",
-}
-DELIVERABLE_KINDS = {"file", "test", "review"}
+from v1_plan_validation import REPO_KIND, fail, validate
+
+
 # v1 schedules lower numbers first; 100 is the default.
 PRIORITY = {"high": 50, "normal": 100, "low": 200}
-REVIEW_TARGETS = {"spec", "plan", "other", "any"}
 PLAN_DOC = "aq-server/docs/superpowers/plans/2026-11-02-v2-full-application-plan.md"
 TASK_FILE = "aq-server/docs/superpowers/plans/2026-11-02-v2-full-application-tasks.yaml"
 PLATFORM_REF = "/home/jkern/dev/aq-platform"
@@ -68,69 +62,6 @@ SUBTASKS = [
 ]
 
 
-def fail(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    sys.exit(2)
-
-
-def validate(doc: dict) -> tuple[dict, list[dict], list[dict]]:
-    epics = {e["key"]: e for e in doc["epics"]}
-    tasks = doc["tasks"]
-    by_key: dict[str, dict] = {}
-    errors: list[str] = []
-    for t in tasks:
-        k = t.get("key")
-        if not k or k in by_key:
-            errors.append(f"missing or duplicate key: {k!r}")
-            continue
-        by_key[k] = t
-    for k, t in by_key.items():
-        for field in ("epic", "repo", "title", "type", "description", "acceptance", "deliverables"):
-            if not t.get(field):
-                errors.append(f"{k}: missing {field}")
-        if t.get("epic") not in epics:
-            errors.append(f"{k}: unknown epic {t.get('epic')!r}")
-        if t.get("repo") not in REPO_KIND:
-            errors.append(f"{k}: repo {t.get('repo')!r} has no workspace kind")
-        for n in t.get("needs", []):
-            if n not in by_key:
-                errors.append(f"{k}: needs unknown {n}")
-            elif not t.get("deferred") and by_key[n].get("deferred"):
-                errors.append(f"{k}: active task needs deferred {n}")
-        for d in t.get("deliverables", []):
-            if not all(d.get(x) for x in ("id", "kind", "target")):
-                errors.append(f"{k}: malformed deliverable {d}")
-            elif d["kind"] not in DELIVERABLE_KINDS:
-                errors.append(f"{k}: deliverable kind {d['kind']!r}")
-            elif d["kind"] == "review" and d["target"] not in REVIEW_TARGETS:
-                errors.append(f"{k}: review target {d['target']!r}")
-            elif d["kind"] == "test" and d["target"].strip() in {"cargo test --locked --workspace", "pnpm test"} \
-                    and not k.startswith("A") and not t.get("deferred"):
-                errors.append(f"{k}: generic test deliverable (use a named test)")
-    # cycle check
-    state: dict[str, int] = {}
-
-    def visit(k: str, path: tuple[str, ...]) -> None:
-        if state.get(k) == 2:
-            return
-        if state.get(k) == 1:
-            errors.append("cycle: " + " -> ".join(path + (k,)))
-            return
-        state[k] = 1
-        for n in by_key[k].get("needs", []):
-            if n in by_key:
-                visit(n, path + (k,))
-        state[k] = 2
-
-    for k in by_key:
-        visit(k, ())
-    if errors:
-        fail("validation failed:\n  " + "\n  ".join(errors))
-    active = [t for t in tasks if not t.get("deferred")]
-    deferred = [t for t in tasks if t.get("deferred")]
-    return epics, active, deferred
-
-
 def description(t: dict) -> str:
     parts = [t["description"].strip()]
     parts.append("**Acceptance**\n" + "\n".join(f"- {a}" for a in t["acceptance"]))
@@ -144,7 +75,11 @@ def description(t: dict) -> str:
         meta.append(f"review: {t['review']}")
     parts.append("**Plan:** " + "; ".join(meta) + f". Task contract: {TASK_FILE}.")
     parts.append(FOOTER.format(plan=PLAN_DOC, key=t["key"]))
-    return "\n\n".join(parts)
+    # The plan predates per-repository projects. Route its owner questions to the worker's project.
+    return "\n\n".join(parts).replace(
+        "aq message send --to user:dashboard --project aq-platform`",
+        'aq message send --to user:dashboard --project "$AQ_PROJECT_ID"`',
+    )
 
 
 class Aq:
@@ -178,6 +113,135 @@ def project_paused(project: str) -> bool:
     return False
 
 
+def gate_dependencies(active, gate_key):
+    if not gate_key:
+        return []
+    tasks = {task["key"]: task for task in active}
+    if gate_key not in tasks:
+        fail(f"release gate {gate_key} is not an active task")
+    exempt = {gate_key}
+    stack = list(tasks[gate_key].get("needs", []))
+    while stack:
+        key = stack.pop()
+        if key not in exempt:
+            exempt.add(key)
+            stack.extend(tasks[key].get("needs", []))
+    return [(t["key"], gate_key) for t in active if not t.get("needs") and t["key"] not in exempt]
+
+
+def load_mapping(mapping_path, project):
+    mapping = json.loads(mapping_path.read_text()) if mapping_path.exists() else {}
+    mapping.setdefault("project", project)
+    mapping.setdefault("epics", {})
+    mapping.setdefault("tasks", {})
+    mapping.setdefault("edges", [])
+    mapping.setdefault("release_gate_edges", [])
+
+    return mapping
+
+
+def report_plan(a, tasks, dependencies, mapping):
+    epics, active, deferred = tasks
+    edges, gate_edges = dependencies
+    per_repo = Counter(t["repo"] for t in active)
+    print(f"Project {a.project}: {len(epics)} epics, {len(active)} active tasks, {len(deferred)} deferred (skipped)")
+    print("  by repo: " + ", ".join(f"{r} {n}" for r, n in sorted(per_repo.items())))
+    print(f"  needs edges: {len(edges)}; release-gate edges onto {a.release_gate}: {len(gate_edges)}")
+    if gate_edges:
+        print("    gated roots: " + ", ".join(k for k, _ in gate_edges))
+    report_deliverables(active)
+    report_roots(active, gate_edges, mapping)
+    print("  deferred: " + ", ".join(t["key"] for t in deferred))
+
+
+def report_deliverables(active):
+    print(f"  deliverables: {sum(len(t['deliverables']) for t in active)}; "
+          f"pull_request tasks: {sum(1 for t in active if t.get('integration') == 'pull_request')}; "
+          f"human-verified gates: {sum(1 for t in active if t.get('verification') == 'human')}")
+
+
+def report_roots(active, gate_edges, mapping):
+    already = [t["key"] for t in active if t["key"] in mapping["tasks"]]
+    if already:
+        print(f"  already imported (will skip): {len(already)}")
+    gated = {key for key, _ in gate_edges}
+    ready_now = [t["key"] for t in active if not t.get("needs") and t["key"] not in gated]
+    print(f"  ready once the project resumes: {', '.join(ready_now)}")
+
+
+def deliverable_args(deliverables):
+    for item in deliverables:
+        yield "--deliverable"
+        yield json.dumps({key: item[key] for key in ("id", "kind", "target")})
+
+
+def task_args(project, parent, t):
+    args = ["task", "create", "-p", project, "-t", f"{t['key']}: {t['title']}",
+            "-d", description(t), "--type", t["type"], "--parent", parent,
+            "--requires-kind", REPO_KIND[t["repo"]]]
+    if t.get("class"):
+        args += ["--intelligence-class", t["class"]]
+    args += ["--integration-mode", t.get("integration", "direct")]
+    if t.get("priority") in PRIORITY:
+        args += ["--priority", str(PRIORITY[t["priority"]])]
+    args.extend(deliverable_args(t["deliverables"]))
+    return args
+
+
+class PlanImport:
+    def __init__(self, project, aq, mapping, mapping_path):
+        self.project = project
+        self.aq = aq
+        self.mapping = mapping
+        self.mapping_path = mapping_path
+
+    def save(self):
+        if not self.aq.dry:
+            self.mapping_path.write_text(json.dumps(self.mapping, indent=2) + "\n")
+
+    def create_epics(self, epics, active):
+        used_epics = {t["epic"] for t in active}
+        for key, e in epics.items():
+            if key not in used_epics or key in self.mapping["epics"]:
+                continue
+            data = self.aq.run("task", "create", "-p", self.project, "-t", f"{key}. {e['title']}", "--container",
+                          "-d", f"Workstream {key} of the AQ v2 program plan ({PLAN_DOC}).")
+            self.mapping["epics"][key] = data["created"]
+            self.save()
+
+    def create_task(self, task):
+        key = task["key"]
+        if key in self.mapping["tasks"]:
+            return
+        parent = self.mapping["epics"].get(task["epic"], "DRY-epic")
+        data = self.aq.run(*task_args(self.project, parent, task))
+        tid = data["created"]
+        self.mapping["tasks"][key] = tid
+        self.save()
+        if task.get("verification") == "human":
+            self.aq.run("task", "edit", "--task-id", tid, "--verification-type", "human")
+        self.create_subtasks(tid)
+        print(f"  created {key} -> {tid}")
+
+    def create_subtasks(self, tid):
+        with tempfile.TemporaryDirectory() as directory:
+            subtasks = Path(directory) / "subtasks.json"
+            subtasks.write_text(json.dumps([{"title": s} for s in SUBTASKS]))
+            self.aq.run("task", "subtask-add", tid, "--from-file", str(subtasks))
+
+    def add_edges(self, edges, gate_edges, gate_key):
+        done = set(map(tuple, self.mapping["edges"] + self.mapping["release_gate_edges"]))
+        for (down, up), bucket, reason in (
+            [(e, "edges", "plan dependency") for e in edges]
+            + [(e, "release_gate_edges", f"release gate: wait for {gate_key} approval") for e in gate_edges]
+        ):
+            if (down, up) in done:
+                continue
+            self.aq.run("task", "add-dependency", "--task-id", self.mapping["tasks"].get(down, down),
+                   "--depends-on", self.mapping["tasks"].get(up, up), "--dep-type", "blocks", "--reason", reason)
+            self.mapping[bucket].append([down, up])
+            self.save()
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", required=True)
@@ -188,107 +252,21 @@ def main() -> None:
     a = ap.parse_args()
 
     doc = yaml.safe_load(Path(a.tasks).read_text())
-    epics, active, deferred = validate(doc)
-    active_keys = {t["key"] for t in active}
-    if a.release_gate and a.release_gate not in active_keys:
-        fail(f"release gate {a.release_gate} is not an active task")
-
-    mapping_path = Path(a.mapping)
-    mapping = json.loads(mapping_path.read_text()) if mapping_path.exists() else {}
-    mapping.setdefault("project", a.project)
-    mapping.setdefault("epics", {})
-    mapping.setdefault("tasks", {})
-    mapping.setdefault("edges", [])
-    mapping.setdefault("release_gate_edges", [])
-
-    # Edge plan.
+    tasks = validate(doc)
+    epics, active, _ = tasks
+    gate_edges = gate_dependencies(active, a.release_gate)
     edges = [(t["key"], n) for t in active for n in t.get("needs", [])]
-    gate_edges: list[tuple[str, str]] = []
-    if a.release_gate:
-        gate = next(t for t in active if t["key"] == a.release_gate)
-        exempt = {a.release_gate}
-        stack = list(gate.get("needs", []))
-        while stack:  # the gate's whole prerequisite closure is exempt
-            k = stack.pop()
-            if k not in exempt:
-                exempt.add(k)
-                stack += next(t for t in active if t["key"] == k).get("needs", [])
-        gate_edges = [(t["key"], a.release_gate) for t in active
-                      if not t.get("needs") and t["key"] not in exempt]
-
-    per_repo: dict[str, int] = {}
-    for t in active:
-        per_repo[t["repo"]] = per_repo.get(t["repo"], 0) + 1
-    print(f"Project {a.project}: {len(epics)} epics, {len(active)} active tasks, {len(deferred)} deferred (skipped)")
-    print("  by repo: " + ", ".join(f"{r} {n}" for r, n in sorted(per_repo.items())))
-    print(f"  needs edges: {len(edges)}; release-gate edges onto {a.release_gate}: {len(gate_edges)}")
-    if gate_edges:
-        print("    gated roots: " + ", ".join(k for k, _ in gate_edges))
-    print(f"  deliverables: {sum(len(t['deliverables']) for t in active)}; "
-          f"pull_request tasks: {sum(1 for t in active if t.get('integration') == 'pull_request')}; "
-          f"human-verified gates: {sum(1 for t in active if t.get('verification') == 'human')}")
-    already = [t["key"] for t in active if t["key"] in mapping["tasks"]]
-    if already:
-        print(f"  already imported (will skip): {len(already)}")
-    ready_now = [t["key"] for t in active if not t.get("needs") and t["key"] not in {k for k, _ in gate_edges}]
-    print(f"  ready once the project resumes: {', '.join(ready_now)}")
-    print("  deferred: " + ", ".join(t["key"] for t in deferred))
-
+    mapping_path = Path(a.mapping)
+    mapping = load_mapping(mapping_path, a.project)
+    report_plan(a, tasks, (edges, gate_edges), mapping)
     if not a.dry_run and not project_paused(a.project):
         fail(f"project {a.project} must be PAUSED before import (aq project pause --project-id {a.project})")
 
-    aq = Aq(a.dry_run)
-
-    def save() -> None:
-        if not a.dry_run:
-            mapping_path.write_text(json.dumps(mapping, indent=2) + "\n")
-
-    used_epics = {t["epic"] for t in active}
-    for key, e in epics.items():
-        if key not in used_epics or key in mapping["epics"]:
-            continue
-        data = aq.run("task", "create", "-p", a.project, "-t", f"{key}. {e['title']}", "--container",
-                      "-d", f"Workstream {key} of the AQ v2 program plan ({PLAN_DOC}).")
-        mapping["epics"][key] = data["created"]
-        save()
-
-    for t in active:
-        if t["key"] in mapping["tasks"]:
-            continue
-        args = ["task", "create", "-p", a.project, "-t", f"{t['key']}: {t['title']}",
-                "-d", description(t), "--type", t["type"], "--parent", mapping["epics"].get(t["epic"], "DRY-epic"),
-                "--requires-kind", REPO_KIND[t["repo"]]]
-        if t.get("class"):
-            args += ["--intelligence-class", t["class"]]
-        args += ["--integration-mode", t.get("integration", "direct")]
-        if t.get("priority") in PRIORITY:
-            args += ["--priority", str(PRIORITY[t["priority"]])]
-        for d in t["deliverables"]:
-            args += ["--deliverable", json.dumps({"id": d["id"], "kind": d["kind"], "target": d["target"]})]
-        data = aq.run(*args)
-        tid = data["created"]
-        mapping["tasks"][t["key"]] = tid
-        save()
-        if t.get("verification") == "human":
-            aq.run("task", "edit", "--task-id", tid, "--verification-type", "human")
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-            json.dump([{"title": s} for s in SUBTASKS], f)
-        aq.run("task", "subtask-add", tid, "--from-file", f.name)
-        Path(f.name).unlink(missing_ok=True)
-        print(f"  created {t['key']} -> {tid}")
-
-    done = {tuple(e) for e in mapping["edges"]} | {tuple(e) for e in mapping["release_gate_edges"]}
-    for (down, up), bucket, reason in (
-        [(e, "edges", "plan dependency") for e in edges]
-        + [(e, "release_gate_edges", f"release gate: wait for {a.release_gate} approval") for e in gate_edges]
-    ):
-        if (down, up) in done:
-            continue
-        aq.run("task", "add-dependency", "--task-id", mapping["tasks"].get(down, down),
-               "--depends-on", mapping["tasks"].get(up, up), "--dep-type", "blocks", "--reason", reason)
-        mapping[bucket].append([down, up])
-        save()
-
+    importer = PlanImport(a.project, Aq(a.dry_run), mapping, mapping_path)
+    importer.create_epics(epics, active)
+    for task in active:
+        importer.create_task(task)
+    importer.add_edges(edges, gate_edges, a.release_gate)
     print("dry run: nothing created" if a.dry_run else f"import complete; mapping in {mapping_path}")
 
 

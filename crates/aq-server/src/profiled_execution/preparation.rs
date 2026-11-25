@@ -38,6 +38,7 @@ pub(super) struct Locked {
     pub(super) selection: aq_selection::ResolvedSelection,
     pub(super) source: source_exports::LinkedExport,
     pub(super) offer_expiry: u64,
+    pub(super) backend_kind: Option<aq_selection::BackendKind>,
 }
 pub(super) async fn locked(
     state: &AppState,
@@ -151,6 +152,7 @@ pub(super) async fn locked(
         selection,
         source,
         offer_expiry,
+        backend_kind: current.backend_kind,
     })
 }
 async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>, AppError> {
@@ -266,6 +268,7 @@ pub async fn accept(
     .await?;
     let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
     let selection = before.selection.clone();
+    let backend_kind = before.backend_kind;
     let binding = request.acceptance.binding.clone();
     let head = super::login_refresh::newest_source(
         &state.store.pool,
@@ -287,7 +290,7 @@ pub async fn accept(
                 lease_id,
                 issued,
                 expiry,
-                None,
+                backend_kind,
                 head.as_ref(),
             )
         }),

@@ -7,36 +7,8 @@
 
 const REDACTED: &str = "[redacted]";
 
-/// Token prefixes: a segment starting with one, and at least `MIN_TOKEN` bytes
-/// long, is a provider key.
-const KEY_PREFIXES: [&str; 12] = [
-    "sk-",
-    "ghp_",
-    "gho_",
-    "ghu_",
-    "ghs_",
-    "ghr_",
-    "github_pat_",
-    "glpat-",
-    "xoxb-",
-    "xoxa-",
-    "xoxp-",
-    "xoxs-",
-];
-const MIN_TOKEN: usize = 16;
-
-/// Substrings of an assignment's name that mark its value as a credential.
-const SECRET_NAMES: [&str; 9] = [
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "api-key",
-    "access_key",
-    "private_key",
-];
+mod assignments;
+mod tokens;
 
 /// The tail of a log, from the last bytes of it that were read.
 ///
@@ -82,17 +54,7 @@ fn strip_controls(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\u{1b}' => {
-                if chars.peek() == Some(&'[') {
-                    chars.next();
-                    // Parameters and intermediates, then one final byte.
-                    for c in chars.by_ref() {
-                        if ('@'..='~').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-            }
+            '\u{1b}' => skip_escape(&mut chars),
             '\n' | '\t' => out.push(c),
             '\r' => {}
             c if c.is_control() => {}
@@ -100,6 +62,13 @@ fn strip_controls(text: &str) -> String {
         }
     }
     out
+}
+
+fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    if chars.next_if_eq(&'[').is_some() {
+        // Parameters and intermediates, then one final byte.
+        chars.find(|c| ('@'..='~').contains(c));
+    }
 }
 
 /// Replaces credentials in `text` with `[redacted]`.
@@ -123,8 +92,8 @@ pub(super) fn redact(text: &str) -> String {
 
 fn redact_line(line: &str) -> String {
     let line = redact_authorization(line);
-    let line = redact_assignments(&line);
-    redact_tokens(&line)
+    let line = assignments::redact(&line);
+    tokens::redact(&line)
 }
 
 /// An `Authorization` header or assignment loses the rest of its line.
@@ -142,105 +111,6 @@ fn redact_authorization(line: &str) -> String {
         from = name_end;
     }
     line.to_owned()
-}
-
-/// `name = value` where the name contains a secret word: the value is redacted.
-fn redact_assignments(line: &str) -> String {
-    let lower = line.to_ascii_lowercase();
-    let bytes = line.as_bytes();
-    let mut out = String::with_capacity(line.len());
-    let mut at = 0;
-    while at < line.len() {
-        let hit = SECRET_NAMES
-            .iter()
-            .filter_map(|name| lower[at..].find(name).map(|i| (at + i, name.len())))
-            .min();
-        let Some((start, len)) = hit else { break };
-        // The rest of the name, a closing quote, then the separator.
-        let mut i = start + len;
-        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || b"_-".contains(&bytes[i])) {
-            i += 1;
-        }
-        let name_end = i;
-        while i < bytes.len() && b"\"' \t".contains(&bytes[i]) {
-            i += 1;
-        }
-        if i >= bytes.len() || !b"=:".contains(&bytes[i]) {
-            out.push_str(&line[at..name_end]);
-            at = name_end;
-            continue;
-        }
-        i += 1;
-        while i < bytes.len() && b" \t\"'".contains(&bytes[i]) {
-            i += 1;
-        }
-        let value_start = i;
-        while i < bytes.len() && !b" \t\"'&,;)".contains(&bytes[i]) {
-            i += 1;
-        }
-        out.push_str(&line[at..value_start]);
-        if i > value_start && &line[value_start..i] != REDACTED {
-            out.push_str(REDACTED);
-        } else {
-            out.push_str(&line[value_start..i]);
-        }
-        at = i;
-    }
-    out.push_str(&line[at..]);
-    out
-}
-
-fn token_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')
-}
-
-/// Provider keys, JWTs and the token after `Bearer`.
-fn redact_tokens(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut previous = String::new();
-    let mut rest = line;
-    while !rest.is_empty() {
-        let end = rest
-            .char_indices()
-            .find(|(_, c)| !token_char(*c))
-            .map_or(rest.len(), |(i, _)| i);
-        if end == 0 {
-            let c = rest.chars().next().expect("nonempty");
-            out.push(c);
-            rest = &rest[c.len_utf8()..];
-            continue;
-        }
-        let segment = &rest[..end];
-        let after_bearer = previous.eq_ignore_ascii_case("bearer") && segment.len() >= 8;
-        if after_bearer || is_token(segment) {
-            out.push_str(REDACTED);
-        } else {
-            out.push_str(segment);
-        }
-        previous = segment.to_owned();
-        rest = &rest[end..];
-    }
-    out
-}
-
-fn is_token(segment: &str) -> bool {
-    if KEY_PREFIXES
-        .iter()
-        .any(|p| segment.starts_with(p) && segment.len() >= p.len().max(MIN_TOKEN))
-    {
-        return true;
-    }
-    // AWS access key id.
-    if segment.len() == 20
-        && segment.starts_with("AKIA")
-        && segment
-            .bytes()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-    {
-        return true;
-    }
-    // A JWT: three dot-separated parts, the first a base64 JSON header.
-    segment.starts_with("eyJ") && segment.matches('.').count() == 2 && segment.len() >= 24
 }
 
 #[cfg(test)]

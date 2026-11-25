@@ -1,0 +1,38 @@
+{
+  "id": "deliver-with-environments",
+  "binding": "aq.deliver-with-environments",
+  "scope": "project",
+  "purpose": "Deliver a task's result through a pull request, building and admitting the environments it changes, or send it back",
+  "commands": [
+    "branch.publish",
+    "environment.admit",
+    "environment.build",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.open",
+    "supervisor.notify",
+    "work.complete",
+    "work.hold",
+    "work.read",
+    "work.return"
+  ],
+  "events": [
+    "aq.environment.base_changed",
+    "aq.work.result_ready"
+  ],
+  "capabilities": [
+    "branch.publish",
+    "environment.admit",
+    "environment.build",
+    "operation.get",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.open",
+    "supervisor.notify",
+    "work.complete",
+    "work.hold",
+    "work.read",
+    "work.return"
+  ],
+  "facts_version": "settings-1"
+}

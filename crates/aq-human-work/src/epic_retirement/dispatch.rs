@@ -2,8 +2,10 @@
 //!
 //! The server supplies the reads (its Graph runtime and upstream schemas);
 //! everything an action reads is named by its registration, not its request.
-use super::settle::{Close, Decide, Evidence, Refusal, Registration, Restore};
-use super::{Register, owner_created, owner_registered};
+use super::settle::{
+    Close, ClosureReads, Decide, Evidence, GateRevision, Refusal, Registration, Restore,
+};
+use super::{Register, Scope, owner_created, owner_registered};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -42,14 +44,9 @@ pub trait Reads: Sync {
     fn fail(&self, refusal: Option<Refusal>) -> Self::Error;
 }
 
-/// Who acts where: the authenticated owner, the bound workspace and project,
-/// and the configured Graph service that dispatches.
-#[derive(Clone, Copy)]
-struct Scope<'a> {
-    workspace: Uuid,
-    actor: Uuid,
-    project: Uuid,
-    service: &'a str,
+pub struct GraphReads<'a, R> {
+    pub graph: &'a R,
+    pub pool: &'a sqlx::PgPool,
 }
 
 type Read<T, R> = Result<T, <R as Reads>::Error>;
@@ -62,7 +59,8 @@ async fn get<R: Reads>(r: &R, at: Scope<'_>, path: String, schema: &'static str)
 /// A node of this workspace with this ID and kind, including a tombstone.
 async fn any<R: Reads>(r: &R, at: Scope<'_>, id: Uuid, kind: &str) -> Read<Value, R> {
     let raw = get(r, at, format!("nodes/{id}"), "Node").await?;
-    if raw["id"] != json!(id) || raw["workspace_id"] != json!(at.workspace) || raw["kind"] != kind {
+    let same_node = raw["id"] == json!(id) && raw["workspace_id"] == json!(at.workspace);
+    if !same_node || raw["kind"] != kind {
         return Err(r.fail(None));
     }
     Ok(raw)
@@ -105,38 +103,15 @@ async fn records<R: Reads>(
 
 /// The Graph batch for `action` against the subject's fresh read `subject`.
 pub async fn plan<R: Reads>(
-    r: &R,
-    pool: &sqlx::PgPool,
-    (workspace, actor, project, service): (Uuid, Uuid, Uuid, &str),
+    GraphReads { graph: r, pool }: GraphReads<'_, R>,
+    at: Scope<'_>,
     subject: &Value,
     action: Action<'_>,
 ) -> Read<Vec<Value>, R> {
-    let at = Scope {
-        workspace,
-        actor,
-        project,
-        service,
-    };
     if let Action::Register(payload) = action {
-        let approval = context(r, at, payload.adopt.approval).await?;
-        let cleanup = context(r, at, payload.adopt.cleanup).await?;
-        let owned = owner_created(pool, at.actor, at.workspace, payload).await;
-        if !owned.map_err(|_| r.fail(None))? {
-            return Err(r.fail(Some("the adopted tasks are not this owner's")));
-        }
-        return payload
-            .plan(
-                at.workspace,
-                at.actor,
-                at.service,
-                subject,
-                &approval,
-                &cleanup,
-            )
-            .ok_or_else(|| r.fail(Some("the adopted tasks cannot be registered")));
+        return register(GraphReads { graph: r, pool }, at, subject, payload).await;
     }
-    let reg = Registration::load(subject, at.workspace, at.actor, at.service, at.project)
-        .map_err(|why| r.fail(Some(why)))?;
+    let reg = Registration::load(subject, at).map_err(|why| r.fail(Some(why)))?;
     let planned = match action {
         Action::Register(_) => unreachable!("planned above"),
         Action::Restore(payload) => {
@@ -147,21 +122,19 @@ pub async fn plan<R: Reads>(
             if snapshot["node"]["workspace_id"] != json!(at.workspace) {
                 return Err(r.fail(None));
             }
-            payload.plan(&reg, &epic, &tombstone, &snapshot)
+            payload.plan(
+                &reg,
+                &epic,
+                GateRevision {
+                    tombstone: &tombstone,
+                    snapshot: &snapshot,
+                },
+            )
         }
         Action::Decide(payload) => {
             let [approval, cleanup, closure] = gates(r, at, &reg).await?;
-            // A draft decision needs no journal read; a reconciliation does.
-            let journaled = match reg.operation() {
-                Some(op) if Decide::released(&approval) => {
-                    let scope = (at.actor, at.workspace, at.project);
-                    owner_registered(pool, scope, op, reg.id)
-                        .await
-                        .map_err(|_| r.fail(None))?
-                }
-                _ => false,
-            };
-            payload.plan(&reg, &approval, &cleanup, &closure, journaled)
+            let journaled = journaled(GraphReads { graph: r, pool }, at, &reg, &approval).await?;
+            payload.plan(&reg, [&approval, &cleanup, &closure], journaled)
         }
         Action::Evidence(payload) => {
             let [approval, cleanup, closure] = gates(r, at, &reg).await?;
@@ -181,12 +154,47 @@ pub async fn plan<R: Reads>(
             .await?;
             payload.plan(
                 &reg,
-                &epic,
-                [&approval, &cleanup, &closure],
-                &records,
-                &tree,
+                ClosureReads {
+                    epic: &epic,
+                    gates: [&approval, &cleanup, &closure],
+                    records: &records,
+                    tree: &tree,
+                },
             )
         }
     };
     planned.map_err(|why| r.fail(Some(why)))
+}
+
+async fn journaled<R: Reads>(
+    GraphReads { graph: r, pool }: GraphReads<'_, R>,
+    at: Scope<'_>,
+    reg: &Registration,
+    approval: &Value,
+) -> Read<bool, R> {
+    Ok(match reg.operation() {
+        Some(op) if Decide::released(approval) => {
+            let scope = (at.actor, at.workspace, at.project);
+            owner_registered(pool, scope, op, reg.id)
+                .await
+                .map_err(|_| r.fail(None))?
+        }
+        _ => false,
+    })
+}
+async fn register<R: Reads>(
+    GraphReads { graph: r, pool }: GraphReads<'_, R>,
+    at: Scope<'_>,
+    subject: &Value,
+    payload: &Register,
+) -> Read<Vec<Value>, R> {
+    let approval = context(r, at, payload.adopt.approval).await?;
+    let cleanup = context(r, at, payload.adopt.cleanup).await?;
+    let owned = owner_created(pool, at.actor, at.workspace, payload).await;
+    if !owned.map_err(|_| r.fail(None))? {
+        return Err(r.fail(Some("the adopted tasks are not this owner's")));
+    }
+    payload
+        .plan(at, subject, [&approval, &cleanup])
+        .ok_or_else(|| r.fail(Some("the adopted tasks cannot be registered")))
 }

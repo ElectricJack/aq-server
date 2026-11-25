@@ -102,29 +102,7 @@ pub async fn save(
     request: SaveRequest,
     available: &[Provider],
 ) -> Result<Value> {
-    let expected = request
-        .expected_revision
-        .parse::<i64>()
-        .ok()
-        .filter(|n| *n >= 0 && *n < i64::MAX)
-        .ok_or_else(|| crate::invalid("Invalid provider settings revision"))?;
-    if request.operation_id.is_nil()
-        || request.providers.len() > 32
-        || request
-            .providers
-            .iter()
-            .any(|id| id.is_empty() || id.len() > 512)
-        || request.providers.iter().collect::<BTreeSet<_>>().len() != request.providers.len()
-    {
-        return Err(crate::invalid("Choose each provider at most once"));
-    }
-    if let Some(Some(days)) = request.codex_login_max_age_days
-        && !(1..=3650).contains(&days)
-    {
-        return Err(crate::invalid(
-            "The Codex login age limit is 1 to 3650 days, or empty for none",
-        ));
-    }
+    let expected = request.expected_revision()?;
     let digest = aq_profiles::digest(&serde_json::to_value(&request).map_err(|_| Error::Internal)?)
         .map_err(|_| Error::Internal)?;
     let mut tx = pool.begin().await?;
@@ -147,56 +125,8 @@ pub async fn save(
         }
         return Ok(receipt.get("response"));
     }
-    if row.get::<i64, _>("revision") != expected {
-        return Err(crate::conflict(
-            "Providers changed. Your draft is preserved; reload before saving",
-        ));
-    }
-    let initial = row.get::<Option<Value>, _>("providers").is_none();
-    let previous = row
-        .get::<Option<Value>, _>("providers")
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|_| Error::Internal)?;
-    let old_age: Option<i32> = row.get("codex_login_max_age_days");
-    let max_age = request.codex_login_max_age_days.unwrap_or(old_age);
-    let previous = snapshot(expected, previous, old_age, available);
-    if previous["available_revision"] != request.expected_available_revision {
-        return Err(crate::conflict(
-            "Server provider configuration changed. Reload before saving",
-        ));
-    }
-    let old: Vec<String> =
-        serde_json::from_value(previous["providers"].clone()).map_err(|_| Error::Internal)?;
-    if request
-        .providers
-        .iter()
-        .any(|id| !available.iter().any(|p| &p.id == id) && !old.contains(id))
-    {
-        return Err(crate::invalid("Choose a provider from the available list"));
-    }
-    let changed = initial
-        || max_age != old_age
-        || old.iter().collect::<BTreeSet<_>>() != request.providers.iter().collect::<BTreeSet<_>>();
-    let revision = expected + i64::from(changed);
-    let mut response = snapshot(
-        revision,
-        Some(request.providers.clone()),
-        max_age,
-        available,
-    );
-    response["operation_id"] = json!(request.operation_id);
-    let usage = sqlx::query("SELECT count(*) AS entries, COALESCE(sum(pg_column_size(response)),0)::BIGINT AS bytes FROM provider_settings_operations")
-        .fetch_one(&mut *tx).await?;
-    let bytes: i64 = sqlx::query_scalar("SELECT pg_column_size($1::jsonb)::BIGINT")
-        .bind(&response)
-        .fetch_one(&mut *tx)
-        .await?;
-    if usage.get::<i64, _>("entries") >= 10000
-        || usage.get::<i64, _>("bytes").saturating_add(bytes) > 16 * 1024 * 1024
-    {
-        return Err(crate::conflict("Provider save receipt limit reached"));
-    }
+    let (revision, max_age, response) = request.apply(&row, expected, available)?;
+    check_receipt_capacity(&mut tx, &response).await?;
     sqlx::query("UPDATE provider_settings SET revision=$1,providers=$2,codex_login_max_age_days=$3 WHERE singleton")
         .bind(revision)
         .bind(json!(request.providers))
@@ -208,21 +138,112 @@ pub async fn save(
     tx.commit().await?;
     Ok(response)
 }
-/// Membership is fenced under the caller's admission transaction. Prefix fixtures stay compatible.
-pub async fn allows(
-    conn: &mut PgConnection,
-    provider: &str,
-) -> std::result::Result<bool, sqlx::Error> {
+impl SaveRequest {
+    fn expected_revision(&self) -> Result<i64> {
+        let expected = self
+            .expected_revision
+            .parse::<i64>()
+            .ok()
+            .filter(|n| *n >= 0 && *n < i64::MAX)
+            .ok_or_else(|| crate::invalid("Invalid provider settings revision"))?;
+        if self.operation_id.is_nil() || !self.valid_providers() {
+            return Err(crate::invalid("Choose each provider at most once"));
+        }
+        if let Some(Some(days)) = self.codex_login_max_age_days
+            && !(1..=3650).contains(&days)
+        {
+            return Err(crate::invalid(
+                "The Codex login age limit is 1 to 3650 days, or empty for none",
+            ));
+        }
+        Ok(expected)
+    }
+    fn valid_providers(&self) -> bool {
+        let within_bounds = self.providers.len() <= 32
+            && self
+                .providers
+                .iter()
+                .all(|id| !id.is_empty() && id.len() <= 512);
+        let unique = self.providers.iter().collect::<BTreeSet<_>>().len() == self.providers.len();
+        within_bounds && unique
+    }
+    fn apply(
+        &self,
+        row: &sqlx::postgres::PgRow,
+        expected: i64,
+        available: &[Provider],
+    ) -> Result<(i64, Option<i32>, Value)> {
+        if row.get::<i64, _>("revision") != expected {
+            return Err(crate::conflict(
+                "Providers changed. Your draft is preserved; reload before saving",
+            ));
+        }
+        let initial = row.get::<Option<Value>, _>("providers").is_none();
+        let previous = row
+            .get::<Option<Value>, _>("providers")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| Error::Internal)?;
+        let old_age: Option<i32> = row.get("codex_login_max_age_days");
+        let max_age = self.codex_login_max_age_days.unwrap_or(old_age);
+        let previous = snapshot(expected, previous, old_age, available);
+        if previous["available_revision"] != self.expected_available_revision {
+            return Err(crate::conflict(
+                "Server provider configuration changed. Reload before saving",
+            ));
+        }
+        let old: Vec<String> =
+            serde_json::from_value(previous["providers"].clone()).map_err(|_| Error::Internal)?;
+        if self
+            .providers
+            .iter()
+            .any(|id| !available.iter().any(|p| &p.id == id) && !old.contains(id))
+        {
+            return Err(crate::invalid("Choose a provider from the available list"));
+        }
+        let changed = initial
+            || max_age != old_age
+            || old.iter().collect::<BTreeSet<_>>()
+                != self.providers.iter().collect::<BTreeSet<_>>();
+        let revision = expected + i64::from(changed);
+        let mut response = snapshot(revision, Some(self.providers.clone()), max_age, available);
+        response["operation_id"] = json!(self.operation_id);
+        Ok((revision, max_age, response))
+    }
+}
+async fn check_receipt_capacity(conn: &mut PgConnection, response: &Value) -> Result<()> {
+    let usage = sqlx::query("SELECT count(*) AS entries, COALESCE(sum(pg_column_size(response)),0)::BIGINT AS bytes FROM provider_settings_operations")
+        .fetch_one(&mut *conn).await?;
+    let bytes: i64 = sqlx::query_scalar("SELECT pg_column_size($1::jsonb)::BIGINT")
+        .bind(response)
+        .fetch_one(&mut *conn)
+        .await?;
+    if usage.get::<i64, _>("entries") >= 10000
+        || usage.get::<i64, _>("bytes").saturating_add(bytes) > 16 * 1024 * 1024
+    {
+        return Err(crate::conflict("Provider save receipt limit reached"));
+    }
+    Ok(())
+}
+async fn membership(conn: &mut PgConnection) -> std::result::Result<Option<Value>, sqlx::Error> {
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('provider_settings') IS NOT NULL")
         .fetch_one(&mut *conn)
         .await?;
     if !exists {
-        return Ok(true);
+        return Ok(None);
     }
     let providers: Option<Value> =
         sqlx::query_scalar("SELECT providers FROM provider_settings WHERE singleton FOR SHARE")
             .fetch_one(&mut *conn)
             .await?;
+    Ok(providers)
+}
+/// Membership is fenced under the caller's admission transaction. Prefix fixtures stay compatible.
+pub async fn allows(
+    conn: &mut PgConnection,
+    provider: &str,
+) -> std::result::Result<bool, sqlx::Error> {
+    let providers = membership(conn).await?;
     Ok(providers.is_none_or(|ids| {
         ids.as_array()
             .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(provider)))
@@ -237,24 +258,10 @@ pub async fn mask(
     frozen: Option<&[aq_selection::AuthorizedCredential]>,
 ) -> std::result::Result<(), sqlx::Error> {
     if let Some(frozen) = frozen {
-        for credential in credentials {
-            credential.enabled &= frozen
-                .iter()
-                .find(|old| old.profile == credential.profile)
-                .is_some_and(|old| old.enabled);
-        }
+        keep_frozen_credentials(credentials, frozen);
         return Ok(());
     }
-    let exists: bool = sqlx::query_scalar("SELECT to_regclass('provider_settings') IS NOT NULL")
-        .fetch_one(&mut *conn)
-        .await?;
-    if !exists {
-        return Ok(());
-    }
-    let providers: Option<Value> =
-        sqlx::query_scalar("SELECT providers FROM provider_settings WHERE singleton FOR SHARE")
-            .fetch_one(&mut *conn)
-            .await?;
+    let providers = membership(conn).await?;
     if let Some(providers) = providers {
         for credential in credentials {
             credential.enabled &= providers.as_array().is_some_and(|ids| {
@@ -264,4 +271,16 @@ pub async fn mask(
         }
     }
     Ok(())
+}
+
+fn keep_frozen_credentials(
+    credentials: &mut [aq_selection::AuthorizedCredential],
+    frozen: &[aq_selection::AuthorizedCredential],
+) {
+    for credential in credentials {
+        credential.enabled &= frozen
+            .iter()
+            .find(|old| old.profile == credential.profile)
+            .is_some_and(|old| old.enabled);
+    }
 }

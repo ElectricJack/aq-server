@@ -1,4 +1,6 @@
 //! Typed atomic task creation and Graph mutation planning.
+pub mod creation_receipt;
+pub mod single;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,11 +29,9 @@ pub enum Author {
 
 pub fn hints_valid(priority: Option<u16>, hints: [&Option<String>; 3]) -> bool {
     priority.is_none_or(|n| (1..=300).contains(&n))
-        && hints.iter().all(|h| {
-            h.as_ref().is_none_or(|s| {
-                !s.trim().is_empty() && s.len() <= 128 && !s.chars().any(char::is_control)
-            })
-        })
+        && hints
+            .iter()
+            .all(|hint| hint.as_deref().is_none_or(|s| bounded_label(s, 128)))
 }
 /// Spec 0017 §5.4: the capabilities a task needs from its environment,
 /// stored as `aq:needs`: distinct bounded labels. Empty names none.
@@ -56,9 +56,7 @@ pub fn needs(value: &mut Value, needs: &Option<Needs>) {
 pub fn metadata(
     value: &mut Value,
     priority: Option<u16>,
-    role: &Option<String>,
-    intelligence: &Option<String>,
-    task_type: &Option<String>,
+    [role, intelligence, task_type]: [&Option<String>; 3],
 ) {
     if let Some(n) = priority {
         value["aq:priority"] = json!(n);
@@ -119,27 +117,37 @@ pub enum InitialState {
     #[default]
     Active,
 }
+fn bounded_label(label: &str, max: usize) -> bool {
+    !label.trim().is_empty() && label.len() <= max && !label.chars().any(char::is_control)
+}
+
+fn valid_labels(labels: &[String]) -> bool {
+    labels.len() <= 16
+        && labels.iter().all(|s| bounded_label(s, 128))
+        && labels.iter().collect::<BTreeSet<_>>().len() == labels.len()
+}
+
+fn bounded_text(text: &str, max: usize) -> bool {
+    text.len() <= max && !text.contains('\0')
+}
+
 impl Task {
     fn valid(&self) -> bool {
-        !self.id.is_nil()
-            && !self.title.trim().is_empty()
-            && self.title.len() <= 512
-            && !self.title.chars().any(char::is_control)
-            && self.body.len() <= 32768
-            && !self.body.contains('\0')
-            && self.acceptance_criteria.len() <= 8192
-            && !self.acceptance_criteria.contains('\0')
-            && self.labels.len() <= 16
-            && self
-                .labels
-                .iter()
-                .all(|s| !s.trim().is_empty() && s.len() <= 128 && !s.chars().any(char::is_control))
-            && self.labels.iter().collect::<BTreeSet<_>>().len() == self.labels.len()
-            && self.parent_id.is_none_or(|p| !p.is_nil() && p != self.id)
+        self.valid_identity()
+            && self.valid_description()
             && hints_valid(
                 self.priority,
                 [&self.role, &self.intelligence_hint, &self.task_type],
             )
+    }
+    fn valid_identity(&self) -> bool {
+        !self.id.is_nil() && self.parent_id.is_none_or(|p| !p.is_nil() && p != self.id)
+    }
+    fn valid_description(&self) -> bool {
+        bounded_label(&self.title, 512)
+            && bounded_text(&self.body, 32768)
+            && bounded_text(&self.acceptance_criteria, 8192)
+            && valid_labels(&self.labels)
     }
     fn operation(&self, project: Uuid, author: Author) -> Value {
         let mut m = json!({"aq:project_id":project});
@@ -159,9 +167,7 @@ impl Task {
         metadata(
             &mut m,
             self.priority,
-            &self.role,
-            &self.intelligence_hint,
-            &self.task_type,
+            [&self.role, &self.intelligence_hint, &self.task_type],
         );
         #[cfg(feature = "project_environments")]
         needs(&mut m, &self.needs);
@@ -203,28 +209,36 @@ fn parent_edge(operation: Uuid, task: Uuid) -> Uuid {
             .expect("digest length"),
     )
 }
+impl Dependency {
+    fn connects(&self, nodes: &BTreeSet<Uuid>) -> bool {
+        !self.id.is_nil()
+            && !self.source.is_nil()
+            && !self.target.is_nil()
+            && self.source != self.target
+            && (nodes.contains(&self.source) || nodes.contains(&self.target))
+    }
+}
 impl GraphCreate {
     pub fn valid(&self) -> bool {
-        let nodes: BTreeSet<_> = self.tasks.iter().map(|t| t.id).collect();
-        let mut ids = nodes.clone();
-        let mut pairs = BTreeSet::new();
         !self.operation_id.is_nil()
             && !self.project_id.is_nil()
             && !self.tasks.is_empty()
-            && self.tasks.len()
-                + self.edges.len()
-                + self.tasks.iter().filter(|t| t.parent_id.is_some()).count()
-                <= 100
-            && nodes.len() == self.tasks.len()
+            && self.operation_count() <= 100
             && self.tasks.iter().all(Task::valid)
+            && self.valid_edges()
+    }
+    fn operation_count(&self) -> usize {
+        self.tasks.len()
+            + self.edges.len()
+            + self.tasks.iter().filter(|t| t.parent_id.is_some()).count()
+    }
+    fn valid_edges(&self) -> bool {
+        let nodes: BTreeSet<_> = self.tasks.iter().map(|t| t.id).collect();
+        let mut ids = nodes.clone();
+        let mut pairs = BTreeSet::new();
+        nodes.len() == self.tasks.len()
             && self.edges.iter().all(|e| {
-                !e.id.is_nil()
-                    && !e.source.is_nil()
-                    && !e.target.is_nil()
-                    && e.source != e.target
-                    && (nodes.contains(&e.source) || nodes.contains(&e.target))
-                    && ids.insert(e.id)
-                    && pairs.insert((e.source, e.target))
+                e.connects(&nodes) && ids.insert(e.id) && pairs.insert((e.source, e.target))
             })
             && self
                 .tasks
@@ -300,35 +314,35 @@ impl GraphCreate {
         {
             return Err(OutsideScope);
         }
-        self.tasks
-            .iter()
-            .map(|task| {
-                if !matches!(task.task_state, InitialState::Draft)
-                    || task.intelligence_hint.is_some()
-                {
-                    return Err(OutsideScope);
-                }
-                #[cfg(feature = "project_environments")]
-                if task.needs.is_some() {
-                    return Err(OutsideScope);
-                }
-                let parent = task.parent_id.ok_or(OutsideScope)?;
-                let mut ancestor = parent;
-                let mut chain = BTreeSet::from([task.id]);
-                while let Some(parent) = parents.get(&ancestor) {
-                    if !chain.insert(ancestor) {
-                        return Err(Invalid);
-                    }
-                    ancestor = (*parent).ok_or(OutsideScope)?;
-                }
-                Ok(DraftTask {
-                    id: task.id,
-                    parent,
-                    ancestor,
-                    new_levels: chain.len() as u32,
-                })
-            })
-            .collect()
+        self.tasks.iter().map(|task| task.draft(&parents)).collect()
+    }
+}
+
+impl Task {
+    fn draft(&self, parents: &BTreeMap<Uuid, Option<Uuid>>) -> Result<DraftTask, DraftBatchError> {
+        use DraftBatchError::{Invalid, OutsideScope};
+        if !matches!(self.task_state, InitialState::Draft) || self.intelligence_hint.is_some() {
+            return Err(OutsideScope);
+        }
+        #[cfg(feature = "project_environments")]
+        if self.needs.is_some() {
+            return Err(OutsideScope);
+        }
+        let parent = self.parent_id.ok_or(OutsideScope)?;
+        let mut ancestor = parent;
+        let mut chain = BTreeSet::from([self.id]);
+        while let Some(parent) = parents.get(&ancestor) {
+            if !chain.insert(ancestor) {
+                return Err(Invalid);
+            }
+            ancestor = (*parent).ok_or(OutsideScope)?;
+        }
+        Ok(DraftTask {
+            id: self.id,
+            parent,
+            ancestor,
+            new_levels: chain.len() as u32,
+        })
     }
 }
 

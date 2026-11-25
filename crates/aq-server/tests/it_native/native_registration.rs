@@ -130,7 +130,28 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
         "synthetic-runtime-qualification",
         b"synthetic-qualification",
     );
+<<<<<<< HEAD
     install_allowlist(&mut f.state, &request, qualification.clone()).await;
+=======
+    let mut config = (*f.state.config).clone();
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
+            runtime: request.runtime.clone(),
+            qualification: qualification.clone(),
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: None,
+        }],
+        projects: vec![],
+    }));
+    f.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&f.state)
+        .await
+        .unwrap();
+>>>>>>> refs/remotes/central/main
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
@@ -293,6 +314,7 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     use tower::ServiceExt;
     let mut f = fixture().await;
     let pool = f.db.pool().await;
+<<<<<<< HEAD
     let request = registration_request(&f.node, b"code");
     install_allowlist(
         &mut f.state,
@@ -301,6 +323,45 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     )
     .await;
     let auth = authenticate(&f).await;
+=======
+    let request = Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        runtime: artifact("synthetic-native-runtime", b"code"),
+        capabilities: vec![],
+        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
+    };
+    let mut config = (*f.state.config).clone();
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
+            runtime: request.runtime.clone(),
+            qualification: artifact("synthetic-qualification", b"qualification"),
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: None,
+        }],
+        projects: vec![],
+    }));
+    f.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&f.state)
+        .await
+        .unwrap();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {}", f.credential).parse().unwrap(),
+    );
+    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
+        .await
+        .unwrap();
+>>>>>>> refs/remotes/central/main
     let router = aq_server::build_worker_router(f.state.clone());
     let http_request = |token: &str, body: Vec<u8>| {
         HttpRequest::builder()
@@ -439,6 +500,7 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
 async fn registration_receipt_cap_is_per_boot() {
     let mut f = fixture().await;
     let pool = f.db.pool().await;
+<<<<<<< HEAD
     let request = registration_request(&f.node, b"code");
     install_allowlist(
         &mut f.state,
@@ -447,6 +509,45 @@ async fn registration_receipt_cap_is_per_boot() {
     )
     .await;
     let auth = authenticate(&f).await;
+=======
+    let request = Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        runtime: artifact("synthetic-native-runtime", b"code"),
+        capabilities: vec![],
+        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
+    };
+    let mut config = (*f.state.config).clone();
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
+            runtime: request.runtime.clone(),
+            qualification: artifact("synthetic-qualification", b"qualification"),
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: None,
+        }],
+        projects: vec![],
+    }));
+    f.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&f.state)
+        .await
+        .unwrap();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {}", f.credential).parse().unwrap(),
+    );
+    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
+        .await
+        .unwrap();
+>>>>>>> refs/remotes/central/main
     // Receipts are append-only, so the filled history is inserted directly.
     sqlx::query("INSERT INTO native_registration_receipts(node_id,operation_id,request_digest,response) SELECT $1,gen_random_uuid(),repeat('a',64),jsonb_build_object('identity',jsonb_build_object('boot_id',$2::text)) FROM generate_series(1,1024)")
         .bind(f.node.node_id)

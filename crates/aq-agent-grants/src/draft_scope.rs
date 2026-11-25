@@ -38,16 +38,7 @@ impl TaskScope {
         }
         let mut versions = BTreeMap::new();
         for depth in 0..=MAX_ANCESTRY {
-            let task = uuid(&node["id"])?;
-            if node["workspace_id"] != json!(self.workspace)
-                || node["kind"] != "task"
-                || node["deleted"] != false
-                || node["retired"] != false
-                || node["metadata"]["aq:project_id"] != json!(self.project)
-                || versions.insert(task, node["version"].as_u64()?).is_some()
-            {
-                return None;
-            }
+            let task = self.record_node(node, &mut versions)?;
             if task == self.own_task || self.subject_task == Some(task) {
                 return Some(Path {
                     root: task,
@@ -63,6 +54,19 @@ impl TaskScope {
             node = nodes.iter().find(|n| n["id"] == json!(parent))?;
         }
         None
+    }
+
+    fn record_node(&self, node: &Value, versions: &mut BTreeMap<Uuid, u64>) -> Option<Uuid> {
+        let local_task = node["workspace_id"] == json!(self.workspace)
+            && node["kind"] == "task"
+            && node["metadata"]["aq:project_id"] == json!(self.project);
+        let active = node["deleted"] == false && node["retired"] == false;
+        if !local_task || !active {
+            return None;
+        }
+        let task = uuid(&node["id"])?;
+        let version = node["version"].as_u64()?;
+        versions.insert(task, version).is_none().then_some(task)
     }
 
     fn incoming(&self, edge: &Value, task: Uuid, kind: &str) -> bool {
