@@ -326,24 +326,14 @@ async fn load_selection_locked(
     h: &AcceptedHistory,
     view: &authority::AuthorityView,
 ) -> Result<PinnedSelection, AppError> {
-    let row=sqlx::query("SELECT l.execution_spec,l.execution_spec_digest,l.graph_task_observation,l.decision_id,d.decision,s.selection,s.selection_digest FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) JOIN intelligence_attempt_selections s USING(attempt_id) WHERE l.attempt_id=$1 FOR SHARE OF l,d,s").bind(q.original.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
-    let spec: aq_admission::execution_spec::ProfiledExecutionSpec =
-        serde_json::from_value(row.get("execution_spec")).map_err(|_| refused())?;
-    if !same(&spec, &h.proposal.spec)?
-        || spec.artifact().map_err(|_| refused())?.digest
-            != q.original.binding.execution_spec_digest
-        || row.get::<String, _>("execution_spec_digest")
-            != q.original.binding.execution_spec_digest.as_str()
-    {
-        return Err(refused());
-    }
-    let stored: crate::profiled_execution::native_offer::observation::StoredOffer =
-        serde_json::from_value(row.get("graph_task_observation")).map_err(|_| refused())?;
-    if stored.read_provenance.context_response_digest != h.proposal.full_context_digest
-        || !same(&stored.native_offer.native, &h.proposal.original)?
-    {
-        return Err(refused());
-    }
+    let row = sqlx::query(
+        "SELECT l.execution_spec,l.execution_spec_digest,l.graph_task_observation,l.decision_id,d.decision,s.selection,s.selection_digest FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) JOIN intelligence_attempt_selections s USING(attempt_id) WHERE l.attempt_id=$1 FOR SHARE OF l,d,s",
+    )
+    .bind(q.original.binding.attempt_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db)?;
+    let spec = pinned_spec_from_row(&row, q, h)?;
     let decision: crate::intelligence::resolver::Decision =
         serde_json::from_value(row.get("decision")).map_err(|_| refused())?;
     let selection: aq_selection::ResolvedSelection =
@@ -373,6 +363,33 @@ async fn load_selection_locked(
         decision,
         selection,
     })
+}
+
+// Validate the immutable spec and its stored offer provenance before decoding
+// the decision and selection from the same locked row.
+fn pinned_spec_from_row(
+    row: &sqlx::postgres::PgRow,
+    q: &PrepareRequest,
+    h: &AcceptedHistory,
+) -> Result<aq_admission::execution_spec::ProfiledExecutionSpec, AppError> {
+    let spec: aq_admission::execution_spec::ProfiledExecutionSpec =
+        serde_json::from_value(row.get("execution_spec")).map_err(|_| refused())?;
+    if !same(&spec, &h.proposal.spec)?
+        || spec.artifact().map_err(|_| refused())?.digest
+            != q.original.binding.execution_spec_digest
+        || row.get::<String, _>("execution_spec_digest")
+            != q.original.binding.execution_spec_digest.as_str()
+    {
+        return Err(refused());
+    }
+    let stored: crate::profiled_execution::native_offer::observation::StoredOffer =
+        serde_json::from_value(row.get("graph_task_observation")).map_err(|_| refused())?;
+    if stored.read_provenance.context_response_digest != h.proposal.full_context_digest
+        || !same(&stored.native_offer.native, &h.proposal.original)?
+    {
+        return Err(refused());
+    }
+    Ok(spec)
 }
 
 async fn load_artifacts_locked(
