@@ -186,6 +186,11 @@ impl CapabilitySources<'_> {
         vec![
             capability("dashboard.overview", true, ""),
             capability(
+                "tasks.workspace.resources",
+                a.owner,
+                "Task workspace resources require an owner account",
+            ),
+            capability(
                 "tasks.route.preferences",
                 a.owner,
                 "Task route preferences require an owner account",
