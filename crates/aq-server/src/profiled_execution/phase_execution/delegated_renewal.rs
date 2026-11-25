@@ -23,6 +23,40 @@ async fn load(
     q: &RunnerRenewalRequest,
 ) -> Result<(pinned::Pinned, Option<Retained>), AppError> {
     crate::worker_api::lock_current_node(tx, auth).await?;
+    let replay = load_authenticated_replay_locked(tx, auth, q).await?;
+    let origin = history::load_optional_locked(
+        tx,
+        auth.id(),
+        &q.authority.grant.binding,
+        q.authority.grant.grant_id,
+    )
+    .await?
+    .ok_or_else(|| refused())?;
+    let authority = match q.authority.profile {
+        PhaseProfile::PhaseV2 => PhaseExecutionAuthority::from_phase_v2(&runtime::parse(
+            runtime::json(&origin.receipt)?,
+        )?),
+        PhaseProfile::PhaseRefreshV1 => PhaseExecutionAuthority::from_phase_refresh(
+            &runtime::parse(runtime::json(&origin.receipt)?)?,
+        ),
+    }
+    .map_err(|_| refused())?;
+    if !same(&authority, &q.authority)? {
+        return Err(refused());
+    }
+    // Preserve the issuance-time registry floor as well as the accepted floor.
+    super::validate_registry_replay(state, tx, &origin).await?;
+    let pinned = pinned::load_continuing_locked(state, tx, auth, &origin).await?;
+    Ok((pinned, replay))
+}
+
+// The caller holds the node lock. Authenticate the installed permit before
+// reading replay history; only an exact retained replay may use an old revision.
+async fn load_authenticated_replay_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    q: &RunnerRenewalRequest,
+) -> Result<Option<Retained>, AppError> {
     let installed = &auth.delegated().ok_or_else(|| refused())?.current;
     if q.permit.permit_id != installed.record.permit_id
         || q.permit.binding != installed.record.binding
@@ -53,30 +87,7 @@ async fn load(
     {
         return Err(refused());
     }
-    let origin = history::load_optional_locked(
-        tx,
-        auth.id(),
-        &q.authority.grant.binding,
-        q.authority.grant.grant_id,
-    )
-    .await?
-    .ok_or_else(|| refused())?;
-    let authority = match q.authority.profile {
-        PhaseProfile::PhaseV2 => PhaseExecutionAuthority::from_phase_v2(&runtime::parse(
-            runtime::json(&origin.receipt)?,
-        )?),
-        PhaseProfile::PhaseRefreshV1 => PhaseExecutionAuthority::from_phase_refresh(
-            &runtime::parse(runtime::json(&origin.receipt)?)?,
-        ),
-    }
-    .map_err(|_| refused())?;
-    if !same(&authority, &q.authority)? {
-        return Err(refused());
-    }
-    // Preserve the issuance-time registry floor as well as the accepted floor.
-    super::validate_registry_replay(state, tx, &origin).await?;
-    let pinned = pinned::load_continuing_locked(state, tx, auth, &origin).await?;
-    Ok((pinned, replay))
+    Ok(replay)
 }
 
 pub async fn renew_delegated(
