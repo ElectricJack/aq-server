@@ -15,7 +15,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     owner_write(
         "performance.delivery.set",
         "project.admin",
-        "Set a delivery reporting preference or restore inheritance with a null definition",
+        "Set a delivery reporting preference (single-PR milestone for target merges), or restore inheritance with a null definition",
         post_route(
             "/api/settings/performance/delivery/{id}",
             &[("id", "project_id")],

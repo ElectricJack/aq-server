@@ -50,6 +50,17 @@ struct Setting {
 }
 
 type Revision = (i64, i64, Option<SqlJson<Definition>>);
+
+#[derive(sqlx::FromRow)]
+struct Replay {
+    actor_id: Uuid,
+    project_id: Uuid,
+    work_class: String,
+    revision: i64,
+    effective_at_ms: i64,
+    definition: Option<SqlJson<Definition>>,
+}
+
 const CURRENT: &str = "SELECT revision,effective_at_ms,definition FROM performance_delivery_definitions \
     WHERE project_id=$1 AND work_class=$2 ORDER BY revision DESC LIMIT 1";
 
@@ -177,37 +188,37 @@ async fn write(
         return Err(bad("invalid operation ID or expected revision"));
     }
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 8172001))")
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 8172001))")
         .bind(change.operation_id)
         .execute(&mut *tx)
         .await
         .map_err(db)?;
     let repo = project_repository(&mut tx, project, true).await?;
-    let replay: Option<(Uuid, Uuid, String, i64, i64, Option<SqlJson<Definition>>)> =
-        sqlx::query_as(
-            "SELECT actor_id,project_id,work_class,revision,effective_at_ms,definition \
+    let replay: Option<Replay> = sqlx::query_as(
+        "SELECT actor_id,project_id,work_class,revision,effective_at_ms,definition \
             FROM performance_delivery_definitions WHERE operation_id=$1",
-        )
-        .bind(change.operation_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db)?;
-    if let Some((owner, saved_project, saved_class, revision, time, definition)) = replay {
-        if owner != actor.id
-            || saved_project != project
-            || saved_class != work_class
-            || revision - 1 != change.expected_revision
-            || definition.as_ref().map(|v| &v.0) != change.definition.as_ref()
+    )
+    .bind(change.operation_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db)?;
+    if let Some(saved) = replay {
+        if saved.actor_id != actor.id
+            || saved.project_id != project
+            || saved.work_class != work_class
+            || saved.revision - 1 != change.expected_revision
+            || saved.definition.as_ref().map(|v| &v.0) != change.definition.as_ref()
         {
             return Err(AppError::Conflict("operation ID already used".into()));
         }
+        let revision = Some((saved.revision, saved.effective_at_ms, saved.definition));
         return Ok(Json(
             setting(
                 &mut tx,
                 project,
                 work_class,
-                Some((revision, time, definition)),
-                time,
+                revision,
+                saved.effective_at_ms,
             )
             .await?,
         ));

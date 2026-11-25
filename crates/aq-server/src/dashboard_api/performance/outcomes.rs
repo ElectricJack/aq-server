@@ -1,3 +1,8 @@
+//! Delivery outcomes use retained owner-verified evidence in (start, cutoff].
+//! Completion and merge clocks are server confirmation/verification times.
+//! The target-branch preference supports a single-PR milestone. Multiple
+//! evidenced candidate PRs require a declared set before reporting delivery.
+//! The continuous median and p90 use only authoritative first-ready clocks.
 mod settings;
 
 use serde_json::Value;
@@ -61,7 +66,8 @@ mod tests {
         let owner = Uuid::new_v4();
         let tracked = Uuid::new_v4();
         let legacy = Uuid::new_v4();
-        let cutoff = WEEK_MS;
+        let replayed = Uuid::new_v4();
+        let cutoff = WEEK_MS + 1_000;
         let ready = cutoff - 360_000;
 
         sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,'metrics@example.org','owner',now())")
@@ -115,6 +121,8 @@ mod tests {
             (project, tracked, 2, "release", ready + 120_000),
             (project, legacy, 3, "main", ready + 180_000),
             (other, tracked, 4, "main", ready + 240_000),
+            (project, Uuid::new_v4(), 5, "main", 999),
+            (project, replayed, 5, "main", ready + 270_000),
         ] {
             sqlx::query(
                 "INSERT INTO delivery_merge_evidence(operation_id,project_id,task_id,pull_request,target,
@@ -150,5 +158,33 @@ mod tests {
         assert_eq!(task["definition_revision"], 1);
         assert_eq!(task["delivery_at_ms"], ready + 60_000);
         assert_eq!(task["disposition"], "undetermined");
+        let replay = first_pass(&pool, Some(project), replayed, cutoff)
+            .await
+            .unwrap();
+        assert_eq!(replay["merge_at_ms"], 999);
+
+        sqlx::query(
+            "INSERT INTO delivery_merge_evidence(operation_id,project_id,task_id,pull_request,target,
+             target_ref,expected_head_sha,merge_sha,observed_at_ms)
+             VALUES($1,$2,$3,6,$4,'refs/heads/main',repeat('a',40),repeat('b',40),$5)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(project)
+        .bind(tracked)
+        .bind(json!({"git":{"repository_id":repository},"github":{"owner":"org","name":"repo"}}))
+        .bind(ready + 300_000)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let partial = summary(&pool, Some(project), cutoff).await.unwrap();
+        assert_eq!(partial["verified_merges"], 4);
+        assert_eq!(partial["delivery"]["delivered_tasks"], 0);
+        assert_eq!(partial["delivery"]["unknown_required_pr_sets"], 1);
+        let task = first_pass(&pool, Some(project), tracked, cutoff)
+            .await
+            .unwrap();
+        assert_eq!(task["delivery_at_ms"], Value::Null);
+        assert_eq!(task["delivery_evidence"], "required_pr_set_unknown");
     }
 }
