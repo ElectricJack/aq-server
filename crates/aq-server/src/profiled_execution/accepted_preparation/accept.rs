@@ -68,17 +68,12 @@ pub async fn accept(
     .await?;
     let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
     let selection = before.selection.clone();
-<<<<<<< HEAD
+    let backend_kind = before.backend_kind;
     let binding = request.original.acceptance.binding.clone();
     let lease_id = Uuid::new_v5(
         &request.original.operation_id,
         binding.attempt_id.as_bytes(),
     );
-=======
-    let backend_kind = before.backend_kind;
-    let binding = q.original.acceptance.binding.clone();
-    let lease_id = Uuid::new_v5(&q.original.operation_id, binding.attempt_id.as_bytes());
->>>>>>> refs/remotes/central/main
     let head = super::super::login_refresh::newest_source(
         &state.store.pool,
         &registry,
