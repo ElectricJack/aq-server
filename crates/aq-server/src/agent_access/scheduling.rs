@@ -1,5 +1,6 @@
 //! Fixed public graph observations for future scheduling. These reads never
 //! claim a task, reserve capacity, mutate graph state or grant execution.
+mod first_ready;
 pub(super) mod parse;
 use super::{Runtime, contract};
 use aq_admission::TaskRevision;
@@ -29,6 +30,13 @@ fn now() -> Result<u64> {
         .try_into()
         .map_err(|_| SchedulingReadError::Unavailable)
 }
+fn observed_now(clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync)) -> Result<u64> {
+    u64::try_from(clock().timestamp_millis())
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or(SchedulingReadError::Unavailable)
+}
+
 // Validate the wire schema before decoding its scheduling fields.
 fn ready_page(
     workspace: Uuid,
@@ -51,9 +59,10 @@ impl Runtime {
         query: &[(String, String)],
         max_bytes: usize,
         clock: &(dyn Fn() -> Result<u64> + Sync),
+        include_first_ready: bool,
     ) -> Result<(Value, GraphReadStamp, Vec<u8>)> {
         let requested = clock()?;
-        let mut response = self
+        let request = self
             .client
             .get(
                 self.url
@@ -62,7 +71,13 @@ impl Runtime {
             )
             .bearer_auth(&self.token)
             .header("X-AQ-Graph-API-Version", "1")
-            .query(query)
+            .query(query);
+        let request = if include_first_ready {
+            request.header("X-AQ-Graph-First-Ready", "1")
+        } else {
+            request
+        };
+        let mut response = request
             .send()
             .await
             .map_err(|_| SchedulingReadError::Unavailable)?;
@@ -127,7 +142,7 @@ impl Runtime {
         limit: u16,
         cursor: Option<&str>,
     ) -> Result<ReadyPage> {
-        self.scheduling_ready_clock(workspace, limit, cursor, &now)
+        self.scheduling_ready_clock(workspace, limit, cursor, &now, None)
             .await
     }
     /// Trusted daemon clock around a genuinely new ready request/body receive,
@@ -140,14 +155,28 @@ impl Runtime {
         cursor: Option<&str>,
         clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
     ) -> Result<ReadyPage> {
-        let observed_now = || {
-            u64::try_from(clock().timestamp_millis())
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or(SchedulingReadError::Unavailable)
-        };
-        self.scheduling_ready_clock(workspace, limit, cursor, &observed_now)
+        let observed_now = || observed_now(clock);
+        self.scheduling_ready_clock(workspace, limit, cursor, &observed_now, None)
             .await
+    }
+
+    pub(crate) async fn scheduling_ready_for_project(
+        &self,
+        binding: &crate::project_bindings::domain::ProjectBinding,
+        limit: u16,
+        cursor: Option<&str>,
+        clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
+        pool: &sqlx::PgPool,
+    ) -> Result<ReadyPage> {
+        let observed_now = || observed_now(clock);
+        self.scheduling_ready_clock(
+            binding.graph_workspace_id,
+            limit,
+            cursor,
+            &observed_now,
+            Some((pool, binding.project_id)),
+        )
+        .await
     }
 
     pub(crate) async fn scheduling_task_ready_current(
@@ -157,18 +186,14 @@ impl Runtime {
     ) -> Result<ReadyPage> {
         let workspace = task.workspace_id;
         let id = task.task_id;
-        let observed_now = || {
-            u64::try_from(clock().timestamp_millis())
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or(SchedulingReadError::Unavailable)
-        };
+        let observed_now = || observed_now(clock);
         let (value, stamp, _) = match self
             .scheduling_get_clock(
                 &format!("/v1/workspaces/{workspace}/ready/{id}"),
                 &[],
                 1_048_576,
                 &observed_now,
+                false,
             )
             .await
         {
@@ -192,6 +217,7 @@ impl Runtime {
         limit: u16,
         cursor: Option<&str>,
         clock: &(dyn Fn() -> Result<u64> + Sync),
+        project: Option<(&sqlx::PgPool, Uuid)>,
     ) -> Result<ReadyPage> {
         if workspace.is_nil()
             || !(1..=64).contains(&limit)
@@ -203,15 +229,25 @@ impl Runtime {
         if let Some(cursor) = cursor {
             query.push(("cursor".into(), cursor.into()));
         }
-        let (value, stamp, _bytes) = self
+        let (mut value, stamp, _bytes) = self
             .scheduling_get_clock(
                 &format!("/v1/workspaces/{workspace}/ready"),
                 &query,
                 1_048_576,
                 clock,
+                project.is_some(),
             )
             .await?;
-        ready_page(workspace, limit, cursor, value, stamp)
+        let evidence = project
+            .map(|_| first_ready::take(&mut value, stamp.received_at_ms))
+            .unwrap_or_default();
+        let page = ready_page(workspace, limit, cursor, value, stamp)?;
+        if let Some((pool, project_id)) = project
+            && let Err(error) = first_ready::record(pool, project_id, workspace, evidence).await
+        {
+            tracing::warn!(%project_id, %error, "unable to record Graph first-ready evidence");
+        }
+        Ok(page)
     }
     pub async fn scheduling_context(
         &self,
@@ -233,12 +269,7 @@ impl Runtime {
         max_bytes: u32,
         clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
     ) -> Result<TaskContext> {
-        let observed_now = || {
-            u64::try_from(clock().timestamp_millis())
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or(SchedulingReadError::Unavailable)
-        };
+        let observed_now = || observed_now(clock);
         self.scheduling_context_clock(expected, depth, limit, max_bytes, &observed_now)
             .await
     }
@@ -271,6 +302,7 @@ impl Runtime {
                 &query,
                 max_bytes as usize,
                 clock,
+                false,
             )
             .await?;
         if !contract::upstream_valid("Context", &value) {

@@ -606,11 +606,12 @@ async fn offers(
             let mut cursor: Option<String> = None;
             for further in [false, true] {
                 let read = on_heap(|| {
-                    graph.scheduling_ready_current(
-                        record.binding.graph_workspace_id,
+                    graph.scheduling_ready_for_project(
+                        &record.binding,
                         8,
                         cursor.as_deref(),
                         state.clock.as_ref(),
+                        &state.store.pool,
                     )
                 })
                 .await;
