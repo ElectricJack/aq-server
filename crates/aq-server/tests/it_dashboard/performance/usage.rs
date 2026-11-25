@@ -1,7 +1,9 @@
 //! The same receipt and correction traverse the real canonical accounting owner
 //! and the mounted dashboard read. Synthetic rates and transcript identifiers.
 use super::{CLAIM, COMPLETE, CUTOFF, MINUTE, success};
-use crate::common::profiled::{Fixture, NOW, artifact, fixture, insert};
+use crate::common::profiled::{
+    Fixture, artifact, fixture, fixture_on, insert_offered, state_from_selection,
+};
 use aq_accounting::{
     Category, Layout,
     pricing::{RateCard, RateCardRevision, Rule},
@@ -9,11 +11,14 @@ use aq_accounting::{
     wire::*,
 };
 use aq_server::{
-    execution::profiled::{Status, Stop},
+    execution::{
+        authority::hot::HotState,
+        profiled::{Effects, Retention, Status, Stop},
+    },
     intelligence::config::{AccountingCatalog, IntelligenceConfig, LoadedRegistry},
     observations::{self, OwnerSource},
 };
-use aq_session_protocol::ProfiledGrant;
+use aq_session_protocol::{ProfiledGrant, SessionIdentity, canonical_digest};
 use serde_json::json;
 use std::sync::{Arc, atomic::Ordering};
 use uuid::Uuid;
@@ -22,7 +27,7 @@ fn text(label: &str) -> Text {
     Text::new(label).unwrap()
 }
 
-async fn prepare_source(f: &mut Fixture) -> OwnerSource {
+async fn prepare_source(f: &mut Fixture, offered_at: i64) -> OwnerSource {
     use aq_observation_admission::{Operation, Request};
     let mutations = |operation| Request {
         version: 1,
@@ -50,14 +55,14 @@ async fn prepare_source(f: &mut Fixture) -> OwnerSource {
     .await
     .unwrap();
     f.profiled.status = Status::Granted;
-    f.profiled.execution_deadline_ms = Some(NOW + 60_000);
+    f.profiled.execution_deadline_ms = Some(offered_at as u64 + 60_000);
     f.profiled.grant = Some(ProfiledGrant {
         binding: f.profiled.offer.binding.clone(),
         grant_id: Uuid::new_v4(),
-        expires_at_ms: NOW + 5_000,
+        expires_at_ms: offered_at as u64 + 5_000,
     });
     f.profiled.stop = Stop::Running;
-    insert(f).await;
+    insert_offered(f, offered_at as u64).await;
     let parser = artifact("performance-test-parser", b"synthetic parser");
     let source = OwnerSource {
         binding: aq_admission::transport::lifecycle_binding(&f.profiled.offer).unwrap(),
@@ -133,6 +138,83 @@ async fn prepare_source(f: &mut Fixture) -> OwnerSource {
     source
 }
 
+async fn seed_failed_attempt(f: &Fixture, at_ms: i64) {
+    let pool = f.db.pool().await;
+    let attempt = f.profiled.offer.binding.attempt_id;
+    let mut tx = pool.begin().await.unwrap();
+    // Install synthetic records from the stop and replacement owners. The
+    // observation routes and task accounting still read their normal tables.
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let value: serde_json::Value =
+        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    let mut state: HotState = serde_json::from_value(value).unwrap();
+    let stopped = artifact("synthetic-stop", b"stop");
+    let retained = artifact("synthetic-retained", b"retained");
+    let quiescent = artifact("synthetic-effects", b"effects");
+    state.status = Status::Finished;
+    state.stop = Stop::Stopped {
+        receipt: stopped.clone(),
+    };
+    state.retention = Retention::Retained {
+        receipt: retained.clone(),
+    };
+    state.effects = Effects::Quiescent {
+        receipt: quiescent.clone(),
+    };
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(json!(state))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO profiled_replacement_releases(attempt_id,task_id,reason,
+         stop_receipt_digest,retained_source_receipt_digest,effect_reconciliation_receipt_digest,
+         attempts_started,recorded_at_ms) VALUES($1,$2,'failed_attempt_replacement',$3,$4,$5,1,$6)",
+    )
+    .bind(attempt)
+    .bind(f.selection.lineage.task_id)
+    .bind(stopped.digest.as_str())
+    .bind(retained.digest.as_str())
+    .bind(quiescent.digest.as_str())
+    .bind(at_ms)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE execution_attempts SET holds_task=false WHERE attempt_id=$1")
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+fn set_retry_generation(f: &mut Fixture) {
+    f.selection.choice.model = "escalated-model".into();
+    f.profiled = state_from_selection(&f.selection, &f.node);
+    let offer = &mut f.profiled.offer;
+    let SessionIdentity::Remote {
+        assignment_generation,
+        ..
+    } = &mut offer.binding.session
+    else {
+        panic!("remote observation fixture");
+    };
+    *assignment_generation = 2;
+    offer.binding.assignment_generation = 2;
+    offer.manifest.bindings.assignment_generation = 2;
+    offer.manifest.bindings.session = offer.binding.session.clone();
+    offer.binding.launch_manifest_digest = canonical_digest(&offer.manifest).unwrap();
+    f.profiled.validate().unwrap();
+}
+
 fn event(
     source: &OwnerSource,
     sequence: u64,
@@ -206,7 +288,7 @@ fn packet(f: &Fixture, events: Vec<ObservationRecord>) -> Packet {
 #[tokio::test]
 async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
     let mut f = fixture().await;
-    let source = prepare_source(&mut f).await;
+    let source = prepare_source(&mut f, CLAIM).await;
     let project = f.selection.lineage.project_id;
     let task = format!("tasks/{}", f.selection.lineage.task_id);
     let first_at = CLAIM + MINUTE;
@@ -216,7 +298,6 @@ async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
         vec![
             event(&source, 1, "cheap-model", 100_000, None, first_at),
             additional.clone(),
-            event(&source, 3, "escalated-model", 350_000, None, first_at),
         ],
     );
     f.time.store(first_at, Ordering::SeqCst);
@@ -229,6 +310,26 @@ async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
             .unwrap(),
         receipt
     );
+    seed_failed_attempt(&f, first_at + MINUTE).await;
+    let retry_at = first_at + 2 * MINUTE;
+    let mut retry = fixture_on(f.db.clone(), Some((f.actor, f.selection.lineage.clone()))).await;
+    set_retry_generation(&mut retry);
+    let retry_source = prepare_source(&mut retry, retry_at).await;
+    let retry_call = packet(
+        &retry,
+        vec![event(
+            &retry_source,
+            1,
+            "escalated-model",
+            350_000,
+            None,
+            retry_at,
+        )],
+    );
+    retry.time.store(retry_at, Ordering::SeqCst);
+    let retry_receipt = observations::ingest(&retry.state, retry.node.node_id, &retry_call)
+        .await
+        .unwrap();
     f.time.store(COMPLETE, Ordering::SeqCst);
     let app = aq_server::build_admin_router(f.state.clone());
     let original = success(&app, "summary", Some(project), COMPLETE).await;
@@ -240,7 +341,7 @@ async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
         &f,
         vec![event(
             &source,
-            4,
+            3,
             "additional-call-model",
             70_000,
             Some(EventRef {
@@ -257,6 +358,13 @@ async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
             .await
             .unwrap(),
         receipt
+    );
+    retry.state.store = f.state.store.clone();
+    assert_eq!(
+        observations::ingest(&retry.state, retry.node.node_id, &retry_call)
+            .await
+            .unwrap(),
+        retry_receipt
     );
     let corrected_receipt = observations::ingest(&f.state, f.node.node_id, &correction)
         .await
@@ -280,8 +388,19 @@ async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
     assert_eq!(route["candidate"], json!(f.selection.choice.candidate_id));
     assert_eq!(route["intended_model"], json!(f.selection.choice.model));
     let attempts = drill_down["usage"]["attempts"].as_array().unwrap();
-    assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0]["attempt_id"], json!(source.binding.attempt_id));
+    assert_eq!(attempts.len(), 2);
+    let failed = attempts
+        .iter()
+        .find(|a| a["attempt_id"] == json!(source.binding.attempt_id))
+        .unwrap();
+    assert_eq!(failed["attempt_status"], "finished");
+    assert_eq!(failed["costs"][0]["microunits"], 170_000);
+    let retried = attempts
+        .iter()
+        .find(|a| a["attempt_id"] == json!(retry_source.binding.attempt_id))
+        .unwrap();
+    assert_eq!(retried["intended_model"], "escalated-model");
+    assert_eq!(retried["costs"][0]["microunits"], 350_000);
 }
 
 fn assert_cost(usage: &serde_json::Value, expected_microunits: u64) {

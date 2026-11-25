@@ -32,7 +32,7 @@ cargo test --locked -p aq-server --test it_dashboard -- performance::
 | Two machines share one ready count. The idle machine has a stale heartbeat at 09:11. | Count one on the fleet timeline. The stale minute splits the idle intervals. |
 | Canonical model receipts with a synthetic USD rate book | USD 0.50 estimated across three canonical calls. A later correction replaces USD 0.05 with USD 0.07, yielding USD 0.52. Replaying both packets after reopening the store preserves one contribution per call and the report at the earlier cutoff. |
 
-The fixture seeds the scheduler's durable clock rows and the historical result and forge evidence directly in the disposable database. It checks their interpretation by the mounted reads. Canonical usage goes through the observation owner. The three calls share one enrolled source, so they exercise cost correction across model groups without establishing separate failure, escalation or delegation attribution. Server restart coverage reopens the store and reconstructs the router against the same database.
+The fixture seeds the scheduler's durable clock rows and the historical result and forge evidence directly in the disposable database. It checks their interpretation by the mounted reads. Canonical usage goes through the observation owner. Two calls belong to the original attempt, whose retained synthetic replacement record records failure. The third belongs to a second attempt with a different selected and executing model. The native observation record binds calls to attempts and lacks a parent/child attribution field, so the additional call stays with the original attempt. Server restart coverage reopens the store and reconstructs the router against the same database.
 
 ## Restored AQ database
 
