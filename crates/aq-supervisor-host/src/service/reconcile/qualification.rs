@@ -178,7 +178,7 @@ async fn a_stale_unprepared_turn_is_set_aside_and_replanned_from_its_recorded_in
             conversation_id: config.conversation_id,
             through_cursor: 20,
             messages: vec![MailRef {
-                message_id: Uuid::nil(),
+                message_id: Uuid::from_u128(19),
                 cursor: 20,
                 payload_digest: Digest::of(b"recorded"),
             }],
