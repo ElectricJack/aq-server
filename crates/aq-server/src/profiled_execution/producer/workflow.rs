@@ -231,7 +231,7 @@ async fn selection(
             })
         })
         .transpose()?;
-    resolver::resolve_for_project_policy(
+    resolver::resolve_for_scheduler(
         state,
         ResolveRequest {
             operation_id: Uuid::new_v4(),
@@ -243,6 +243,7 @@ async fn selection(
             route: compiled.route.clone(),
         },
         &compiled.snapshot,
+        compiled.workspace_alternative,
     )
     .await
 }
@@ -720,6 +721,19 @@ async fn offers(
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
+                        #[cfg(feature = "delivery_playbook")]
+                        if let Some(replacement) = a.replacement() {
+                            let mut connection = pool.acquire().await.map_err(db)?;
+                            if replacement::pending_publication_owner(
+                                &mut connection,
+                                replacement.predecessor,
+                            )
+                            .await?
+                            .is_some()
+                            {
+                                return Ok(Assessment::Blocked("owner_retry_pending"));
+                            }
+                        }
                         if let Assessment::Blocked(reason) = a {
                             holds::selection_hold(
                                 pool,
@@ -834,6 +848,7 @@ async fn offers(
                 &metadata,
                 route,
                 replacement.as_ref().map(|r| r.predecessor),
+                &workspace,
             )
         };
         let compiled = match on_heap(compile).await {
@@ -1033,6 +1048,7 @@ async fn offers(
                 &metadata,
                 route,
                 replacement.as_ref().map(|r| r.predecessor),
+                &workspace,
             )
         };
         let compiled = match on_heap(compile).await {

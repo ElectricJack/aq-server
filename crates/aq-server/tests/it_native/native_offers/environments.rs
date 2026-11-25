@@ -554,7 +554,7 @@ pub(crate) async fn ready(c: &Case, digests: Value) {
     assert_eq!(response.status(), 200);
 }
 /// The definition reference nodes are told for the admitted `example.web`.
-async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
+pub(super) async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
     let catalog =
         aq_server::profiled_execution::definitions::catalog(&c.env.env.state, &c.env.env.pool)
             .await
@@ -563,7 +563,7 @@ async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
     serde_json::from_value(nodes[0]["definition"].clone()).unwrap()
 }
 /// What the inventory writer stores for the node's installed `harnesses`.
-async fn republish(c: &Case) -> Vec<aq_selection::InstalledHarness> {
+pub(super) async fn republish(c: &Case) -> Vec<aq_selection::InstalledHarness> {
     let state = &c.env.env.state;
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let configured = c.env.input.node.harnesses.clone();
