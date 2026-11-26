@@ -42,6 +42,23 @@ async fn set_max_agents(c: &Case, count: i32) {
         .unwrap();
 }
 
+/// The stored compute release (0185) equals the compute proof for every
+/// attempt of the database, whatever lifecycle step just committed.
+async fn assert_stored_release(c: &Case) {
+    let drift: Vec<(Uuid, Option<bool>, bool)> = sqlx::query_as(
+        "SELECT a.attempt_id,c.released,NOT native_attempt_holds_compute(a.attempt_id,a.node_id) \
+         FROM execution_attempts a LEFT JOIN execution_attempt_compute c USING(attempt_id) \
+         WHERE c.released IS DISTINCT FROM NOT native_attempt_holds_compute(a.attempt_id,a.node_id)",
+    )
+    .fetch_all(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert!(
+        drift.is_empty(),
+        "stored release differs from the proof: {drift:?}"
+    );
+}
+
 async fn authority_state(c: &Case, attempt: Uuid) -> Value {
     sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
         .bind(attempt)
@@ -188,7 +205,9 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
         offered(&c, 1).await.offered.offer.binding,
         first.offered.offer.binding
     );
+    assert_stored_release(&c).await;
     let a = super::lost::running(&mut c, &first).await;
+    assert_stored_release(&c).await;
     // Reopen the production store while A runs: reservations and boot are durable.
     c.env.env.state.store =
         aq_server::store::Store::connect_with((*c.env.env.pool.connect_options()).clone())
@@ -206,6 +225,7 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
     );
     assert!(poll_slot(&c, 3).await.is_empty());
     let b = super::lost::running(&mut c, &second).await;
+    assert_stored_release(&c).await;
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let slots = aq_machine_control::slots::view(&mut conn, node)
         .await
@@ -227,6 +247,7 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
     let old = c.request.identity.boot_id;
     let new = Uuid::new_v4();
     register(&c, 2, Some(new)).await;
+    assert_stored_release(&c).await;
     let mut tx = c.env.env.pool.begin().await.unwrap();
     assert!(
         registration::current_runtime_locked(&c.env.env.state, &mut tx, node, old)
@@ -238,6 +259,7 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
     let auth = auth(&c).await;
     let req = super::lost::crash_request(a);
     lost::release(&c.env.env.state, &auth, &req).await.unwrap();
+    assert_stored_release(&c).await;
     lost::release(&c.env.env.state, &auth, &req).await.unwrap();
     let after = authority_state(&c, b).await;
     assert_eq!(before, after, "late/duplicate A evidence must not change B");
@@ -263,6 +285,7 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
         .unwrap();
     let held:i64=sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE node_id=$1 AND native_attempt_holds_compute(attempt_id,node_id)").bind(node).fetch_one(&c.env.env.pool).await.unwrap();
     assert_eq!(held, 0);
+    assert_stored_release(&c).await;
 }
 
 #[tokio::test]
@@ -293,12 +316,14 @@ async fn new_boot_accepts_old_boot_stop_evidence_while_lost_sibling_resolves_sep
     let second = offered(&c, 2).await;
     let start = super::lost::running_started(&mut c, &first).await;
     let b = super::lost::running(&mut c, &second).await;
+    assert_stored_release(&c).await;
     register(&c, 2, Some(Uuid::new_v4())).await;
     let auth = auth(&c).await;
     let request = common::native_started::stop_request(&start);
     let receipt = aq_server::profiled_execution::stopped::record(&c.env.env.state, &auth, &request)
         .await
         .unwrap();
+    assert_stored_release(&c).await;
     let again = aq_server::profiled_execution::stopped::record(&c.env.env.state, &auth, &request)
         .await
         .unwrap();
@@ -310,6 +335,7 @@ async fn new_boot_accepts_old_boot_stop_evidence_while_lost_sibling_resolves_sep
     lost::release(&c.env.env.state, &auth, &super::lost::crash_request(b))
         .await
         .unwrap();
+    assert_stored_release(&c).await;
     let after = authority_state(&c, start.binding.attempt_id).await;
     assert_eq!(before, after);
 }
@@ -331,6 +357,7 @@ async fn never_started_lapse_frees_only_that_slots_attempt() {
     .await
     .unwrap();
     let b = super::lost::running(&mut c, &second).await;
+    assert_stored_release(&c).await;
     let at = grant.original.grant.expires_at_ms as i64 + 1;
     c.env.env.state.clock =
         std::sync::Arc::new(move || chrono::DateTime::from_timestamp_millis(at).unwrap());
@@ -341,6 +368,7 @@ async fn never_started_lapse_frees_only_that_slots_attempt() {
     )
     .await
     .unwrap();
+    assert_stored_release(&c).await;
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let view = aq_machine_control::slots::view(&mut conn, c.env.env.node)
         .await

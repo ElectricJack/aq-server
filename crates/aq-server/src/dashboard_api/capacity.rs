@@ -37,7 +37,7 @@ pub(super) async fn capacity(
     let loads = node_loads(state, &mut tx, &ids, now).await?;
     let storage = node_storage::latest(&mut tx, &ids).await?;
     let occupied_all: i64 =
-        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts WHERE holds_task AND native_attempt_holds_compute(attempt_id,node_id))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
+        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts a WHERE a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;

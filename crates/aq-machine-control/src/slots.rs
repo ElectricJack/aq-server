@@ -61,7 +61,7 @@ pub async fn view(conn: &mut PgConnection, node: Uuid) -> Result<SlotView, Error
             all_blocked: held,
         });
     }
-    let rows = sqlx::query("SELECT s.slot, a.kind<>'profiled_v1' AS legacy FROM execution_attempts a LEFT JOIN execution_attempt_slots s USING(attempt_id) WHERE a.node_id=$1 AND a.holds_task AND native_attempt_holds_compute(a.attempt_id,$1) UNION ALL SELECT s.slot,FALSE FROM manual_agent_sessions m LEFT JOIN manual_agent_slots s ON s.session_id=m.id WHERE m.node_id=$1 AND m.stopped_at_ms IS NULL AND m.status<>'pending'")
+    let rows = sqlx::query("SELECT s.slot, a.kind<>'profiled_v1' AS legacy FROM execution_attempts a LEFT JOIN execution_attempt_slots s USING(attempt_id) WHERE a.node_id=$1 AND a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released) UNION ALL SELECT s.slot,FALSE FROM manual_agent_sessions m LEFT JOIN manual_agent_slots s ON s.session_id=m.id WHERE m.node_id=$1 AND m.stopped_at_ms IS NULL AND m.status<>'pending'")
         .bind(node).fetch_all(conn).await?;
     let occupied = rows.len() as u32;
     let mut all_blocked = false;
@@ -146,7 +146,7 @@ pub async fn boot_can_register(conn: &mut PgConnection, node: Uuid) -> Result<bo
     if !available(conn).await? {
         return Ok(false);
     }
-    Ok(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM execution_attempts a LEFT JOIN execution_attempt_slots s USING(attempt_id) WHERE a.node_id=$1 AND a.holds_task AND native_attempt_holds_compute(a.attempt_id,$1) AND (a.kind<>'profiled_v1' OR s.node_id IS DISTINCT FROM $1 OR s.slot IS NULL))")
+    Ok(!sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM execution_attempts a LEFT JOIN execution_attempt_slots s USING(attempt_id) WHERE a.node_id=$1 AND a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released) AND (a.kind<>'profiled_v1' OR s.node_id IS DISTINCT FROM $1 OR s.slot IS NULL))")
         .bind(node).fetch_one(conn).await?)
 }
 
@@ -272,7 +272,7 @@ pub async fn active(
     exclude_attempt: Option<Uuid>,
 ) -> Result<Vec<(Uuid, i64)>, Error> {
     let query = if available(conn).await? {
-        "SELECT node_id,count(*) FROM (SELECT node_id,attempt_id FROM execution_attempts WHERE holds_task AND native_attempt_holds_compute(attempt_id,node_id) UNION ALL SELECT node_id,id FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending') a WHERE node_id=ANY($1) AND attempt_id IS DISTINCT FROM $2 GROUP BY node_id"
+        "SELECT node_id,count(*) FROM (SELECT node_id,attempt_id FROM execution_attempts a WHERE holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released) UNION ALL SELECT node_id,id FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending') a WHERE node_id=ANY($1) AND attempt_id IS DISTINCT FROM $2 GROUP BY node_id"
     } else {
         "SELECT node_id,count(*) FROM execution_attempts WHERE holds_task AND node_id=ANY($1) AND attempt_id IS DISTINCT FROM $2 GROUP BY node_id"
     };

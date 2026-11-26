@@ -93,12 +93,12 @@ pub async fn capacity(conn: &mut PgConnection, node: Uuid) -> Result<Capacity, E
          FROM worker_machine_members n \
          LEFT JOIN worker_settings s ON s.kind='node' AND s.id=n.node_id::text \
          LEFT JOIN worker_settings m ON m.kind='machine' AND m.id=n.machine_id WHERE n.node_id=$1";
-    // The function is false for an attempt that does not hold its task (0135),
-    // so the column leaves it only the few live claims, not the node's history.
+    // The stored release (0185) is the compute proof of 0135, kept current at
+    // write time; only held attempts are unreleased, so this reads live claims.
     let query = if modern {
         query.replace(
             "a.holds_task",
-            "a.holds_task AND native_attempt_holds_compute(a.attempt_id,a.node_id)",
+            "a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released)",
         )
     } else {
         query.to_owned()
