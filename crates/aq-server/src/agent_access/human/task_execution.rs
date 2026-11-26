@@ -351,6 +351,7 @@ async fn execute(
                     state,
                     task,
                     anchor.as_ref().and_then(|a| a.predecessor),
+                    owner_operation,
                 ),
             )
             .await?;

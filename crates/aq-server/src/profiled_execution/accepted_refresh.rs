@@ -76,6 +76,14 @@ pub(super) async fn read_registry_locked(
     .fetch_one(&mut **tx)
     .await
     .map_err(db)?;
+    let registry = registry_artifact(&row, fenced)?;
+    let raw: Vec<serde_json::Value> = sqlx::query_scalar("SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1025 FOR SHARE")
+        .fetch_all(&mut **tx).await.map_err(db)?;
+    validate_registry_observations(raw, fenced)?;
+    Ok(registry)
+}
+
+fn registry_artifact(row: &sqlx::postgres::PgRow, fenced: u64) -> Result<ArtifactRef, AppError> {
     let revision = u64::try_from(row.get::<i64, _>("revision")).map_err(|_| refused())?;
     if revision == 0 || revision != fenced {
         return Err(refused());
@@ -87,8 +95,13 @@ pub(super) async fn read_registry_locked(
             .map_err(|_| refused())?,
     };
     phase::registry_revision(&registry).map_err(|_| refused())?;
-    let raw: Vec<serde_json::Value> = sqlx::query_scalar("SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1025 FOR SHARE")
-        .fetch_all(&mut **tx).await.map_err(db)?;
+    Ok(registry)
+}
+
+fn validate_registry_observations(
+    raw: Vec<serde_json::Value>,
+    revision: u64,
+) -> Result<(), AppError> {
     if raw.len() > 1024 {
         return Err(refused());
     }
@@ -100,7 +113,7 @@ pub(super) async fn read_registry_locked(
             return Err(refused());
         }
     }
-    Ok(registry)
+    Ok(())
 }
 
 async fn registry_at_accept(
@@ -167,4 +180,57 @@ pub(super) async fn require_installed_material_locked(
 ) -> Result<(), AppError> {
     authority::current_policy_locked(state, tx, auth, &history.proposal).await?;
     authority::material_locked(tx, &history.request, &history.receipt).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aq_selection::{Availability, ObservationScope, ObservationSource};
+
+    fn observation(revision: u64) -> serde_json::Value {
+        value(&AvailabilityObservation {
+            observation_id: uuid::Uuid::from_u128(1),
+            scope: ObservationScope {
+                credential_revision: 1,
+                provider: "synthetic-provider".into(),
+                credential_profile: ArtifactRef {
+                    id: aq_admission::Text::new("synthetic-profile").unwrap(),
+                    version: aq_admission::Text::new("1").unwrap(),
+                    digest: aq_admission::Digest::of(b"synthetic-profile"),
+                },
+                account_reference: "synthetic-account".into(),
+                endpoint_reference: "synthetic-endpoint".into(),
+                model: None,
+                node_id: None,
+            },
+            source: ObservationSource::Operator {
+                principal_id: uuid::Uuid::from_u128(2),
+            },
+            sequence: 1,
+            revision,
+            state: Availability::Available,
+            received_at_ms: 1000,
+            expires_at_ms: 2000,
+            cooldown_until_ms: 0,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn registry_observations_preserve_revision_and_count_bounds() {
+        assert!(validate_registry_observations(Vec::new(), 2).is_ok());
+        assert!(validate_registry_observations(vec![observation(1), observation(2)], 2).is_ok());
+        assert!(validate_registry_observations(vec![observation(3)], 2).is_err());
+        assert!(validate_registry_observations(vec![observation(2); 1024], 2).is_ok());
+        assert!(validate_registry_observations(vec![observation(2); 1025], 2).is_err());
+    }
+
+    #[test]
+    fn registry_observations_refuse_malformed_and_invalid_owner_records() {
+        assert!(validate_registry_observations(vec![serde_json::Value::Null], 2).is_err());
+        assert!(validate_registry_observations(vec![observation(0)], 2).is_err());
+        let mut invalid = observation(1);
+        invalid["expires_at_ms"] = 999.into();
+        assert!(validate_registry_observations(vec![invalid], 2).is_err());
+    }
 }

@@ -102,7 +102,7 @@ impl Launch {
     }
 }
 
-fn admission_clock(host: &HostPlan) -> Result<Clock> {
+pub(crate) fn admission_clock(host: &HostPlan) -> Result<Clock> {
     let now = clock()?;
     ensure!(
         now.machine_boot_id == host.machine_boot_id

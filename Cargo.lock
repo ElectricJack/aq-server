@@ -753,6 +753,7 @@ dependencies = [
  "aq-delivery",
  "aq-profiles",
  "aq-selection",
+ "schemars",
  "serde",
  "serde_json",
  "uuid",

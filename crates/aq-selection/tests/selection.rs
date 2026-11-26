@@ -37,7 +37,7 @@ fn stable_order_chooses_exact_native_configuration_without_equating_reasoning_co
     );
 }
 #[test]
-fn explicit_fallback_and_cooldown_do_not_implicitly_downgrade() {
+fn queued_selection_can_change_provider_without_waiting_out_cooldown() {
     let (catalog, mut input) = fixture();
     input.observations[0].state = Availability::QuotaUnavailable;
     input.observations[0].cooldown_until_ms = 5000;
@@ -48,14 +48,13 @@ fn explicit_fallback_and_cooldown_do_not_implicitly_downgrade() {
     policy.fallback_on.clear();
     let changed = change_policy(&catalog, policy, &mut input);
     let out = select(&changed, &input).unwrap();
-    assert!(out.resolved.is_none());
-    assert!(out.reason_codes.contains(&"no_permitted_fallback".into()));
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
 }
 /// What the server does to a Codex credential whose stored login is past the owner's
 /// age limit (`aq_login_store::mask_stale`): the candidate is missing its credential and
 /// the next one is chosen, when the level permits that fallback.
 #[test]
-fn a_credential_that_cannot_be_provisioned_falls_back_to_the_next_candidate() {
+fn a_missing_queued_credential_does_not_block_an_authorized_provider() {
     let (catalog, mut input) = fixture();
     let first = select(&catalog, &input).unwrap().resolved.unwrap().choice;
     assert_eq!(first.model, "model-a");
@@ -70,7 +69,15 @@ fn a_credential_that_cannot_be_provisioned_falls_back_to_the_next_candidate() {
         .fallback_on
         .retain(|r| *r != aq_profiles::FallbackReason::MissingCredentials);
     let narrowed = change_policy(&catalog, policy, &mut input);
-    assert!(select(&narrowed, &input).unwrap().resolved.is_none());
+    input.route = Some(RouteLimits {
+        providers: vec!["fixture-a".into()],
+        harnesses: vec!["codex".into()],
+        pinned: true,
+        ..Default::default()
+    });
+    let chosen = select(&narrowed, &input).unwrap().resolved.unwrap().choice;
+    assert_eq!(chosen.provider, "fixture-b");
+    assert_ne!(chosen.credential_profile, first.credential_profile);
 }
 #[test]
 fn unknown_availability_can_only_allow_bounded_attempt_with_present_credentials() {

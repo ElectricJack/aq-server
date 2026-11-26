@@ -18,7 +18,10 @@ mod validate;
 pub const MAX_NODE_HARNESSES: usize = 16;
 pub use aq_session_protocol::{ArtifactRef, Digest, Scope, Text, Validate};
 pub use domain::*;
-pub use select::{OFFER_SELECTION_TTL_MS, select_for_offer};
+pub use select::{
+    OFFER_SELECTION_TTL_MS, select_for_offer, select_for_offer_with_capacity,
+    select_for_workspace_environment_with_capacity,
+};
 use serde::Serialize;
 #[derive(Debug, thiserror::Error)]
 pub enum SelectionError {

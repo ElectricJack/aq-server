@@ -63,6 +63,11 @@ async fn fresh_database_installs_ordered_current_without_activating_optional_own
             .collect::<Vec<_>>(),
         (1..=aq_server::STATE_FORMAT_VERSION as i32).collect::<Vec<_>>()
     );
+    assert_review_owner_empty(&pool).await;
+    assert_optional_owners_inactive(store).await;
+}
+
+async fn assert_review_owner_empty(pool: &PgPool) {
     for table in [
         "review_owner_budget",
         "review_lineage_budget",
@@ -71,25 +76,28 @@ async fn fresh_database_installs_ordered_current_without_activating_optional_own
         "human_decision_finality",
         "review_owner_outbox",
     ] {
-        assert!(installed(&pool, table).await, "{table}");
+        assert!(installed(pool, table).await, "{table}");
     }
     let row = sqlx::query(
         "SELECT retained_operations,retained_bytes FROM review_owner_budget WHERE singleton",
     )
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     .unwrap();
     assert_eq!(row.get::<i64, _>(0), 0);
     assert_eq!(row.get::<i64, _>(1), 0);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM review_subjects")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap(),
         0
     );
-    let constraints:Vec<String>=sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='admission_artifacts'::regclass").fetch_all(&pool).await.unwrap();
+    let constraints:Vec<String>=sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='admission_artifacts'::regclass").fetch_all(pool).await.unwrap();
     assert!(constraints.iter().any(|s| s.contains("'startup'::text")));
+}
+
+async fn assert_optional_owners_inactive(store: Store) {
     let config = toml::from_str(
         r#"
 format_version=1
@@ -137,6 +145,7 @@ enabled=false
         );
     }
 }
+
 #[tokio::test]
 async fn populated25_upgrades_to_current_preserving_rows_and_reopening_idempotently() {
     let (db, pool) = old25().await;

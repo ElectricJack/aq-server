@@ -78,14 +78,14 @@ fn task_and_worker_summary(kind: &str) -> Option<&'static str> {
             "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason; with fresh, starts a task held by a changed project binding from the current source"
         }
         "task.needs.set" => {
-            "Set or clear the capabilities a task needs from its environment, before any attempt of it has been granted"
+            "Set or clear a task’s environment capabilities before admission or after stopped work is reconciled"
         }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"
         }
         "task.route.clear" => "Remove a task's owner route so routing decides its class again",
         "task.route.set" => {
-            "Route a task to a class, optionally limited to harnesses and providers"
+            "Route a task to a class with optional ordered harness and provider preferences"
         }
         "thread.resolve" => {
             "Resolve a result comment thread, naming the follow-up revision and a reason"

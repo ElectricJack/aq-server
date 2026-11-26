@@ -202,6 +202,32 @@ pub async fn fresh_predecessor(
     assess_on(&mut conn, task, now, assess_for_fresh_start).await
 }
 
+/// The stamped owner must finish this release before normal scheduling can offer it.
+#[cfg(feature = "delivery_playbook")]
+pub(super) async fn pending_publication_owner(
+    db: &mut sqlx::PgConnection,
+    attempt: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    if !aq_machine_control::owner_retry::available(db)
+        .await
+        .map_err(internal)?
+    {
+        return Ok(None);
+    }
+    sqlx::query_scalar(
+        "SELECT (s.evidence->>'owner_operation_id')::uuid
+         FROM profiled_result_heads h JOIN profiled_auto_settlements s USING(report_id,attempt_id)
+         WHERE h.attempt_id=$1 AND s.disposition='rework_required' AND s.reason='branch_publication_rejected'
+         AND NOT EXISTS(SELECT 1 FROM owner_task_retry_intents i
+           WHERE i.operation_id=(s.evidence->>'owner_operation_id')::uuid
+             AND i.predecessor=h.attempt_id AND i.released_at IS NOT NULL)",
+    )
+    .bind(attempt)
+    .fetch_optional(db)
+    .await
+    .map_err(internal)
+}
+
 pub async fn release_as(
     state: &AppState,
     task: Uuid,
@@ -217,6 +243,14 @@ pub async fn release_as(
     sql::lock_release(&mut tx, task, replacement.predecessor)
         .await
         .map_err(db)?;
+    #[cfg(feature = "delivery_playbook")]
+    if let Some(required) = pending_publication_owner(&mut tx, replacement.predecessor).await?
+        && owner_operation != Some(required)
+    {
+        return Err(AppError::Conflict(
+            "publication retry owner has not released the predecessor".into(),
+        ));
+    }
     let counts = super::no_grant::attempt_counts_locked(&mut tx, task).await?;
     let priors = load(&mut tx, task, counts.started)
         .await
