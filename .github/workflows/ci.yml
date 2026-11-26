@@ -2,6 +2,8 @@ name: ci
 
 on:
   pull_request:
+  # The merge queue's group commits must report every required check.
+  merge_group:
   push:
     branches: [main]
 
