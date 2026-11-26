@@ -7,4 +7,4 @@ ALTER TABLE role_settings
     ADD COLUMN node_limits JSONB,
     ADD COLUMN node_limits_revision BIGINT NOT NULL DEFAULT 0;
 
-UPDATE meta SET value='185' WHERE key='state_format_version';
+UPDATE meta SET value='186' WHERE key='state_format_version';
