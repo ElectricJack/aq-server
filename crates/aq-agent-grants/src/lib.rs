@@ -18,6 +18,7 @@ pub use refusal::{CODES, Refusal, RefusalCode};
 /// The operations a grant can name (§6.2). Owner-only operations are listed
 /// separately in [`OWNER_ONLY`] and can never be held by an agent.
 pub mod op {
+    pub const WORKSPACE_REQUEST: &str = "task.workspace.request";
     pub const TASK_READ: &str = "task.read";
     pub const TASK_CREATE_SUBTASK: &str = "task.create.subtask";
     pub const TASK_CREATE_PROJECT: &str = "task.create.project";
@@ -40,7 +41,8 @@ pub mod op {
     #[cfg(feature = "project_environments")]
     pub const ENVIRONMENT_TRY: &str = "environment.try";
     /// Every grantable operation, in the order the spec lists them.
-    pub const ALL: [&str; 18 + cfg!(feature = "project_environments") as usize] = [
+    pub const ALL: [&str; 19 + cfg!(feature = "project_environments") as usize] = [
+        WORKSPACE_REQUEST,
         TASK_READ,
         TASK_CREATE_SUBTASK,
         TASK_CREATE_PROJECT,
@@ -448,7 +450,12 @@ pub fn check(grants: &GrantSet, holder: Holder, request: GrantRequest<'_>) -> De
 /// the registry command it maps to (spec 0006 §9). The graph and message
 /// routes keep checking their agent-access-1 profile capability.
 pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str);
-    14 + 2 * cfg!(feature = "project_environments") as usize] = [
+    15 + 2 * cfg!(feature = "project_environments") as usize] = [
+    (
+        "/v1/agent/workspace/request",
+        "task.workspace.request",
+        op::WORKSPACE_REQUEST,
+    ),
     ("/v1/agent/questions", "question.ask", op::QUESTION_ASK),
     (
         "/v1/agent/questions/show",

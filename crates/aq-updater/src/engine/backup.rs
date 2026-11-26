@@ -9,8 +9,22 @@ use chrono::Utc;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
-/// `*.dump` files in `dir`, newest first. Names start with a UTC timestamp,
-/// so name order is time order.
+/// The stamp a new backup's name starts with: now, or one second after the
+/// newest dump when that is not older. Names stay unique and name order stays
+/// creation order even for two backups within one second.
+fn next_stamp(dir: &Path) -> String {
+    const FORMAT: &str = "%Y%m%dT%H%M%SZ";
+    let newest = dumps(dir).first().and_then(|p| {
+        let name = p.file_name()?.to_str()?;
+        chrono::NaiveDateTime::parse_from_str(name.get(..16)?, FORMAT).ok()
+    });
+    let now = Utc::now().naive_utc();
+    let next = newest.map_or(now, |n| now.max(n + chrono::TimeDelta::seconds(1)));
+    next.format(FORMAT).to_string()
+}
+
+/// `*.dump` files in `dir`, newest first. Names start with a UTC timestamp
+/// that `next_stamp` keeps increasing, so name order is creation order.
 fn dumps(dir: &Path) -> Vec<PathBuf> {
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -129,7 +143,7 @@ impl<R: Runtime, V: ReleaseVerifier> Engine<R, V> {
             .map_or_else(|| "none".to_string(), |v| v.to_string());
         let dest = dir.join(format!(
             "{}-{from}-{}.dump",
-            Utc::now().format("%Y%m%dT%H%M%SZ"),
+            next_stamp(dir),
             cur.target.version
         ));
         // Checked before the path is journaled: the in-flight backup (which

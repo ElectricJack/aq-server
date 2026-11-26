@@ -1,7 +1,7 @@
 # Routing
 
 Before a task is handed to a worker, decide how capable a model it needs and
-which kinds of agent may take it. Don't pick the worker, the machine or the
+which kinds of agent to prefer. Don't pick the worker, the machine or the
 exact model. Scheduling does that afterwards, within the limits set here,
 from whatever is available at the time.
 
@@ -71,27 +71,24 @@ test, in which case Standard, high effort is enough.
 Never raise the level because providers are busy, and never use a task's
 priority to choose anything. Priority only orders the queue.
 
-## Who may take it
+## Agent preferences
 
 A local model means the OpenCode agent. It may or may not be available when a
 task is routed. When a rule sends work to a local model and it isn't
 available, use your judgement and send the work to the next agent these rules
 allow.
 
-- High and very high risk work goes only to Claude or Codex.
-- Medium risk work goes to Claude or Codex. It may go to a local model only
-  when the task is narrow, covered by a test, and Standard.
-- Low risk work that is narrow and covered by a test should go to a local
-  model first, to save Claude and Codex usage.
-- Any agent other than Claude, Codex and the local model takes only low risk
-  work.
-- Design and planning go to Claude first, and to Codex only when Claude can't
-  take them, even when the work is low risk and narrow.
-- Art and visual design go to Codex, and wait for it rather than going
-  elsewhere. For visual design this rule decides who takes it, not the design
-  rule above.
+- Prefer Claude or Codex for high and very high risk work. Use the class
+  chosen for its risk.
+- Prefer Claude or Codex for medium risk work. A local model can be a
+  preference when the task is narrow, covered by a test, and Standard.
+- Prefer a local model for low risk work that is narrow and covered by a test.
+- For design and planning, prefer Claude followed by Codex.
+- For art and visual design, prefer Codex.
+- Placement considers other eligible candidates in the selected class when
+  the preference cannot be met.
 - Never spend Deep on bug fixes, escalated or not.
-- Repairs to a failed integration or build never go to a local model.
+- Prefer Claude or Codex for repairs to a failed integration or build.
 
 "Narrow" means the requirements are settled and the files to change are named
 or obvious. "Covered by a test" means an existing or specified test checks
@@ -102,11 +99,10 @@ the result. Work that needs manual or end-to-end verification is not covered.
 - If the risk or the kind of work can't be worked out, don't block the task.
   Use what is known. An unknown risk counts as medium, and you say that it
   was assumed. An unknown kind gets at least Standard, high effort. A risk
-  that is known still applies in full. Keep the task on Claude or Codex.
-- If nothing allowed can take the task right now, hold it until something can.
-  That is a wait, not a failure.
+  that is known still applies in full. Prefer Claude or Codex.
+- If placement finds no eligible candidate for the selected class, leave the
+  task waiting with a reason.
 - If nothing allowed could ever take it, leave it unrouted and visible, say
   why on the task, and raise it for my attention. Never leave a task waiting
   with no explanation.
-- Always record on the task what was decided and why: the level, who may take
-  it, and anything that raised or lowered the level.
+- Always record on the task what was decided and why: the level, the agent preferences, and anything that raised or lowered the level.

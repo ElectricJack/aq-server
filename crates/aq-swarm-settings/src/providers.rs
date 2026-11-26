@@ -225,7 +225,9 @@ async fn check_receipt_capacity(conn: &mut PgConnection, response: &Value) -> Re
     }
     Ok(())
 }
-async fn membership(conn: &mut PgConnection) -> std::result::Result<Option<Value>, sqlx::Error> {
+pub(crate) async fn membership(
+    conn: &mut PgConnection,
+) -> std::result::Result<Option<Value>, sqlx::Error> {
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('provider_settings') IS NOT NULL")
         .fetch_one(&mut *conn)
         .await?;
@@ -244,10 +246,14 @@ pub async fn allows(
     provider: &str,
 ) -> std::result::Result<bool, sqlx::Error> {
     let providers = membership(conn).await?;
-    Ok(providers.is_none_or(|ids| {
+    Ok(includes(providers.as_ref(), provider))
+}
+
+pub(crate) fn includes(providers: Option<&Value>, provider: &str) -> bool {
+    providers.is_none_or(|ids| {
         ids.as_array()
             .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(provider)))
-    }))
+    })
 }
 
 /// Membership affects provider selection, independently of task intelligence routing.

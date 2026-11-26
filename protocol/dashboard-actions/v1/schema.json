@@ -1,5 +1,12 @@
 {
   "$defs": {
+    "Access": {
+      "enum": [
+        "read",
+        "write"
+      ],
+      "type": "string"
+    },
     "ActionRequest": {
       "additionalProperties": false,
       "oneOf": [
@@ -2161,6 +2168,53 @@
             },
             "payload": {
               "$defs": {
+                "Access": {
+                  "enum": [
+                    "read",
+                    "write"
+                  ],
+                  "type": "string"
+                },
+                "Requirement": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "access": {
+                          "$ref": "#/$defs/Access"
+                        },
+                        "target_project_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "target_project_id",
+                        "access"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "service": {
+                          "$ref": "#/$defs/Service"
+                        }
+                      },
+                      "required": [
+                        "service"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Each requirement has exactly one shape. Owner requests and creation use\nthe same representation as the attempt command."
+                },
+                "Service": {
+                  "enum": [
+                    "postgres"
+                  ],
+                  "type": "string"
+                },
                 "TaskState": {
                   "enum": [
                     "draft",
@@ -2253,6 +2307,13 @@
                   "maxLength": 512,
                   "minLength": 1,
                   "type": "string"
+                },
+                "workspace": {
+                  "items": {
+                    "$ref": "#/$defs/Requirement"
+                  },
+                  "maxItems": 17,
+                  "type": "array"
                 }
               },
               "required": [
@@ -3812,6 +3873,40 @@
       ],
       "type": "string"
     },
+    "Requirement": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/Access"
+            },
+            "target_project_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target_project_id",
+            "access"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "service": {
+              "$ref": "#/$defs/Service"
+            }
+          },
+          "required": [
+            "service"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Each requirement has exactly one shape. Owner requests and creation use\nthe same representation as the attempt command."
+    },
     "RevisionRef": {
       "additionalProperties": false,
       "properties": {
@@ -3864,6 +3959,12 @@
           "type": "object"
         }
       ]
+    },
+    "Service": {
+      "enum": [
+        "postgres"
+      ],
+      "type": "string"
     },
     "Task": {
       "additionalProperties": false,

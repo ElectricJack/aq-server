@@ -238,50 +238,26 @@ pub fn evaluate_pilot(
     if !source_matches(result, source) {
         return plan(Disposition::Stale, Reason::SourceMismatch);
     }
+    evaluate_owner_evidence(result, source, evidence, policy)
+}
+
+fn evaluate_owner_evidence(
+    result: &RecordedResult,
+    source: &RecordedSourceConfirmation,
+    evidence: &Evidence<'_>,
+    policy: &PilotPolicy,
+) -> Result<EligibilityPlan, AppError> {
+    let plan = |disposition, reason| {
+        Ok(EligibilityPlan {
+            report_id: result.report.report_id,
+            disposition,
+            reason: Some(reason),
+        })
+    };
     let Some(review) = evidence.review else {
         return plan(Disposition::NeedsReconciliation, Reason::ReviewUnavailable);
     };
-    let s = &review.subject;
-    if s.result.report_id != result.report.report_id
-        || s.result.report_digest != result.receipt.report_digest
-        || s.result.record_receipt != result.receipt_artifact
-        || s.result.stopped_receipt != result.receipt.stopped_receipt
-        || s.binding != result.report.binding
-        || s.validation_policy != policy.artifact
-        || s.expected_outcome != result.spec.outcome_artifact
-        || s.task_observation != result.spec.task_observation
-        || s.task_context != result.spec.task_context
-        || s.execution_spec != result.spec.artifact().map_err(|_| AppError::Internal)?
-        || s.source.resulting_object.hex != source.receipt.source.hex
-        || s.source.source_receipt_id != source.receipt.receipt_id
-        || s.source.repository_id != source.receipt.repository_id
-        || s.source.binding_generation != source.receipt.binding_generation
-        || s.source.base.hex != source.manifest.source.base.hex
-        || s.source.input_artifact != result.spec.source_artifact
-        || s.source.resulting_artifact.id.as_str()
-            != format!("aq.git-import-manifest/{}", source.manifest.artifact_id)
-        || s.source.resulting_artifact.version.as_str() != "1"
-        || s.source.resulting_artifact.digest.as_str() != source.receipt.manifest_digest
-        || s.source.retention_receipt.id.as_str()
-            != format!("aq.git-import-receipt/{}", source.receipt.receipt_id)
-        || s.source.retention_receipt.version.as_str() != "1"
-        || s.source.retention_receipt.digest
-            != aq_review_protocol::digest(&source.acknowledgement)
-                .map_err(|_| AppError::Internal)?
-        || s.project_id != result.spec.lifecycle.project_id
-        || s.original_project_revision != result.spec.project_revision
-        || s.criteria.iter().map(|c| c.as_str()).collect::<Vec<_>>()
-            != result
-                .outcome
-                .acceptance_criteria
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect::<Vec<_>>()
-        || s.task.task_id != result.spec.task.task_id
-        || s.task.workspace_id != result.spec.task.workspace_id
-        || s.task.version != result.spec.task.version
-        || s.task.content_revision != result.spec.task.content_revision
-    {
+    if !review_matches(&review.subject, result, source, policy)? {
         return plan(Disposition::Stale, Reason::ReviewMismatch);
     }
     if !review.approved {
@@ -345,6 +321,79 @@ pub fn evaluate_pilot(
         disposition: Disposition::Eligible,
         reason: None,
     })
+}
+
+fn review_matches(
+    s: &aq_review_protocol::ReviewSubject,
+    result: &RecordedResult,
+    source: &RecordedSourceConfirmation,
+    policy: &PilotPolicy,
+) -> Result<bool, AppError> {
+    if !review_result_matches(s, result, policy)? {
+        return Ok(false);
+    }
+    if !review_source_matches(&s.source, result, source)? {
+        return Ok(false);
+    }
+    Ok(s.project_id == result.spec.lifecycle.project_id
+        && s.original_project_revision == result.spec.project_revision
+        && s.criteria.iter().map(|c| c.as_str()).eq(result
+            .outcome
+            .acceptance_criteria
+            .iter()
+            .map(|c| c.id.as_str()))
+        && s.task.task_id == result.spec.task.task_id
+        && s.task.workspace_id == result.spec.task.workspace_id
+        && s.task.version == result.spec.task.version
+        && s.task.content_revision == result.spec.task.content_revision)
+}
+
+fn review_result_matches(
+    s: &aq_review_protocol::ReviewSubject,
+    result: &RecordedResult,
+    policy: &PilotPolicy,
+) -> Result<bool, AppError> {
+    if s.result.report_id != result.report.report_id
+        || s.result.report_digest != result.receipt.report_digest
+        || s.result.record_receipt != result.receipt_artifact
+        || s.result.stopped_receipt != result.receipt.stopped_receipt
+        || s.binding != result.report.binding
+        || s.validation_policy != policy.artifact
+        || s.expected_outcome != result.spec.outcome_artifact
+        || s.task_observation != result.spec.task_observation
+        || s.task_context != result.spec.task_context
+        || s.execution_spec != result.spec.artifact().map_err(|_| AppError::Internal)?
+    {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn review_source_matches(
+    s: &aq_review_protocol::SourcePin,
+    result: &RecordedResult,
+    source: &RecordedSourceConfirmation,
+) -> Result<bool, AppError> {
+    if s.resulting_object.hex != source.receipt.source.hex
+        || s.source_receipt_id != source.receipt.receipt_id
+        || s.repository_id != source.receipt.repository_id
+        || s.binding_generation != source.receipt.binding_generation
+        || s.base.hex != source.manifest.source.base.hex
+        || s.input_artifact != result.spec.source_artifact
+        || s.resulting_artifact.id.as_str()
+            != format!("aq.git-import-manifest/{}", source.manifest.artifact_id)
+        || s.resulting_artifact.version.as_str() != "1"
+        || s.resulting_artifact.digest.as_str() != source.receipt.manifest_digest
+        || s.retention_receipt.id.as_str()
+            != format!("aq.git-import-receipt/{}", source.receipt.receipt_id)
+        || s.retention_receipt.version.as_str() != "1"
+        || s.retention_receipt.digest
+            != aq_review_protocol::digest(&source.acknowledgement)
+                .map_err(|_| AppError::Internal)?
+    {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn decision_views_match(

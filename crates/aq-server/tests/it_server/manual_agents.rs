@@ -194,14 +194,6 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let node = f.node.node_id;
     // The level a manual session and the supervisor choose from: one
     // candidate per logged-in harness.
-    let level = |id: &str, rows: &str| {
-        format!(
-            "---\nid: {id}\nname: Standard\ndescription: Manual fixture level.\n---\n\
-             ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
-        )
-    };
-    let claude_row = "| anthropic | fixture-model | medium | claude |\n";
-    let codex_row = "| openai | gpt-test | high | codex |\n";
     let mut execution = common::roles::execution(8192);
     execution = execution
         .replace("harnesses: [claude,", "harnesses: [claude, codex,")
@@ -215,7 +207,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level("manual-model", &format!("{claude_row}{codex_row}")),
+        &intelligence_level("manual-model", &format!("{CLAUDE_ROW}{CODEX_ROW}")),
     )
     .await;
     common::roles::save(
@@ -223,7 +215,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "default-codex",
-        &level("default-codex", "| openai | gpt-test | default | codex |\n"),
+        &intelligence_level("default-codex", "| openai | gpt-test | default | codex |\n"),
     )
     .await;
     let snapshot_digest = common::roles::active(&pool).await.digest().to_owned();
@@ -234,196 +226,14 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     f.state.config = Arc::new(config);
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
-    let (status, fleet) = call(&admin, "/api/supervisors", None, None, false).await;
-    assert_eq!(status, StatusCode::OK, "{fleet}");
-    let profiles = fleet["profiles"].as_array().unwrap();
-    let offered: Vec<_> = profiles
-        .iter()
-        .filter(|p| p["profile_id"] == "manual-model")
-        .map(|p| p["candidate_id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        offered,
-        ["anthropic:fixture-model:medium", "openai:gpt-test:high"]
-    );
-    assert!(profiles.iter().all(|p| p["profile_id"] != "default-codex"));
-    let scopes = fleet["supervisors"].as_array().unwrap();
-    let project_scope = scopes
-        .iter()
-        .find(|s| s["project_id"] == project.to_string())
-        .unwrap();
-    let conversation = project_scope["id"].as_str().unwrap();
-    let global = scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
-        .as_str()
-        .unwrap();
-    assert_ne!(conversation, global);
-    let global_uri = format!("/api/supervisors/{global}/control");
-    let unsupported = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"default-codex","candidate_id":"openai:gpt-test:default"}});
-    assert_eq!(
-        call(&admin, &global_uri, Some(unsupported), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    let claude = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium"}});
-    let (status, saved) = call(&admin, &global_uri, Some(claude), None, true).await;
-    assert_eq!(status, StatusCode::OK, "{saved}");
-    assert_eq!(
-        saved["profile"],
-        json!({"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium","name":"Standard","provider":"anthropic","model":"fixture-model","reasoning":"medium","harness":"claude"})
-    );
-    let (_, updated) = call(&admin, "/api/supervisors", None, None, false).await;
-    let stored_global = updated["supervisors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["id"] == global)
-        .unwrap();
-    assert_eq!(stored_global["enabled"], true);
-    assert_eq!(stored_global["profile"], saved["profile"]);
-    assert!(stored_global.get("unavailable_reason").is_none());
-    let uri = format!("/api/supervisors/{conversation}/control");
-    let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
-    assert_eq!(
-        call(&admin, &uri, Some(control.clone()), None, false)
-            .await
-            .0,
-        StatusCode::FORBIDDEN
-    );
-    let (status, receipt) = call(&admin, &uri, Some(control.clone()), None, true).await;
-    assert_eq!(status, StatusCode::OK, "{receipt}");
-    // The saved profile is the level choice, and its admission class is the
-    // level's id on the candidate's provider.
-    assert_eq!(
-        receipt["profile"],
-        json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
-    );
-    let class = aq_swarm_settings::admission::pinned_cell(&receipt["profile"]).unwrap();
-    assert_eq!(
-        (class.provider.as_str(), class.intelligence_class.as_str()),
-        ("openai", "manual-model")
-    );
-    assert_eq!(
-        call(&admin, &uri, Some(control.clone()), None, true)
-            .await
-            .1,
-        receipt
-    );
-    // The stored choice names no snapshot: every read and every start
-    // resolves it against the active one. While the level does not list the
-    // candidate, or does not exist, the control stays enabled with its
-    // profile and says why the supervisor is not running.
-    let entry = |fleet: &Value| {
-        let all = fleet["supervisors"].as_array().unwrap();
-        all.iter()
-            .find(|s| s["id"] == conversation)
-            .unwrap()
-            .clone()
-    };
-    let read = || async { entry(&call(&admin, "/api/supervisors", None, None, false).await.1) };
-    assert!(read().await.get("unavailable_reason").is_none());
-    assert_eq!(
-        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
-            .await
-            .ok()
-            .unwrap(),
-        Ok(snapshot_digest.clone())
-    );
-    common::roles::save(
-        &pool,
-        f.actor,
-        Kind::Intelligence,
-        "manual-model",
-        &level("manual-model", claude_row),
-    )
-    .await;
-    let unlisted = read().await;
-    assert_eq!(
-        unlisted["unavailable_reason"],
-        "its level `manual-model` no longer lists gpt-test on codex; choose a level"
-    );
-    assert_eq!(unlisted["enabled"], true);
-    assert_eq!(unlisted["profile"], receipt["profile"]);
-    assert!(
-        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
-            .await
-            .ok()
-            .unwrap()
-            .is_err()
-    );
-    // Once the level lists the candidate again it resolves, with no owner
-    // action, against the snapshot that is active now.
-    common::roles::save(
-        &pool,
-        f.actor,
-        Kind::Intelligence,
-        "manual-model",
-        &level("manual-model", &format!("{claude_row}{codex_row}")),
-    )
-    .await;
-    assert!(read().await.get("unavailable_reason").is_none());
-    assert_eq!(
-        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
-            .await
-            .ok()
-            .unwrap(),
-        Ok(common::roles::active(&pool).await.digest().to_owned())
-    );
-    // A carried choice whose level has no document (migration 0134 keeps an
-    // old profile id that is no level).
-    sqlx::query("UPDATE supervisor_controls SET profile=jsonb_set(profile,'{profile_id}','\"engineering\"') WHERE conversation_id=$1::uuid")
-        .bind(conversation)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let gone = read().await;
-    assert_eq!(
-        gone["unavailable_reason"],
-        "its level `engineering` no longer exists; choose a level"
-    );
-    assert_eq!(gone["enabled"], true);
-    sqlx::query("UPDATE supervisor_controls SET profile=$2 WHERE conversation_id=$1::uuid")
-        .bind(conversation)
-        .bind(&receipt["profile"])
-        .execute(&pool)
-        .await
-        .unwrap();
-    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":false});
-    assert_eq!(
-        call(&admin, &uri, Some(stale), None, true).await.0,
-        StatusCode::CONFLICT
-    );
-    let discover = format!("/api/human/conversations/projects/{project}");
-    let (status, discovery) = call(&admin, &discover, None, None, false).await;
-    assert_eq!(status, StatusCode::OK, "{discovery}");
-    assert_eq!(discovery["conversation"]["id"], conversation);
-    let message_operation = Uuid::new_v4();
-    let message_id = Uuid::new_v4();
-    let send = json!({"operation_id":message_operation,"kind":"supervisor.message.send","subject":{"type":"conversation","id":conversation,"revision":"1"},"expected_versions":{"conversation":"1"},"payload":{"operation_id":message_operation,"message_id":message_id,"expected_conversation_revision":"1","body":"Project message receipt QA","context":[],"attachments":[]}});
-    let (status, sent) = call(&admin, "/api/v1/actions", Some(send), None, true).await;
-    assert_eq!(status, StatusCode::OK, "{sent}");
-    assert_eq!(sent["data"]["disposition"], "confirmed");
-    let (status, looked) = call(
-        &admin,
-        &format!("/api/v1/operations/{message_operation}"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{looked}");
-    assert_eq!(looked["data"]["disposition"], "confirmed");
-    let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"enabled":false});
-    assert_eq!(
-        call(&admin, &uri, Some(stop), None, true).await.0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        call(&admin, &discover, None, None, false).await.1["conversation"],
-        discovery["conversation"]
-    );
+    supervisor_profile_tracks_active_level(&f, &admin, &pool, &snapshot_digest).await;
 
-    let poll = json!({"max_slots":3,"repositories":[repo],"reports":[]});
+    sqlx::query("UPDATE worker_settings SET max_agents=4 WHERE kind='node' AND id=$1")
+        .bind(node.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let poll = json!({"max_slots":4,"repositories":[repo],"reports":[]});
     assert_eq!(
         call(
             &worker,
@@ -448,129 +258,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .0,
         StatusCode::OK
     );
-    let selected = json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"});
-    let selected_id = Uuid::new_v4();
-    let selected_launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
-    let selected_body = json!({"operation_id":selected_id,"intelligence_profile":selected});
-    assert_eq!(
-        call(
-            &admin,
-            &selected_launch,
-            Some(selected_body.clone()),
-            None,
-            true
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT,
-        "old worker does not advertise Codex"
-    );
-    let mut upgraded_poll = poll.clone();
-    upgraded_poll["providers"] = json!(["anthropic", "openai"]);
-    assert_eq!(
-        call(
-            &worker,
-            "/v1/worker/manual-agents",
-            Some(upgraded_poll),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let choices = call(&admin, "/api/manual-agents", None, None, false)
-        .await
-        .1;
-    // Manual sessions list the levels of the active snapshot: one entry per
-    // level candidate a logged-in harness can run.
-    let offered: Vec<&Value> = (choices["launch_profiles"].as_array().unwrap().iter())
-        .filter(|c| c["profile_id"] == "manual-model")
-        .collect();
-    assert_eq!(offered.len(), 2, "{choices}");
-    assert_eq!(
-        offered[1],
-        &json!({"snapshot_digest":snapshot_digest,"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
-    );
-    let (status, chosen) = call(
-        &admin,
-        &selected_launch,
-        Some(selected_body.clone()),
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{chosen}");
-    assert_eq!(chosen["spec"]["model"], "gpt-test");
-    assert_eq!(chosen["spec"]["reasoning"], "high");
-    // The launch pins its level (the admission class) and the snapshot.
-    assert_eq!(chosen["spec"]["intelligence_class"], "manual-model");
-    assert_eq!(chosen["spec"]["harness"], "codex");
-    assert_eq!(chosen["spec"]["snapshot_digest"], snapshot_digest);
-    assert_eq!(
-        call(
-            &admin,
-            &selected_launch,
-            Some(selected_body.clone()),
-            None,
-            true
-        )
-        .await
-        .1,
-        chosen
-    );
-    let mut changed = selected_body.clone();
-    changed["intelligence_profile"]["candidate_id"] = json!("anthropic:fixture-model:medium");
-    assert_eq!(
-        call(&admin, &selected_launch, Some(changed), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    let mut stale = selected_body.clone();
-    stale["operation_id"] = json!(Uuid::new_v4());
-    stale["intelligence_profile"]["profile_id"] = json!("no-such-level");
-    assert_eq!(
-        call(&admin, &selected_launch, Some(stale), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    // The level loses its Codex candidate.
-    common::roles::save(
-        &pool,
-        f.actor,
-        Kind::Intelligence,
-        "manual-model",
-        &level("manual-model", claude_row),
-    )
-    .await;
-    assert_eq!(
-        call(
-            &admin,
-            &selected_launch,
-            Some(selected_body.clone()),
-            None,
-            true
-        )
-        .await
-        .1,
-        chosen,
-        "exact retry retains admitted snapshot after a profile is edited/deleted"
-    );
-    let mut removed = selected_body.clone();
-    removed["operation_id"] = json!(Uuid::new_v4());
-    assert_eq!(
-        call(&admin, &selected_launch, Some(removed), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    sqlx::query("DELETE FROM manual_agent_sessions WHERE id=$1")
-        .bind(selected_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    selected_launch_pins_snapshot(&f, &admin, &worker, &pool, &snapshot_digest, &poll).await;
     let id = Uuid::new_v4();
     let launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
     assert_eq!(
@@ -622,157 +310,33 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     .await
     .1;
     assert_eq!(response["sessions"][0]["status"], "preparing");
+    assert_eq!(response["pending_count"], 1, "a new launch gets priority");
     let running = json!({"id":id,"status":"running","stage":"Ready to connect","snapshot":"real fixture screen","acknowledged":[]});
-    let report = json!({"max_slots":3,"repositories":[repo],"reports":[running]});
+    let report = json!({"max_slots":4,"repositories":[repo],"reports":[running]});
+    let (status, leased) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(report.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{leased}");
+    assert_eq!(leased["sessions"][0]["id"], json!(id));
+    assert_eq!(leased["lease_ms"], 45_000);
     assert_eq!(
-        call(
-            &worker,
-            "/v1/worker/manual-agents",
-            Some(report.clone()),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
+        leased["pending_count"], 0,
+        "running work lets native pollers resume"
     );
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
+        .await
+        .unwrap();
+    assert_eq!((view.occupied, view.idle), (1, 3));
+    let manual_slot = leased["sessions"][0]["spec"]["node_slot"].as_u64().unwrap() as u32;
+    assert!(!view.free(manual_slot));
+    assert_eq!((1..=4).filter(|slot| view.free(*slot)).count(), 3);
     let terminal = format!("/api/manual-agents/{id}/terminal");
-    let client = Uuid::new_v4();
-    let (status, control) = call(
-        &admin,
-        &format!("{terminal}/connect"),
-        Some(json!({"client_id":client})),
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{control}");
-    let renewed = call(
-        &admin,
-        &format!("{terminal}/connect"),
-        Some(json!({"client_id":client,"expected_generation":control["generation"]})),
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(renewed.0, StatusCode::OK);
-    assert_eq!(renewed.1["generation"], control["generation"]);
-    let other_client = Uuid::new_v4();
-    let takeover = call(
-        &admin,
-        &format!("{terminal}/connect"),
-        Some(json!({"client_id":other_client})),
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(takeover.0, StatusCode::OK);
-    let stale = call(
-        &admin,
-        &format!("{terminal}/connect"),
-        Some(json!({"client_id":client,"expected_generation":control["generation"]})),
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(
-        stale.0,
-        StatusCode::CONFLICT,
-        "renewal cannot steal control back"
-    );
-    let (_, control) = call(
-        &admin,
-        &format!("{terminal}/connect"),
-        Some(json!({"client_id":client})),
-        None,
-        true,
-    )
-    .await;
-    let input = Uuid::new_v4();
-    let body = json!({"operation_id":input,"client_id":client,"generation":control["generation"],"bytes":[65]});
-    assert_eq!(
-        call(
-            &admin,
-            &format!("{terminal}/input"),
-            Some(body.clone()),
-            None,
-            true
-        )
-        .await
-        .1["disposition"],
-        "queued"
-    );
-    assert_eq!(
-        call(&admin, &format!("{terminal}/input"), Some(body), None, true)
-            .await
-            .1["disposition"],
-        "queued"
-    );
-    let response = call(
-        &worker,
-        "/v1/worker/manual-agents",
-        Some(report.clone()),
-        Some(&f.credential),
-        false,
-    )
-    .await
-    .1;
-    assert_eq!(
-        response["commands"][id.to_string()]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    let response = call(
-        &worker,
-        "/v1/worker/manual-agents",
-        Some(report.clone()),
-        Some(&f.credential),
-        false,
-    )
-    .await
-    .1;
-    assert!(
-        response["commands"][id.to_string()].is_null(),
-        "input is never replayed"
-    );
-    let mut acknowledged = report.clone();
-    acknowledged["reports"][0]["acknowledged"] = json!([input]);
-    call(
-        &worker,
-        "/v1/worker/manual-agents",
-        Some(acknowledged),
-        Some(&f.credential),
-        false,
-    )
-    .await;
-    assert_eq!(
-        call(
-            &admin,
-            &format!("{terminal}/receipts/{input}"),
-            None,
-            None,
-            true
-        )
-        .await
-        .1["disposition"],
-        "applied"
-    );
-    live_stream_preserves_bytes_and_fences_input(
-        &admin,
-        &worker,
-        &f.credential,
-        (
-            f.state.config.server.public_origin.trim_end_matches('/'),
-            &pool,
-            "manual",
-        ),
-        id,
-        client,
-        control["generation"].as_u64().unwrap(),
-    )
-    .await;
+    let client = terminal_input_is_applied_once(&f, &admin, &worker, &pool, id, &report).await;
     let slots = format!("{launch}/slots");
     let operation = Uuid::new_v4();
     let body = json!({"operation_id":operation,"expected_revision":0,"slots":0});
@@ -818,7 +382,10 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         1,
         "removing capacity keeps the running session and queues new sessions"
     );
-    assert_eq!(response["pending_count"], 2);
+    assert_eq!(
+        response["pending_count"], 1,
+        "only the waiting launch asks native pollers to yield"
+    );
     let stop = format!("/api/manual-agents/{id}/stop");
     assert_eq!(
         call(
@@ -842,6 +409,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     .await
     .1;
     assert_eq!(response["sessions"][0]["desired_running"], false);
+    assert_eq!(response["pending_count"], 1);
     let mut stopped = report;
     stopped["reports"][0]["status"] = json!("stopped");
     call(
@@ -852,6 +420,30 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         false,
     )
     .await;
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
+        .await
+        .unwrap();
+    assert_eq!((view.occupied, view.idle), (0, 4));
+    let (status, restored) = call(
+        &admin,
+        &slots,
+        Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":changed["revision"],"slots":1})),
+        None,
+        true,
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    let (status, next_poll) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(poll.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next_poll}");
+    assert_eq!(next_poll["pending_count"], 1);
+    assert_eq!(next_poll["sessions"][0]["id"], json!(next));
+    assert_eq!(next_poll["sessions"][0]["status"], "preparing");
     assert_eq!(
         call(
             &admin,
@@ -889,6 +481,501 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         tasks, 0,
         "manual sessions do not invent queue tasks or execution grants"
     );
+}
+
+async fn terminal_control_survives_takeover(admin: &Router, terminal: &str) -> (Uuid, Value) {
+    let client = Uuid::new_v4();
+    let (status, control) = call(
+        admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{control}");
+    let renewed = call(
+        admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client,"expected_generation":control["generation"]})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(renewed.0, StatusCode::OK);
+    assert_eq!(renewed.1["generation"], control["generation"]);
+    let other_client = Uuid::new_v4();
+    let takeover = call(
+        admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":other_client})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(takeover.0, StatusCode::OK);
+    let stale = call(
+        admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client,"expected_generation":control["generation"]})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(
+        stale.0,
+        StatusCode::CONFLICT,
+        "renewal cannot steal control back"
+    );
+    let (_, control) = call(
+        admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client})),
+        None,
+        true,
+    )
+    .await;
+    (client, control)
+}
+
+async fn terminal_input_is_applied_once(
+    f: &common::profiled::Fixture,
+    admin: &Router,
+    worker: &Router,
+    pool: &sqlx::PgPool,
+    id: Uuid,
+    report: &Value,
+) -> Uuid {
+    let terminal = format!("/api/manual-agents/{id}/terminal");
+    let (client, control) = terminal_control_survives_takeover(admin, &terminal).await;
+    let input = Uuid::new_v4();
+    let body = json!({"operation_id":input,"client_id":client,"generation":control["generation"],"bytes":[65]});
+    assert_eq!(
+        call(
+            admin,
+            &format!("{terminal}/input"),
+            Some(body.clone()),
+            None,
+            true
+        )
+        .await
+        .1["disposition"],
+        "queued"
+    );
+    assert_eq!(
+        call(admin, &format!("{terminal}/input"), Some(body), None, true)
+            .await
+            .1["disposition"],
+        "queued"
+    );
+    let response = call(
+        worker,
+        "/v1/worker/manual-agents",
+        Some(report.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await
+    .1;
+    assert_eq!(
+        response["commands"][id.to_string()]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let response = call(
+        worker,
+        "/v1/worker/manual-agents",
+        Some(report.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await
+    .1;
+    assert!(
+        response["commands"][id.to_string()].is_null(),
+        "input is never replayed"
+    );
+    let mut acknowledged = report.clone();
+    acknowledged["reports"][0]["acknowledged"] = json!([input]);
+    call(
+        worker,
+        "/v1/worker/manual-agents",
+        Some(acknowledged),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(
+        call(
+            admin,
+            &format!("{terminal}/receipts/{input}"),
+            None,
+            None,
+            true
+        )
+        .await
+        .1["disposition"],
+        "applied"
+    );
+    live_stream_preserves_bytes_and_fences_input(
+        admin,
+        worker,
+        &f.credential,
+        (
+            f.state.config.server.public_origin.trim_end_matches('/'),
+            pool,
+            "manual",
+        ),
+        id,
+        client,
+        control["generation"].as_u64().unwrap(),
+    )
+    .await;
+    client
+}
+
+const CLAUDE_ROW: &str = "| anthropic | fixture-model | medium | claude |\n";
+const CODEX_ROW: &str = "| openai | gpt-test | high | codex |\n";
+
+fn intelligence_level(id: &str, rows: &str) -> String {
+    format!(
+        "---\nid: {id}\nname: Standard\ndescription: Manual fixture level.\n---\n\
+         ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
+    )
+}
+
+async fn global_supervisor_accepts_supported_reasoning(admin: &Router, global: &str) {
+    let global_uri = format!("/api/supervisors/{global}/control");
+    let unsupported = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"default-codex","candidate_id":"openai:gpt-test:default"}});
+    assert_eq!(
+        call(admin, &global_uri, Some(unsupported), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let claude = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium"}});
+    let (status, saved) = call(admin, &global_uri, Some(claude), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["profile"],
+        json!({"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium","name":"Standard","provider":"anthropic","model":"fixture-model","reasoning":"medium","harness":"claude"})
+    );
+    let (_, updated) = call(admin, "/api/supervisors", None, None, false).await;
+    let stored_global = updated["supervisors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == global)
+        .unwrap();
+    assert_eq!(stored_global["enabled"], true);
+    assert_eq!(stored_global["profile"], saved["profile"]);
+    assert!(stored_global.get("unavailable_reason").is_none());
+}
+
+async fn supervisor_profile_tracks_active_level(
+    f: &common::profiled::Fixture,
+    admin: &Router,
+    pool: &sqlx::PgPool,
+    snapshot_digest: &str,
+) {
+    let project = f.selection.lineage.project_id;
+    let (status, fleet) = call(admin, "/api/supervisors", None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{fleet}");
+    let profiles = fleet["profiles"].as_array().unwrap();
+    let offered: Vec<_> = profiles
+        .iter()
+        .filter(|p| p["profile_id"] == "manual-model")
+        .map(|p| p["candidate_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        offered,
+        ["anthropic:fixture-model:medium", "openai:gpt-test:high"]
+    );
+    assert!(profiles.iter().all(|p| p["profile_id"] != "default-codex"));
+    let scopes = fleet["supervisors"].as_array().unwrap();
+    let project_scope = scopes
+        .iter()
+        .find(|s| s["project_id"] == project.to_string())
+        .unwrap();
+    let conversation = project_scope["id"].as_str().unwrap();
+    let global = scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(conversation, global);
+    global_supervisor_accepts_supported_reasoning(admin, global).await;
+    let uri = format!("/api/supervisors/{conversation}/control");
+    let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
+    assert_eq!(
+        call(admin, &uri, Some(control.clone()), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, receipt) = call(admin, &uri, Some(control.clone()), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    // The saved profile is the level choice, and its admission class is the
+    // level's id on the candidate's provider.
+    assert_eq!(
+        receipt["profile"],
+        json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
+    );
+    let class = aq_swarm_settings::admission::pinned_cell(&receipt["profile"]).unwrap();
+    assert_eq!(
+        (class.provider.as_str(), class.intelligence_class.as_str()),
+        ("openai", "manual-model")
+    );
+    assert_eq!(
+        call(admin, &uri, Some(control.clone()), None, true).await.1,
+        receipt
+    );
+    // The stored choice names no snapshot: every read and every start
+    // resolves it against the active one. While the level does not list the
+    // candidate, or does not exist, the control stays enabled with its
+    // profile and says why the supervisor is not running.
+    let entry = |fleet: &Value| {
+        let all = fleet["supervisors"].as_array().unwrap();
+        all.iter()
+            .find(|s| s["id"] == conversation)
+            .unwrap()
+            .clone()
+    };
+    let read = || async { entry(&call(admin, "/api/supervisors", None, None, false).await.1) };
+    assert!(read().await.get("unavailable_reason").is_none());
+    assert_eq!(
+        aq_supervisor_control::resolve_stored(pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap(),
+        Ok(snapshot_digest.to_owned())
+    );
+    common::roles::save(
+        pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &intelligence_level("manual-model", CLAUDE_ROW),
+    )
+    .await;
+    let unlisted = read().await;
+    assert_eq!(
+        unlisted["unavailable_reason"],
+        "its level `manual-model` no longer lists gpt-test on codex; choose a level"
+    );
+    assert_eq!(unlisted["enabled"], true);
+    assert_eq!(unlisted["profile"], receipt["profile"]);
+    assert!(
+        aq_supervisor_control::resolve_stored(pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap()
+            .is_err()
+    );
+    // Once the level lists the candidate again it resolves, with no owner
+    // action, against the snapshot that is active now.
+    common::roles::save(
+        pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &intelligence_level("manual-model", &format!("{CLAUDE_ROW}{CODEX_ROW}")),
+    )
+    .await;
+    assert!(read().await.get("unavailable_reason").is_none());
+    assert_eq!(
+        aq_supervisor_control::resolve_stored(pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap(),
+        Ok(common::roles::active(pool).await.digest().to_owned())
+    );
+    // A carried choice whose level has no document (migration 0134 keeps an
+    // old profile id that is no level).
+    sqlx::query("UPDATE supervisor_controls SET profile=jsonb_set(profile,'{profile_id}','\"engineering\"') WHERE conversation_id=$1::uuid")
+        .bind(conversation)
+        .execute(pool)
+        .await
+        .unwrap();
+    let gone = read().await;
+    assert_eq!(
+        gone["unavailable_reason"],
+        "its level `engineering` no longer exists; choose a level"
+    );
+    assert_eq!(gone["enabled"], true);
+    sqlx::query("UPDATE supervisor_controls SET profile=$2 WHERE conversation_id=$1::uuid")
+        .bind(conversation)
+        .bind(&receipt["profile"])
+        .execute(pool)
+        .await
+        .unwrap();
+    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":false});
+    assert_eq!(
+        call(admin, &uri, Some(stale), None, true).await.0,
+        StatusCode::CONFLICT
+    );
+    let discover = format!("/api/human/conversations/projects/{project}");
+    let (status, discovery) = call(admin, &discover, None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{discovery}");
+    assert_eq!(discovery["conversation"]["id"], conversation);
+    let message_operation = Uuid::new_v4();
+    let message_id = Uuid::new_v4();
+    let send = json!({"operation_id":message_operation,"kind":"supervisor.message.send","subject":{"type":"conversation","id":conversation,"revision":"1"},"expected_versions":{"conversation":"1"},"payload":{"operation_id":message_operation,"message_id":message_id,"expected_conversation_revision":"1","body":"Project message receipt QA","context":[],"attachments":[]}});
+    let (status, sent) = call(admin, "/api/v1/actions", Some(send), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["data"]["disposition"], "confirmed");
+    let (status, looked) = call(
+        admin,
+        &format!("/api/v1/operations/{message_operation}"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{looked}");
+    assert_eq!(looked["data"]["disposition"], "confirmed");
+    let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"enabled":false});
+    assert_eq!(
+        call(admin, &uri, Some(stop), None, true).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(admin, &discover, None, None, false).await.1["conversation"],
+        discovery["conversation"]
+    );
+}
+
+async fn selected_launch_pins_snapshot(
+    f: &common::profiled::Fixture,
+    admin: &Router,
+    worker: &Router,
+    pool: &sqlx::PgPool,
+    snapshot_digest: &str,
+    poll: &Value,
+) {
+    let project = f.selection.lineage.project_id;
+    let node = f.node.node_id;
+    let selected = json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"});
+    let selected_id = Uuid::new_v4();
+    let selected_launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
+    let selected_body = json!({"operation_id":selected_id,"intelligence_profile":selected});
+    assert_eq!(
+        call(
+            admin,
+            &selected_launch,
+            Some(selected_body.clone()),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT,
+        "old worker does not advertise Codex"
+    );
+    let mut upgraded_poll = poll.clone();
+    upgraded_poll["providers"] = json!(["anthropic", "openai"]);
+    assert_eq!(
+        call(
+            worker,
+            "/v1/worker/manual-agents",
+            Some(upgraded_poll),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let choices = call(admin, "/api/manual-agents", None, None, false).await.1;
+    // Manual sessions list the levels of the active snapshot: one entry per
+    // level candidate a logged-in harness can run.
+    let offered: Vec<&Value> = (choices["launch_profiles"].as_array().unwrap().iter())
+        .filter(|c| c["profile_id"] == "manual-model")
+        .collect();
+    assert_eq!(offered.len(), 2, "{choices}");
+    assert_eq!(
+        offered[1],
+        &json!({"snapshot_digest":snapshot_digest,"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
+    );
+    let (status, chosen) = call(
+        admin,
+        &selected_launch,
+        Some(selected_body.clone()),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{chosen}");
+    assert_eq!(chosen["spec"]["model"], "gpt-test");
+    assert_eq!(chosen["spec"]["reasoning"], "high");
+    // The launch pins its level (the admission class) and the snapshot.
+    assert_eq!(chosen["spec"]["intelligence_class"], "manual-model");
+    assert_eq!(chosen["spec"]["harness"], "codex");
+    assert_eq!(chosen["spec"]["snapshot_digest"], snapshot_digest);
+    assert_eq!(
+        call(
+            admin,
+            &selected_launch,
+            Some(selected_body.clone()),
+            None,
+            true
+        )
+        .await
+        .1,
+        chosen
+    );
+    let mut changed = selected_body.clone();
+    changed["intelligence_profile"]["candidate_id"] = json!("anthropic:fixture-model:medium");
+    assert_eq!(
+        call(admin, &selected_launch, Some(changed), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let mut stale = selected_body.clone();
+    stale["operation_id"] = json!(Uuid::new_v4());
+    stale["intelligence_profile"]["profile_id"] = json!("no-such-level");
+    assert_eq!(
+        call(admin, &selected_launch, Some(stale), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    // The level loses its Codex candidate.
+    common::roles::save(
+        pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &intelligence_level("manual-model", CLAUDE_ROW),
+    )
+    .await;
+    assert_eq!(
+        call(
+            admin,
+            &selected_launch,
+            Some(selected_body.clone()),
+            None,
+            true
+        )
+        .await
+        .1,
+        chosen,
+        "exact retry retains admitted snapshot after a profile is edited/deleted"
+    );
+    let mut removed = selected_body.clone();
+    removed["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        call(admin, &selected_launch, Some(removed), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    sqlx::query("DELETE FROM manual_agent_sessions WHERE id=$1")
+        .bind(selected_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 async fn live_stream_preserves_bytes_and_fences_input(
@@ -1218,142 +1305,20 @@ async fn stream_frame(
 
 #[tokio::test]
 async fn logins_are_owner_requested_private_current_and_revocable() {
-    use aq_server::intelligence::config::{
-        CredentialConfig, IntelligenceConfig, MaterialDeliveryMode,
-    };
     use std::os::unix::fs::PermissionsExt;
     let mut f = common::profiled::fixture().await;
+    // Keep the private material alive through delivery and revocation.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("login");
     std::fs::write(&path, b"synthetic-private-login\n").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let choice = &f.selection.choice;
-    let credential = aq_selection::AuthorizedCredential {
-        profile: choice.credential_profile.clone(),
-        provider: "anthropic".into(),
-        account_reference: choice.account_reference.clone(),
-        endpoint_reference: choice.endpoint_reference.clone(),
-        revision: f.selection.credential_revision,
-        enabled: true,
-        provisionable: false,
-        material_owner: None,
-        allowed_backends: aq_selection::default_allowed_backends(),
-    };
-    let cfg = IntelligenceConfig {
-        accounting: Default::default(),
-        material_store: None,
-        revision: 1,
-        credentials: vec![CredentialConfig {
-            kind: aq_selection::CredentialKind::SubscriptionLogin,
-            allowed_backends: aq_selection::default_allowed_backends(),
-            credential,
-            allowed_node_ids: vec![f.node.node_id],
-            allow_enrolled_nodes: false,
-            secret_file: Some(path.clone()),
-            delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
-        }],
-        qualified_harnesses: vec![],
-    };
-    let mut config = (*f.state.config).clone();
-    config.intelligence = Some(Arc::new(cfg.load().unwrap()));
-    f.state.config = Arc::new(config);
+    configure_subscription_login(&mut f, &path);
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
-    assert_eq!(
-        call(
-            &admin,
-            "/api/intelligence/register",
-            Some(json!({})),
-            None,
-            true
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
     let node = f.node.node_id;
     let uri = format!("/api/worker-logins/{node}");
-    let op = Uuid::new_v4();
-    let request = json!({"operation_id":op,"providers":["anthropic"]});
-    // A Codex login is never pushed to a node: its sessions lease it.
-    for providers in [json!(["openai"]), json!(["anthropic", "openai"])] {
-        let codex = json!({"operation_id":Uuid::new_v4(),"providers":providers});
-        assert_eq!(
-            call(&admin, &uri, Some(codex), None, true).await.0,
-            StatusCode::BAD_REQUEST
-        );
-    }
-    assert_eq!(
-        call(&admin, &uri, Some(request.clone()), None, false)
-            .await
-            .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        call(&admin, &uri, Some(request.clone()), None, true)
-            .await
-            .1["generation"],
-        op.to_string()
-    );
-    assert_eq!(
-        call(&worker, "/v1/worker/logins", Some(json!({})), None, false)
-            .await
-            .0,
-        StatusCode::UNAUTHORIZED
-    );
-    let (status, private) = call(
-        &worker,
-        "/v1/worker/logins",
-        Some(json!({})),
-        Some(&f.credential),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{private}");
-    assert_eq!(private["logins"][0]["material"], "synthetic-private-login");
-    let pool = f.db.pool().await;
-    let mut conn = pool.acquire().await.unwrap();
-    assert_eq!(
-        aq_machine_control::management::hold(&mut conn, node)
-            .await
-            .unwrap(),
-        Some("installing server subscription logins")
-    );
-    drop(conn);
-
-    let public = call(&admin, "/api/worker-logins", None, None, false)
-        .await
-        .1;
-    assert!(!public.to_string().contains("synthetic-private"));
-    assert!(!public.to_string().contains("material"));
-    // Placement and credential kind remain authoritative even for an owner-requested push.
-    for denial in 0..3 {
-        let mut blocked = (*f.state.config).clone();
-        let mut registry = blocked.intelligence.as_ref().unwrap().config.clone();
-        match denial {
-            0 => registry.credentials[0].allowed_node_ids.clear(),
-            1 => registry.credentials[0].kind = aq_selection::CredentialKind::ApiKey,
-            _ => registry.credentials[0].allowed_backends = vec![aq_selection::BackendKind::Boat],
-        }
-        blocked.intelligence = Some(Arc::new(registry.load().unwrap()));
-        let mut state = f.state.clone();
-        state.config = Arc::new(blocked);
-        let denied = build_worker_router(state);
-        let req = json!({"operation_id":Uuid::new_v4(),"providers":["anthropic"]});
-        call(&admin, &uri, Some(req), None, true).await;
-        assert_eq!(
-            call(
-                &denied,
-                "/v1/worker/logins",
-                Some(json!({})),
-                Some(&f.credential),
-                false
-            )
-            .await
-            .0,
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
-    }
+    let (op, request) = owner_requests_private_logins(&f, &admin, &worker).await;
+    login_delivery_enforces_placement_and_kind(&f, &admin).await;
     let newer = Uuid::new_v4();
     let next = json!({"operation_id":newer,"providers":["anthropic"]});
     assert_eq!(
@@ -1401,6 +1366,168 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
             .unwrap()
             .is_empty()
     );
+    completed_logins_release_hold_and_reject_revoked_nodes(&f, &worker).await;
+}
+
+fn configure_subscription_login(f: &mut common::profiled::Fixture, path: &std::path::Path) {
+    use aq_server::intelligence::config::{
+        CredentialConfig, IntelligenceConfig, MaterialDeliveryMode,
+    };
+    let choice = &f.selection.choice;
+    let credential = aq_selection::AuthorizedCredential {
+        profile: choice.credential_profile.clone(),
+        provider: "anthropic".into(),
+        account_reference: choice.account_reference.clone(),
+        endpoint_reference: choice.endpoint_reference.clone(),
+        revision: f.selection.credential_revision,
+        enabled: true,
+        provisionable: false,
+        material_owner: None,
+        allowed_backends: aq_selection::default_allowed_backends(),
+    };
+    let cfg = IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: None,
+        revision: 1,
+        credentials: vec![CredentialConfig {
+            kind: aq_selection::CredentialKind::SubscriptionLogin,
+            allowed_backends: aq_selection::default_allowed_backends(),
+            credential,
+            allowed_node_ids: vec![f.node.node_id],
+            allow_enrolled_nodes: false,
+            secret_file: Some(path.to_path_buf()),
+            delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
+        }],
+        qualified_harnesses: vec![],
+    };
+    let mut config = (*f.state.config).clone();
+    config.intelligence = Some(Arc::new(cfg.load().unwrap()));
+    f.state.config = Arc::new(config);
+}
+
+async fn owner_requests_private_logins(
+    f: &common::profiled::Fixture,
+    admin: &Router,
+    worker: &Router,
+) -> (Uuid, Value) {
+    assert_eq!(
+        call(
+            admin,
+            "/api/intelligence/register",
+            Some(json!({})),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let node = f.node.node_id;
+    let uri = format!("/api/worker-logins/{node}");
+    let op = Uuid::new_v4();
+    let request = json!({"operation_id":op,"providers":["anthropic"]});
+    // A Codex login is never pushed to a node: its sessions lease it.
+    for providers in [json!(["openai"]), json!(["anthropic", "openai"])] {
+        let codex = json!({"operation_id":Uuid::new_v4(),"providers":providers});
+        assert_eq!(
+            call(admin, &uri, Some(codex), None, true).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        call(admin, &uri, Some(request.clone()), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(admin, &uri, Some(request.clone()), None, true).await.1["generation"],
+        op.to_string()
+    );
+    assert_eq!(
+        call(worker, "/v1/worker/logins", Some(json!({})), None, false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, private) = call(
+        worker,
+        "/v1/worker/logins",
+        Some(json!({})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{private}");
+    assert_eq!(private["logins"][0]["material"], "synthetic-private-login");
+    let pool = f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        aq_machine_control::management::hold(&mut conn, node)
+            .await
+            .unwrap(),
+        Some("installing server subscription logins")
+    );
+    drop(conn);
+
+    let public = call(admin, "/api/worker-logins", None, None, false).await.1;
+    assert!(!public.to_string().contains("synthetic-private"));
+    assert!(!public.to_string().contains("material"));
+    (op, request)
+}
+
+async fn login_delivery_enforces_placement_and_kind(f: &common::profiled::Fixture, admin: &Router) {
+    use aq_selection::{BackendKind, CredentialKind};
+
+    #[derive(Debug)]
+    enum Denial {
+        NodeNotAllowed,
+        NotSubscriptionLogin,
+        BackendNotAllowed,
+    }
+
+    let uri = format!("/api/worker-logins/{}", f.node.node_id);
+    // Placement and credential kind remain authoritative even for an owner-requested push.
+    for denial in [
+        Denial::NodeNotAllowed,
+        Denial::NotSubscriptionLogin,
+        Denial::BackendNotAllowed,
+    ] {
+        let mut blocked = (*f.state.config).clone();
+        let mut registry = blocked.intelligence.as_ref().unwrap().config.clone();
+        let credential = &mut registry.credentials[0];
+        match denial {
+            Denial::NodeNotAllowed => credential.allowed_node_ids.clear(),
+            Denial::NotSubscriptionLogin => credential.kind = CredentialKind::ApiKey,
+            Denial::BackendNotAllowed => credential.allowed_backends = vec![BackendKind::Boat],
+        }
+        blocked.intelligence = Some(Arc::new(registry.load().unwrap()));
+        let mut state = f.state.clone();
+        state.config = Arc::new(blocked);
+        let denied = build_worker_router(state);
+        let req = json!({"operation_id":Uuid::new_v4(),"providers":["anthropic"]});
+        call(admin, &uri, Some(req), None, true).await;
+        assert_eq!(
+            call(
+                &denied,
+                "/v1/worker/logins",
+                Some(json!({})),
+                Some(&f.credential),
+                false
+            )
+            .await
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "login delivery must reject {denial:?}"
+        );
+    }
+}
+
+async fn completed_logins_release_hold_and_reject_revoked_nodes(
+    f: &common::profiled::Fixture,
+    worker: &Router,
+) {
+    let node = f.node.node_id;
     let pool = f.db.pool().await;
     let mut conn = pool.acquire().await.unwrap();
     assert!(
@@ -1417,7 +1544,7 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
         .unwrap();
     assert_eq!(
         call(
-            &worker,
+            worker,
             "/v1/worker/logins",
             Some(json!({})),
             Some(&f.credential),
@@ -1429,7 +1556,7 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
     );
     assert_eq!(
         call(
-            &worker,
+            worker,
             "/api/worker-logins",
             None,
             Some(&f.credential),

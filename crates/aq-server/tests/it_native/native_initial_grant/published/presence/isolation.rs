@@ -38,15 +38,35 @@ async fn occupy(
         .unwrap();
     (job, release)
 }
+type HeldAdmission = (
+    tokio::task::JoinHandle<axum::response::Response>,
+    oneshot::Sender<()>,
+);
+async fn occupy_all(c: &Prepared, path: &str, bytes: Vec<u8>, count: usize) -> Vec<HeldAdmission> {
+    let mut held = Vec::new();
+    for _ in 0..count {
+        held.push(occupy(c, path, bytes.clone()).await);
+    }
+    held
+}
+async fn release_all(held: Vec<HeldAdmission>) {
+    for (job, release) in held {
+        release.send(()).unwrap();
+        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
+    }
+}
 #[tokio::test]
 async fn held_inventory_admission_does_not_consume_report_or_renewal_capacity() {
     let f = setup_presence().await;
     let bytes = serde_json::to_vec(&f.inventory_request).unwrap();
     // The inventory class admits `inventory_requests` at once ([workers.limits]).
-    let mut held = Vec::new();
-    for _ in 0..aq_machine_control::limits::LaunchLimits::DEFAULT.inventory_requests {
-        held.push(occupy(&f.c, "/v1/worker/profiled/inventory-v2", bytes.clone()).await);
-    }
+    let held = occupy_all(
+        &f.c,
+        "/v1/worker/profiled/inventory-v2",
+        bytes,
+        aq_machine_control::limits::LaunchLimits::DEFAULT.inventory_requests,
+    )
+    .await;
     let (status, body) = json_post(
         &f.c,
         "/v1/worker/profiled/inventory-v2",
@@ -58,10 +78,7 @@ async fn held_inventory_admission_does_not_consume_report_or_renewal_capacity() 
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, reply) = renew(&f.c, &f.initial).await;
     assert_eq!(status, StatusCode::OK, "{reply:?}");
-    for (request, release) in held {
-        release.send(()).unwrap();
-        assert_eq!(request.await.unwrap().status(), StatusCode::OK);
-    }
+    release_all(held).await;
 }
 #[tokio::test]
 async fn held_report_admission_preserves_inventory_and_renewal_progress() {
@@ -69,10 +86,13 @@ async fn held_report_admission_preserves_inventory_and_renewal_progress() {
     let (status, body) = send_presence(&f.c, &f.report).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let bytes = serde_json::to_vec(&f.report).unwrap();
-    let mut held = Vec::new();
-    for _ in 0..aq_machine_control::limits::LaunchLimits::DEFAULT.presence_requests {
-        held.push(occupy(&f.c, "/v1/worker/profiled/material-presence", bytes.clone()).await);
-    }
+    let held = occupy_all(
+        &f.c,
+        "/v1/worker/profiled/material-presence",
+        bytes,
+        aq_machine_control::limits::LaunchLimits::DEFAULT.presence_requests,
+    )
+    .await;
     let (status, body) = send_presence(&f.c, &f.report).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     let mut inventory = f.inventory_request.clone();
@@ -82,10 +102,7 @@ async fn held_report_admission_preserves_inventory_and_renewal_progress() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, reply) = renew(&f.c, &f.initial).await;
     assert_eq!(status, StatusCode::OK, "{reply:?}");
-    for (job, release) in held {
-        release.send(()).unwrap();
-        assert_eq!(job.await.unwrap().status(), StatusCode::OK);
-    }
+    release_all(held).await;
     let seq: i64 = sqlx::query_scalar(
         "SELECT sequence FROM profiled_material_presence_heads WHERE attempt_id=$1",
     )
@@ -246,21 +263,7 @@ async fn independent_same_node_storage_heads_keep_other_present_after_one_missin
     };
     let (status, body) = send_presence(&f.c, &negative).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let heads:Vec<(Uuid,i64,i64,Vec<u8>)>=sqlx::query_as("SELECT h.attempt_id,h.sequence,h.compatibility_epoch,o.request_bytes FROM profiled_material_presence_heads h JOIN profiled_presence_operations o USING(node_id,operation_id) WHERE h.node_id=$1 ORDER BY h.attempt_id")
- .bind(f.report.identity.node_id).fetch_all(pool).await.unwrap();
-    assert_eq!(heads.len(), 2);
-    let a = heads
-        .iter()
-        .find(|h| h.0 == f.report.binding.attempt_id)
-        .unwrap();
-    let b = heads
-        .iter()
-        .find(|h| h.0 == other.binding.attempt_id)
-        .unwrap();
-    assert_eq!((a.1, b.1), (2, 1));
-    assert_eq!(a.2, b.2);
-    assert!(!decode_report(&a.3).unwrap().presence.is_present());
-    assert!(decode_report(&b.3).unwrap().presence.is_present());
+    assert_independent_heads(&f, &other).await;
     let (status, body) = send_presence(&f.c, &f.report).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let other_operation: Uuid = sqlx::query_scalar(
@@ -299,4 +302,31 @@ async fn independent_same_node_storage_heads_keep_other_present_after_one_missin
             .await
             .unwrap();
     assert!(!claim);
+}
+
+async fn assert_independent_heads(f: &Installed, other: &PresenceReport) {
+    let pool = &f.c.case.env.env.pool;
+    let heads: Vec<(Uuid, i64, i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT h.attempt_id,h.sequence,h.compatibility_epoch,o.request_bytes \
+         FROM profiled_material_presence_heads h \
+         JOIN profiled_presence_operations o USING(node_id,operation_id) \
+         WHERE h.node_id=$1 ORDER BY h.attempt_id",
+    )
+    .bind(f.report.identity.node_id)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(heads.len(), 2);
+    let (_, first_sequence, first_epoch, first_report) = heads
+        .iter()
+        .find(|h| h.0 == f.report.binding.attempt_id)
+        .unwrap();
+    let (_, other_sequence, other_epoch, other_report) = heads
+        .iter()
+        .find(|h| h.0 == other.binding.attempt_id)
+        .unwrap();
+    assert_eq!((*first_sequence, *other_sequence), (2, 1));
+    assert_eq!(first_epoch, other_epoch);
+    assert!(!decode_report(first_report).unwrap().presence.is_present());
+    assert!(decode_report(other_report).unwrap().presence.is_present());
 }

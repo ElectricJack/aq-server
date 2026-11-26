@@ -27,6 +27,7 @@ struct GraphRecovery {
     lookup_status: AtomicU16,
     has_receipt: AtomicBool,
     lookups: Mutex<Vec<Value>>,
+    active: Mutex<Value>,
 }
 
 pub(crate) struct AutoEnv {

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 pub mod decision;
 mod eligibility;
 mod validation;
+pub mod workspace;
 pub use eligibility::{EligibilityEvidence, decide, local_reasons};
 use uuid::Uuid;
 #[cfg(feature = "project_environments")]

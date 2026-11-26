@@ -166,7 +166,7 @@ fn metadata_patch(c: &Current<'_>, key: &str, value: Option<Value>) -> ApiResult
 }
 
 /// Spec 0017 §5.4: what a task needs from its environment, set or cleared by
-/// the owner until an attempt of the task has been granted.
+/// the owner before admission, or for a successor after stopped work is reconciled.
 #[cfg(feature = "project_environments")]
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -398,3 +398,6 @@ fn confirmed(raw: &Value, operations: usize, guards: usize) -> Outcome {
 fn code(raw: &Value) -> Option<&str> {
     raw.get("error")?.get("code")?.as_str()
 }
+
+#[cfg(feature = "project_environments")]
+pub(crate) mod needs;

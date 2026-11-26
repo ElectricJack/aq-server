@@ -82,6 +82,8 @@ struct Control {
     label: String,
     /// The owner's saved role text for a project supervisor, read at the start of its turn.
     role: Option<String>,
+    /// A note for a turn after one that ended without a reply, set at its start.
+    recheck: Option<String>,
 }
 type Host = Supervisor<InstalledAuthority, NativeAdapter>;
 type NativePaths<'a> = (&'a Path, &'a Digest, &'a Path);
@@ -159,6 +161,7 @@ async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
         project: r.get("project_id"),
         label: r.get("label"),
         role: None,
+        recheck: None,
     })
 }
 async fn user(pool: &PgPool, control: &Control) -> Result<User> {
@@ -208,8 +211,17 @@ fn pool_exhaustion_can_repoll_but_an_unconfirmed_turn_stays_failed() {
     )));
 }
 
-fn api_error(_: aq_server::error::AppError) -> anyhow::Error {
-    anyhow::anyhow!("Supervisor reservation or dispatch was refused")
+fn api_error(error: aq_server::error::AppError) -> anyhow::Error {
+    // Supervisor logs need the refusal status. AppError also carries request details.
+    anyhow::anyhow!(
+        "Supervisor reservation or dispatch was refused ({})",
+        error.status().as_u16()
+    )
+}
+/// The re-check note the turn after `prior` starts with (`None` when it replied or never started).
+#[cfg(feature = "test-support")]
+pub async fn recheck_note_for_testing(pool: &PgPool, prior: &Snapshot) -> Result<Option<String>> {
+    retry::recheck_note(pool, Some(prior), default_turn_retries()).await
 }
 fn now() -> u64 {
     std::time::SystemTime::now()

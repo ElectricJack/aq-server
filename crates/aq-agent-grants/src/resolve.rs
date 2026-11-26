@@ -37,6 +37,7 @@ pub fn default_coding() -> GrantSet {
         g(op::COMMENT_WRITE, TaskSubtree),
         g(op::KNOWLEDGE_AUTHOR, ProjectSelf),
         g(op::QUESTION_ASK, AttemptSelf),
+        g(op::WORKSPACE_REQUEST, AttemptSelf),
         g(op::QUESTION_READ, AttemptSelf),
         g(op::WAIT_REGISTER, AttemptSelf),
         g(op::WAIT_READ, AttemptSelf),

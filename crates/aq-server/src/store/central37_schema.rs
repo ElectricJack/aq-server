@@ -1,6 +1,7 @@
 //! Exact catalog shapes, independent of an object's surviving SQL name.
 use super::{Result, corrupt, functions};
 use sqlx::{Postgres, Row, Transaction};
+use std::borrow::Cow;
 
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     functions(tx, version).await?;
@@ -244,10 +245,20 @@ async fn triggers(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()
 async fn keys(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     // Compare full key shape, including the backing unique index's validity,
     // rather than trusting a name or merely the referenced relation.
-    let actual: Vec<String> = sqlx::query_scalar(r#"SELECT c.conrelid::regclass::text||':'||c.contype::text||':'||array_to_string(ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n,o) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.n ORDER BY k.o),',')||':'||CASE WHEN c.confrelid=0 THEN '' ELSE c.confrelid::regclass::text END||':'||COALESCE(array_to_string(ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n,o) JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.n ORDER BY k.o),','),'')||':'||c.condeferrable::text||':'||c.condeferred::text
+    let mut actual: Vec<String> = sqlx::query_scalar(r#"SELECT c.conrelid::regclass::text||':'||c.contype::text||':'||array_to_string(ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n,o) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.n ORDER BY k.o),',')||':'||CASE WHEN c.confrelid=0 THEN '' ELSE c.confrelid::regclass::text END||':'||COALESCE(array_to_string(ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n,o) JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.n ORDER BY k.o),','),'')||':'||c.condeferrable::text||':'||c.condeferred::text
         FROM pg_constraint c WHERE c.conrelid=ANY(ARRAY['central_supervisor_actors'::regclass,'central_supervisor_reservations'::regclass,'central_supervisor_mail_members'::regclass,'central_supervisor_operations'::regclass]) AND c.contype IN ('p','u','f') AND c.convalidated
         AND ((c.contype IN ('p','u') AND EXISTS(SELECT 1 FROM pg_index i WHERE i.indexrelid=c.conindid AND i.indrelid=c.conrelid AND i.indisvalid AND i.indisready AND i.indisunique AND i.indexprs IS NULL AND i.indpred IS NULL AND i.indnatts=i.indnkeyatts AND i.indnkeyatts=cardinality(c.conkey))) OR (c.contype='f' AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s' AND (SELECT count(*)=4 AND bool_and(t.tgisinternal AND t.tgenabled IN ('O','A')) FROM pg_trigger t WHERE t.tgconstraint=c.oid)))"#)
         .fetch_all(&mut **tx).await?;
+    let mut expected = expected_keys(version);
+    actual.sort();
+    expected.sort();
+    if actual != expected {
+        return Err(corrupt());
+    }
+    Ok(())
+}
+
+fn expected_keys(version: u32) -> Vec<String> {
     let mut expected = vec![
         "central_supervisor_actors:p:actor_id:::false:false".to_string(),
         "central_supervisor_actors:u:conversation_id:::false:false".to_string(),
@@ -271,8 +282,6 @@ async fn keys(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
         "central_supervisor_operations:f:actor_id:central_supervisor_actors:actor_id:false:false".to_string(),
         "central_supervisor_operations:f:initiating_user_id:users:id:false:false".to_string(),
     ];
-    let mut actual = actual;
-    actual.sort();
     if version >= 109 {
         for key in &mut expected {
             *key = key.replace(
@@ -281,11 +290,7 @@ async fn keys(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
             );
         }
     }
-    expected.sort();
-    if actual != expected {
-        return Err(corrupt());
-    }
-    Ok(())
+    expected
 }
 
 async fn indexes(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
@@ -357,24 +362,30 @@ async fn checks(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> 
         return Err(corrupt());
     }
     for (table, name, expression) in CHECKS {
-        let updated;
-        let expression: &str = if version >= 49
-            && *name == "central_supervisor_reservations_state_check"
-        {
-            "(state = ANY (ARRAY['awaiting_prepared_plan'::text, 'cancelled_before_plan'::text, 'consumed'::text]))"
-        } else if version >= 49 && *name == "central_supervisor_reservations_check2" {
-            updated = expression.replace(" OR ((state = 'cancelled_before_plan'::text)", " OR ((state = 'consumed'::text) AND (revision = 2) AND (cancel_operation_id IS NULL) AND (cancel_actor_revision IS NULL)) OR ((state = 'cancelled_before_plan'::text)");
-            &updated
-        } else {
-            expression
-        };
+        let expression = check_expression(name, expression, version);
         let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass($1) AND contype='c' AND convalidated AND NOT condeferrable AND conname=$2 AND pg_get_expr(conbin,conrelid)=$3)")
-            .bind(table).bind(name).bind(expression).fetch_one(&mut **tx).await?;
+            .bind(table).bind(name).bind(expression.as_ref()).fetch_one(&mut **tx).await?;
         if !valid {
             return Err(corrupt());
         }
     }
     Ok(())
+}
+
+fn check_expression<'a>(name: &str, expression: &'a str, version: u32) -> Cow<'a, str> {
+    if version < 49 {
+        return Cow::Borrowed(expression);
+    }
+    match name {
+        "central_supervisor_reservations_state_check" => Cow::Borrowed(
+            "(state = ANY (ARRAY['awaiting_prepared_plan'::text, 'cancelled_before_plan'::text, 'consumed'::text]))",
+        ),
+        "central_supervisor_reservations_check2" => Cow::Owned(expression.replace(
+            " OR ((state = 'cancelled_before_plan'::text)",
+            " OR ((state = 'consumed'::text) AND (revision = 2) AND (cancel_operation_id IS NULL) AND (cancel_actor_revision IS NULL)) OR ((state = 'cancelled_before_plan'::text)",
+        )),
+        _ => Cow::Borrowed(expression),
+    }
 }
 
 const CHECKS: &[(&str, &str, &str)] = &[

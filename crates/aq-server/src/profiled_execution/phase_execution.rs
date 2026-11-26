@@ -110,14 +110,23 @@ async fn validate_registry_replay(
     .fetch_one(&mut **tx)
     .await
     .map_err(db)?;
-    if registry.get::<i64, _>("revision").to_string()
-        != original.accepted.proposal.choice.registry.version.as_str()
-        || registry.get::<String, _>("config_digest")
-            != original.accepted.proposal.choice.registry.digest.as_str()
-    {
+    require_selected_registry(
+        registry.get("revision"),
+        &registry.get::<String, _>("config_digest"),
+        &original.accepted.proposal.choice.registry,
+    )?;
+    Ok(RegistrySnapshot)
+}
+
+fn require_selected_registry(
+    revision: i64,
+    digest: &str,
+    selected: &ArtifactRef,
+) -> Result<(), AppError> {
+    if revision.to_string() != selected.version.as_str() || digest != selected.digest.as_str() {
         return Err(refused());
     }
-    Ok(RegistrySnapshot)
+    Ok(())
 }
 
 // Both nominal issuers consume the same bounded initial-execution request lane.
@@ -134,4 +143,33 @@ async fn replay_preflight(
     _: &RegistrySnapshot,
 ) -> Result<Option<pinned::Pinned>, AppError> {
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frozen_replay_requires_the_selected_registry_revision_and_digest() {
+        let selected = ArtifactRef {
+            id: aq_admission::Text::new("aq.intelligence-registry").unwrap(),
+            version: aq_admission::Text::new("2").unwrap(),
+            digest: Digest::of(b"selected registry"),
+        };
+        let digest = selected.digest.as_str();
+        assert!(require_selected_registry(2, digest, &selected).is_ok());
+        for revision in [-1, 0, 1, 3, i64::MAX] {
+            assert!(require_selected_registry(revision, digest, &selected).is_err());
+        }
+        assert!(
+            require_selected_registry(2, Digest::of(b"changed registry").as_str(), &selected)
+                .is_err()
+        );
+        // Frozen replay compares the retained version verbatim, without normalization.
+        let noncanonical = ArtifactRef {
+            version: aq_admission::Text::new("02").unwrap(),
+            ..selected
+        };
+        assert!(require_selected_registry(2, noncanonical.digest.as_str(), &noncanonical).is_err());
+    }
 }
