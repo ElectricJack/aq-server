@@ -336,10 +336,11 @@ async fn node_rows(pool: &PgPool) -> Vec<Value> {
     .unwrap()
 }
 
-/// M1 residual: an owner machine action whose node-row locks time out (1 s,
-/// `OWNER_LOCK_TIMEOUT`) changed nothing, so it is a definite refusal with the
-/// reason `busy`, not an unknown outcome. The node rows are locked in id order
-/// before any write: holding the last one leaves every node and the control
+/// M1 residual: an owner machine action whose row locks time out
+/// (`owner_lock_timeout_ms`) changed nothing, so it is a definite refusal with
+/// the reason `busy`, not an unknown outcome. Stop and Drain fence the
+/// allocation rows and Revoke the node rows, each in id order before any
+/// write: holding the last of both leaves every node and the control
 /// untouched, and a later submission succeeds.
 #[tokio::test]
 async fn an_action_that_hits_the_lock_timeout_is_refused_busy_and_changes_nothing() {
@@ -349,6 +350,12 @@ async fn an_action_that_hits_the_lock_timeout_is_refused_busy_and_changes_nothin
     let mut held = pool.begin().await.unwrap();
     sqlx::query(
         "SELECT id FROM nodes WHERE machine_key='desktop' ORDER BY id DESC LIMIT 1 FOR UPDATE",
+    )
+    .execute(&mut *held)
+    .await
+    .unwrap();
+    sqlx::query(
+        "SELECT a.node_id FROM node_allocation a JOIN nodes n ON n.id=a.node_id WHERE n.machine_key='desktop' ORDER BY a.node_id DESC LIMIT 1 FOR UPDATE OF a",
     )
     .execute(&mut *held)
     .await

@@ -39,6 +39,23 @@ pub struct LaunchLimits {
     pub control_connections: usize,
     pub renewal_connections: usize,
     pub presence_connections: usize,
+    /// Waits in milliseconds. The renewal and presence pools (renewals, worker
+    /// inventory and presence reports) wait this long for a connection, and
+    /// their statements, row locks and idle transactions are bounded by the
+    /// next three. 0 turns one of those three off.
+    pub reserved_acquire_timeout_ms: u64,
+    pub reserved_statement_timeout_ms: u64,
+    pub reserved_lock_timeout_ms: u64,
+    pub reserved_idle_timeout_ms: u64,
+    /// How long after its provisioning was observed an inventory may still be recorded.
+    pub inventory_freshness_ms: u64,
+    /// Owner actions that lock node rows (machine stop or drain, owner
+    /// availability, revoke) wait this long for each lock; 0 waits without bound.
+    pub owner_lock_timeout_ms: u64,
+    /// After a revoke commits, it waits for worker requests authorized before
+    /// it to finish: this long per try (0: without bound), at most this many tries.
+    pub revoke_drain_wait_ms: u64,
+    pub revoke_drain_tries: u32,
 }
 impl LaunchLimits {
     pub const DEFAULT: Self = Self {
@@ -60,6 +77,14 @@ impl LaunchLimits {
         control_connections: 16,
         renewal_connections: 4,
         presence_connections: 4,
+        reserved_acquire_timeout_ms: 250,
+        reserved_statement_timeout_ms: 750,
+        reserved_lock_timeout_ms: 150,
+        reserved_idle_timeout_ms: 2000,
+        inventory_freshness_ms: 2000,
+        owner_lock_timeout_ms: 1000,
+        revoke_drain_wait_ms: 1000,
+        revoke_drain_tries: 10,
     };
     /// Every limit admits at least one request: zero would stop the launch path.
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -86,6 +111,14 @@ impl LaunchLimits {
         if all.iter().any(|n| !(1..=4096).contains(n)) {
             return Err("each limit must be between 1 and 4096");
         }
+        if self.reserved_acquire_timeout_ms == 0
+            || self.inventory_freshness_ms == 0
+            || self.revoke_drain_tries == 0
+        {
+            return Err(
+                "reserved_acquire_timeout_ms, inventory_freshness_ms and revoke_drain_tries must be at least 1",
+            );
+        }
         Ok(())
     }
 }
@@ -102,6 +135,10 @@ pub fn configure(limits: LaunchLimits) {
 /// The configured limits, or the defaults when none were configured.
 pub fn current() -> LaunchLimits {
     CONFIGURED.get().copied().unwrap_or_default()
+}
+/// A wait in milliseconds as a PostgreSQL setting value (`0` turns it off).
+pub fn pg_ms(ms: u64) -> String {
+    format!("{ms}ms")
 }
 /// A process-wide gate, sized by its limit when it is first entered.
 pub struct Gate {

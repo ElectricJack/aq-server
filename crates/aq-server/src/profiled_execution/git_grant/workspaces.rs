@@ -231,7 +231,7 @@ async fn list(
     let node = crate::worker_api::authenticate_context(&state, &headers).await?;
     let pool = &state.store.pool;
     let mut tx = pool.begin().await.map_err(crate::error::db)?;
-    crate::worker_api::read_current_node(&mut tx, &node).await?;
+    crate::worker_api::lock_current_node(&mut tx, &node).await?;
     let a = attempt_locked(&mut tx, id, node.id())
         .await
         .map_err(crate::error::db)?
@@ -273,8 +273,14 @@ async fn list(
         .map_err(|_| unavailable())??;
 
     let mut tx = pool.begin().await.map_err(crate::error::db)?;
-    // The node lock orders this attempt's concurrent enrollments.
     crate::worker_api::lock_current_node(&mut tx, &node).await?;
+    // The attempt row orders this attempt's concurrent enrollments.
+    sqlx::query("SELECT 1 FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 FOR UPDATE")
+        .bind(id)
+        .bind(node.id())
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::error::db)?;
     let a = attempt_locked(&mut tx, id, node.id())
         .await
         .map_err(crate::error::db)?
@@ -440,7 +446,7 @@ async fn proxy(
         })?;
     let pool: &PgPool = &state.store.pool;
     let mut tx = pool.begin().await.map_err(crate::error::db)?;
-    crate::worker_api::read_current_node(&mut tx, &node).await?;
+    crate::worker_api::lock_current_node(&mut tx, &node).await?;
     let grant = live_grant_locked(&mut tx, id, node.id(), project)
         .await
         .map_err(crate::error::db)?
@@ -516,7 +522,7 @@ async fn bundle(
     )
     .await?;
     let mut tx = pool.begin().await.map_err(crate::error::db)?;
-    crate::worker_api::read_current_node(&mut tx, node).await?;
+    crate::worker_api::lock_current_node(&mut tx, node).await?;
     let current = live_grant_locked(&mut tx, attempt, node.id(), grant.project_id)
         .await
         .map_err(crate::error::db)?

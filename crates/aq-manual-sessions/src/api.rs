@@ -184,7 +184,7 @@ async fn start(
     Ok(Json(saved))
 }
 async fn reserve_launch(conn: &mut sqlx::PgConnection, node: Uuid, spec: &Value) -> Result<()> {
-    aq_machine_control::management::lock(&mut *conn)
+    aq_machine_control::allocation::lock(&mut *conn, node)
         .await
         .map_err(management::storage)?;
     sqlx::query("SELECT pg_advisory_xact_lock(107107)")
@@ -262,7 +262,7 @@ async fn slots(
     binding(&s, project).await?;
     let request = json!({"node":node,"project":project,"body":v});
     let mut tx = s.pool.begin().await?;
-    aq_machine_control::management::lock(&mut tx)
+    aq_machine_control::allocation::lock(&mut tx, node)
         .await
         .map_err(management::storage)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,107))")

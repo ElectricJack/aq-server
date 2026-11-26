@@ -80,7 +80,8 @@ async fn publication_retries_the_same_assembly_after_a_slot_lock_timeout() {
     let c = setup().await;
     let pool = &c.env.env.pool;
     let mut lock = pool.begin().await.unwrap();
-    sqlx::query("SELECT pg_advisory_xact_lock(110110)")
+    sqlx::query("SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE")
+        .bind(c.env.env.node)
         .execute(&mut *lock)
         .await
         .unwrap();
@@ -91,7 +92,7 @@ async fn publication_retries_the_same_assembly_after_a_slot_lock_timeout() {
     let release = async {
         tokio::time::timeout(Duration::from_secs(10), async {
             while !sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted AND locktype='advisory' AND $1=ANY(pg_blocking_pids(pid)))",
+                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted AND $1=ANY(pg_blocking_pids(pid)))",
             )
             .bind(pid)
             .fetch_one(pool)
@@ -128,7 +129,8 @@ async fn a_refused_publication_releases_staging_and_retains_the_artifacts() {
     let c = setup().await;
     let pool = &c.env.env.pool;
     let mut lock = pool.begin().await.unwrap();
-    sqlx::query("SELECT pg_advisory_xact_lock(110110)")
+    sqlx::query("SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE")
+        .bind(c.env.env.node)
         .execute(&mut *lock)
         .await
         .unwrap();

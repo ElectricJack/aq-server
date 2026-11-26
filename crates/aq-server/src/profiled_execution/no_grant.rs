@@ -102,7 +102,7 @@ pub async fn close_expired(
             .await
             .map_err(|_| AppError::Internal)?;
     }
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_optional(&mut *tx)
         .await

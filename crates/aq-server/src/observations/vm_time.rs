@@ -48,17 +48,17 @@ pub async fn record(
     if kind.as_deref() != Some("boat") {
         return Err(Error::Refused);
     }
-    let owns: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2)",
+    let owns: Option<Uuid> = sqlx::query_scalar(
+        "SELECT attempt_id FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 FOR UPDATE",
     )
     .bind(fact.attempt_id)
     .bind(node.id())
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
-    if !owns {
+    if owns.is_none() {
         return Err(Error::Refused);
     }
-    // The node lock serializes first inserts, exact replays and the one stop
+    // The attempt lock serializes first inserts, exact replays and the one stop
     // transition, including reports racing on another sandbox for this attempt.
     let previous: Option<Value> = sqlx::query_scalar(
         "SELECT fact FROM accounting_vm_time WHERE node_id=$1 AND (sandbox_id=$2 OR attempt_id=$3)",

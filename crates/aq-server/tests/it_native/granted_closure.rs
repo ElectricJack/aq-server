@@ -579,7 +579,7 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
     let pending =
         tokio::spawn(async move { service::record(&state, &owner, &node, &request).await });
     tokio::time::timeout(std::time::Duration::from_millis(400),async {
-  loop {let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event IS NOT NULL AND query LIKE 'SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR UPDATE%')").fetch_one(&c.case.env.env.pool).await.unwrap();if waiting{break}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+  loop {let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event IS NOT NULL AND query LIKE 'SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR KEY SHARE%')").fetch_one(&c.case.env.env.pool).await.unwrap();if waiting{break}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
  }).await.expect("observe current credential lock wait inside500ms SQL bound");
     sqlx::query("UPDATE nodes SET credential_hash=$2 WHERE id=$1")
         .bind(auth.id())

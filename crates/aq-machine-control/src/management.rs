@@ -26,15 +26,6 @@ async fn at_least(conn: &mut PgConnection, minimum: u32) -> Result<bool, Error> 
     Ok(version.parse::<u32>().unwrap_or(0) >= minimum)
 }
 
-pub async fn lock(conn: &mut PgConnection) -> Result<(), Error> {
-    if available(conn).await? {
-        sqlx::query("SELECT pg_advisory_xact_lock(110110)")
-            .execute(conn)
-            .await?;
-    }
-    Ok(())
-}
-
 pub async fn settings(conn: &mut PgConnection) -> Result<Vec<Setting>, Error> {
     if !available(conn).await? {
         return Ok(Vec::new());
