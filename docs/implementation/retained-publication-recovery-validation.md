@@ -275,3 +275,109 @@ for p in paths:
 print(len(paths), h.hexdigest())
 PY
 ```
+
+## Supplied-tree repair and validation, 2026-11-26
+
+The runner labels this input as retained commit
+`8556fd04d03413264f854a4857db1ddd13ac15b9`. There is still no Git metadata,
+so that label cannot be independently resolved here. The supplied snapshot
+contains 2589 Rust/SQL/TOML/lock files with initial fingerprint
+`14d42b876d3e91bcdd92b135eb47b90d190156d507470da2ffca853736e60812`.
+The final source fingerprint, using the algorithm above, is
+`e5da17b63977afd921ae09fc1d666963186161f1c47a80654b54819d15d1b51d`
+(2589 files). The final CI workflow SHA256 is
+`1f3cf0ec37029fa1b11c97afe84576ef5cfecf9d84d2120195da21ebcf844d97`.
+Earlier sections describe earlier snapshots and checks, not this run.
+
+This follow-up resolves supplied conflict markers in the delivery host imports,
+registry tests and CI selector. It preserves both registry tests and both CI
+selectors, including the publication recovery module. The obsolete `REFRESHES`
+import is removed and the dispatch fence's required `Run` import is retained.
+
+The bridge now recovers an original `already_present` receipt attesting
+containment at a later head, preserving that observed OID without attributing
+the push to the operation. It still validates the original request's repository,
+binding generation, task ref, source commit, remote-head lease and payload hash.
+Reconciliation refuses contradictory outcome/resolution responses and normalizes
+observation timestamps before returning or retaining them. Inspection returns
+only the frozen target's validated Git binding, excluding forge labels. New
+socket cases cover containment, invalid/causal acknowledgments, mismatched
+operation IDs, contradictory resolutions and a 20,000-digit fractional timestamp.
+They assert that no publication or forge request occurs. The classification
+matrix additionally exercises `non_fast_forward`, `stale_lease` and `unknown`.
+
+The supplied tree also contains another migration 0179 and a sequence through
+0184. The repair's migration is now
+`0185_retained_publication_recovery.sql`. Because the normal renumbering CLI
+requires missing Git history, this run used the repository script's existing
+`rewriter`, `rewrite_lines` and `apply_changes` helpers after asserting that
+all supplied migrations except this repair form exactly 0001–0184. A byte
+comparison confirms the SQL text changes only `value='179'` to `value='185'`;
+the dispatch fences, immutable journals and receipts are preserved. The advisory
+lock salt 179 is unchanged. No other task's migration or build budget was edited.
+Historical 0179 references and 179-migration check results above remain historical.
+
+All Cargo invocations below set `CARGO_TARGET_DIR=/tmp/aq-target` and
+`CARGO_HOME=/tmp/aq-cargo`. Download and helper bytecode caches are under `/tmp`.
+
+| Exact command | Actual outcome in this run |
+| --- | --- |
+| `cargo test -p aq-delivery --features delivery_playbook --lib github::tests::commands::retained_publication:: --locked` | Initial exit 101 on supplied host conflict markers. After resolving those, exit 101 with 9 passed and the 2 new regressions failing (containment held; timestamp evidence unbounded). After the fixes and expanded classification matrix, exit 0: all 11 passed. |
+| `cargo test -p aq-delivery --features delivery_playbook --lib --locked` | Exit 0: 121 passed, including both new regressions. The subsequent classification-only matrix expansion was verified by the 11-test rerun above. |
+| `cargo test -p aq-command-registry --features delivery_playbook,supervisor_full_access --lib --locked` | Exit 0: 24 passed, including both tests preserved from the supplied conflict. |
+| `cargo test -p aq-supervisor-control --features delivery_playbook,supervisor_full_access --lib retained_publication --locked` | Exit 0: 1 passed, 36 filtered out; own-project inspection/reconciliation paths accepted and cross-project paths refused. |
+| `cargo clippy -p aq-delivery -p aq-command-registry --features delivery_playbook,supervisor_full_access --lib --tests --locked -- -D warnings` | Exit 0: changed libraries and tests checked with warnings denied. |
+| `cargo fmt --all -- --check` | Exit 0 on the final Rust source. |
+| `python3 scripts/migration_catalog.py` | Initially exit 1: duplicate 0179. After renumbering only this repair, exit 0: 185 contiguous migrations. |
+| `PYTHONPYCACHEPREFIX=/tmp/aq-python-cache python3 scripts/renumber-migrations.py --check` | Exit 2: no Git repository/merge-base with `origin/main`. Normal main-relative validation remains unrun. |
+
+The inline Python CI selector assertion passed: the resolved workflow retains
+`--test it_profiled`, the publication recovery filter and the supplied successor
+test filter, and the three conflict files contain no markers. A full YAML parse
+was unavailable (`ModuleNotFoundError: yaml`); attempting a temporary parser
+installation with `python3 -m pip install --cache-dir /tmp/aq-pip-cache --target
+/tmp/aq-yaml PyYAML==6.0.3` also failed because this sandbox has no `pip`.
+The workflow diff was read directly. No workflow execution is claimed.
+
+Authenticated evidence was refreshed using the exact command:
+
+```sh
+aq run result.review.show --param project_id=a22afccc-d61a-5f77-aef8-9fd73311c68a --param report_id=68d19730-4db8-4668-855b-d3e9572d5050 --param revision=f4b26ac1956b58997c0faca587f675453b20c9fb127da61dbf701b038f2b7b19 --json
+```
+
+It again binds that result/revision to repository
+`97a459e3-e35f-5af0-85c0-1c095b50519c` and retained commit
+`ac8b015d6dfaaa0aa7850d2e7ff13a2d20285cdd`, with empty `source_receipt_ids`.
+Separate `aq operation show dfd8cb53-9b5e-833c-bfe8-f32b36408c66 --json`
+and `aq operation show de4542bf-b430-8e57-a85e-9eb6f957679d --json` calls
+both returned HTTP 404 `not_found` in the separate supervisor journal. Neither
+read proves the original publisher accepted or rejected anything. The scoped
+`aq commands` registry does not expose the private-journal bridge commands;
+runtime classification capability and the actual rejection class remain
+unverified. Source fixtures are not deployed capability evidence.
+
+Direct protocol coordination with supervisor
+`842211df-4633-4bae-b559-96382fa70912` was refused with `not_found`; the request
+to relay/reuse existing inspection task `8cb39922` and the bounded access
+findings were queued to global conversation
+`ea5785f9-3da2-4bf4-8f64-e9558147b2f3` as message
+`81170658-8397-4191-b704-995b512a3858`, cursor 239. No duplicate repair was created.
+
+`DATABASE_URL` remains unset. Database integration execution, migration
+application, full-workspace/server qualification, CodeScene and main-relative
+build budgets were not run. Release requires normal review/CI, a numbering
+check against current main, and operator-provided access through the existing
+authenticated owner/project-supervisor bridge to the **original** AQ Git private
+socket/journal. The runtime must independently advertise
+`publication_rejection_classification_v1` to support classification. Any live
+observation-only reconciliation needs a separate decision bound to the original
+operation, repository/binding generation and exact retained result/revision.
+The actual refusal may require an additional narrow operator policy decision;
+the available evidence cannot identify it. No live reconciliation, redispatch,
+worker retry, permission/credential/host change, hold release, merge, deployment,
+commit or push occurred. The source diff was read against saved originals in
+`/tmp` because Git metadata is absent.
+
+The final source/check/limit handoff was queued to the same global conversation
+as message `07aa6dbc-36b6-4f89-8c0e-3b20e3d9aad8`, cursor 240. This records
+mailbox delivery only; it does not assert recipient review or task acceptance.

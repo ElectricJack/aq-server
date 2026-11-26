@@ -389,7 +389,8 @@ impl GitPort for SocketGit {
                             .is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
                 }
                 Some("already_present") => {
-                    reply["observed_target"] == params["expected_source"]
+                    // The bound publisher also attests containment at a later head.
+                    sha1_hex(&reply["observed_target"]).is_ok_and(|oid| oid != "0".repeat(40))
                         && reply["caused_by_this_operation"] == false
                         && reply["observed_at"]
                             .as_str()
@@ -426,7 +427,7 @@ impl GitPort for SocketGit {
                 json!({"outcome":"applied","target":reference,"old":params["expected_old"],"new":params["expected_source"],
                     "acknowledged_at":reply["acknowledged_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.to_rfc3339())})
             } else {
-                json!({"outcome":"already_present","observed_target":params["expected_source"],"caused_by_this_operation":false,
+                json!({"outcome":"already_present","observed_target":{"algorithm":"sha1","hex":sha1_hex(&reply["observed_target"])?},"caused_by_this_operation":false,
                     "observed_at":reply["observed_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.to_rfc3339())})
             }
         } else {
@@ -482,15 +483,18 @@ impl GitPort for SocketGit {
             return Err(GitFailure::protocol());
         }
         let resolution = &reply["resolution"];
-        if resolution["outcome"] == "already_present"
+        let observed_at = resolution["observed_at"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.to_rfc3339());
+        if reply["outcome"].is_null()
+            && resolution["outcome"] == "already_present"
             && sha1_hex(&resolution["observed_target"]).is_ok_and(|oid| oid != "0".repeat(40))
             && resolution["caused_by_this_operation"] == false
-            && resolution["observed_at"]
-                .as_str()
-                .is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
+            && observed_at.is_some()
         {
             return Ok(
-                json!({"state":"published","head":source,"observed_head":resolution["observed_target"]["hex"],"caused_by_this_operation":false,"observed_at":resolution["observed_at"]}),
+                json!({"state":"published","head":source,"observed_head":resolution["observed_target"]["hex"],"caused_by_this_operation":false,"observed_at":observed_at}),
             );
         }
         // A moved/absent ref or a lost read remains uncertain, never a fabricated rejection.

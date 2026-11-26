@@ -86,9 +86,14 @@ correction. These tools cannot make that change. Ambiguous acknowledgments
 remain indeterminate, with no inferred rejection class.
 Unknown phases are returned as null. Future recorded rejection-class values are
 reported as nonactionable `unknown`; absent historical fields stay unrecorded.
+The frozen target projection contains only its validated repository ID and
+binding generation; forge labels and the rest of the stored request stay private.
 An original successful journal read includes a bounded `receipt` with verified
 target/old/new/time for `applied`, or observed head/time and no causation claim
-for `already_present`. Invalid or missing acknowledgments never create receipts.
+for `already_present`. The latter may identify a later head containing the
+candidate, as attested by the bound original publisher. Recovery preserves that
+observed head separately from the retained result commit. Invalid or missing
+acknowledgments never create receipts, and returned timestamps are normalized.
 
 ## Recover a receipt after separate operator authorization
 
@@ -108,10 +113,12 @@ receipt is lost, the request and generation survive. Only pending
 observe/fetch operation; the original publication is never sent again.
 An already validated successful original receipt is recovered directly.
 `already_present` is recorded without a causation claim. A changed, absent or
-unobservable remote remains held and uncertain. A definitive rejection stays
+unobservable remote remains held and uncertain. Contradictory reconciliation
+responses containing both an unresolved outcome and a resolution remain uncertain.
+A definitive rejection stays
 held with its bounded diagnostic and required operator action.
 
-Migration 0179 records immutable dispatch fences, frozen recovery requests and
+Migration 0185 records immutable dispatch fences, frozen recovery requests and
 receipts. It fences existing publication intents before the upgraded driver runs.
 New dispatches are reserved only after read-only PR preflight succeeds. Historical refusals remain intact. New publication UUIDs cannot evade
 the exact-result dispatch fence. A recovered receipt can re-enter the existing
@@ -139,6 +146,9 @@ not authority to change credentials.
 
 Before release, the operator must approve the reviewed server change/migration
 and verify access to the original private socket and its runtime capability.
+The repair migration was renumbered from 0179 to 0185 after the supplied tree
+introduced another 0179 and migrations through 0184. Recheck that numbering
+against current main before release; this sandbox has no Git history.
 Before using recovery, obtain a separate decision for the exact original
 operation and result. Any remote-policy correction or later publication retry
 requires its own explicit decision. Existing source leases and review gates

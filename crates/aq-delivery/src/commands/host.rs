@@ -6,13 +6,8 @@
 //! and the completion event). Nothing here decides anything about a result.
 use super::{
     Completion, Delivery, DeliveryTarget, FrozenCommand, GitTarget, MergeGuard,
-<<<<<<< HEAD
-    PullRequestObserved, REFRESHES, Refreshed, Run, SocketGit, Step, TaskOperation, bounded_text,
+    PullRequestObserved, Refreshed, Run, SocketGit, Step, TaskOperation, bounded_text,
     bounded_wait_ms, merge_method, without_delivery, without_target,
-=======
-    PullRequestObserved, Refreshed, SocketGit, Step, TaskOperation, bounded_text, bounded_wait_ms,
-    merge_method, without_delivery, without_target,
->>>>>>> refs/remotes/central/main
 };
 use crate::DeliveryError;
 use crate::github::{GitHubApp, GitHubAppConfig};

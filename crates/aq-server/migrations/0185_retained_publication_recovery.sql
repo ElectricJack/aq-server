@@ -43,4 +43,4 @@ CREATE TRIGGER retained_publication_dispatch_immutable BEFORE UPDATE OR DELETE O
  FOR EACH ROW EXECUTE FUNCTION delivery_immutable();
 CREATE TRIGGER retained_publication_recovery_immutable BEFORE UPDATE OR DELETE ON retained_publication_recoveries
  FOR EACH ROW EXECUTE FUNCTION delivery_immutable();
-UPDATE meta SET value='179' WHERE key='state_format_version';
+UPDATE meta SET value='185' WHERE key='state_format_version';

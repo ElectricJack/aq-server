@@ -807,7 +807,6 @@ fn owner_commands_follow_the_supervisor_route_policy() {
     }
 }
 
-<<<<<<< HEAD
 #[cfg(feature = "delivery_playbook")]
 #[test]
 fn publication_recovery_exposes_only_scoped_owner_routes_and_keeps_the_original_identity() {
@@ -836,7 +835,9 @@ fn publication_recovery_exposes_only_scoped_owner_routes_and_keeps_the_original_
     let schema = params_schema(c.owner.as_ref().unwrap(), &BTreeMap::new(), c.name);
     for key in ["force", "retry", "resolve", "release", "accept"] {
         assert!(schema["properties"].get(key).is_none());
-=======
+    }
+}
+
 #[test]
 fn workspace_commands_resolve_the_owner_paths_and_bind_the_reviewed_pin() {
     let registry = Registry::new(&actions()).unwrap();
@@ -928,6 +929,5 @@ fn workspace_commands_resolve_the_owner_paths_and_bind_the_reviewed_pin() {
         assert_eq!(forwarded.method, "GET");
         assert_eq!(forwarded.uri, path);
         assert!(command.agent.is_none() && command.supervisor.is_none());
->>>>>>> refs/remotes/central/main
     }
 }

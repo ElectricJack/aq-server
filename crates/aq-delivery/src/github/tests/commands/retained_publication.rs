@@ -306,6 +306,14 @@ async fn rejection_class_requires_runtime_capability_and_a_definitive_original_o
             Some("hook_declined"),
             Some("hook_declined"),
         ),
+        (
+            true,
+            "complete",
+            Some("non_fast_forward"),
+            Some("non_fast_forward"),
+        ),
+        (true, "complete", Some("stale_lease"), Some("stale_lease")),
+        (true, "complete", Some("unknown"), Some("unknown")),
         (false, "complete", Some("hook_declined"), None),
         (true, "complete", None, None),
         (true, "pending", Some("hook_declined"), None),
@@ -416,4 +424,138 @@ async fn original_success_is_recovered_only_with_valid_bound_oids_and_time() {
             .iter()
             .all(|op| matches!(op.as_str(), "operation.show" | "capabilities"))
     );
+}
+
+#[tokio::test]
+async fn original_containment_receipt_is_recovered_without_republication_or_causation() {
+    let original = Uuid::from_u128(9);
+    let state = Arc::new(Mutex::new(Value::Null));
+    let reply = state.clone();
+    let git = FakeGit::start(move |r| {
+        if r["operation"] == "capabilities" {
+            json!({})
+        } else {
+            reply.lock().unwrap().clone()
+        }
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let present = json!({"outcome":"already_present","observed_target":{"algorithm":"sha1","hex":sha('b'),"private_field":"private publisher metadata"},
+        "observed_at":"2026-11-25T15:00:00Z","caused_by_this_operation":false});
+    for (field, value, published) in [
+        ("observed_target", present["observed_target"].clone(), true),
+        (
+            "observed_target",
+            json!({"algorithm":"sha1","hex":"0".repeat(40)}),
+            false,
+        ),
+        (
+            "observed_target",
+            json!({"algorithm":"sha256","hex":sha('b')}),
+            false,
+        ),
+        ("caused_by_this_operation", json!(true), false),
+        ("observed_at", Value::Null, false),
+    ] {
+        let mut outcome = present.clone();
+        outcome[field] = value;
+        *state.lock().unwrap() = journal_reply(original, "complete", outcome);
+        let journal = delivery
+            .inspect_publication(&target(), original, TASK, None, &sha('a'))
+            .await;
+        assert_eq!(journal["published"], published, "{field}");
+        let recovered = delivery
+            .reconcile_publication(&target(), Uuid::new_v4(), original, &sha('a'), &journal)
+            .await;
+        assert_eq!(
+            recovered["state"],
+            if published { "published" } else { "held" }
+        );
+        if published {
+            assert_eq!(
+                journal["receipt"]["observed_target"],
+                json!({"algorithm":"sha1","hex":sha('b')})
+            );
+            assert!(!journal.to_string().contains("private publisher metadata"));
+            assert_eq!(journal["receipt"]["caused_by_this_operation"], false);
+            assert_eq!(recovered["head"], sha('a'));
+            assert_eq!(recovered["caused_by_this_operation"], false);
+        } else {
+            assert!(journal["receipt"].is_null());
+        }
+    }
+    assert!(
+        git.operations()
+            .iter()
+            .all(|op| matches!(op.as_str(), "operation.show" | "capabilities"))
+    );
+    assert!(mock.seen().is_empty());
+}
+
+#[tokio::test]
+async fn reconciliation_requires_one_unambiguous_receipt_and_bounds_observation_time() {
+    let original = Uuid::from_u128(9);
+    let state = Arc::new(Mutex::new(Value::Null));
+    let reply = state.clone();
+    let git = FakeGit::start(move |r| {
+        assert_eq!(r["operation"], "operation.reconcile");
+        assert_eq!(
+            r["params"],
+            json!({"target_operation_id":original,"expected_generation":7})
+        );
+        reply.lock().unwrap().clone()
+    });
+    let (delivery, mock) = delivery(&git).await;
+    // Fractional digits accepted by RFC3339 parsing must not escape the receipt bound.
+    let long_time = format!("2026-11-25T15:00:00.{}Z", "0".repeat(20_000));
+    let present = json!({"target_operation_id":original,"resolution":{"outcome":"already_present",
+        "observed_target":{"algorithm":"sha1","hex":sha('b')},"observed_at":long_time,"caused_by_this_operation":false}});
+    for (field, value, published) in [
+        ("outcome", Value::Null, true),
+        ("outcome", json!("indeterminate"), false),
+        ("outcome", json!("already_present"), false),
+        ("target_operation_id", json!(Uuid::new_v4()), false),
+        ("resolution.outcome", json!("applied"), false),
+        ("resolution.caused_by_this_operation", json!(true), false),
+        ("resolution.observed_at", Value::Null, false),
+        (
+            "resolution.observed_target",
+            json!({"algorithm":"sha1","hex":"0".repeat(40)}),
+            false,
+        ),
+    ] {
+        let mut response = present.clone();
+        if let Some(field) = field.strip_prefix("resolution.") {
+            response["resolution"][field] = value;
+        } else {
+            response[field] = value;
+        }
+        *state.lock().unwrap() = response;
+        let observation = delivery
+            .reconcile_publication(
+                &target(),
+                Uuid::new_v4(),
+                original,
+                &sha('a'),
+                &json!({"status":"pending","phase":"indeterminate","generation":7}),
+            )
+            .await;
+        assert_eq!(
+            observation["state"],
+            if published { "published" } else { "held" },
+            "{field}"
+        );
+        assert!(observation.to_string().len() < 1024);
+        if published {
+            assert_eq!(observation["observed_head"], sha('b'));
+            assert_eq!(observation["head"], sha('a'));
+            assert_eq!(observation["observed_at"], "2026-11-25T15:00:00+00:00");
+            assert_eq!(observation["caused_by_this_operation"], false);
+        }
+    }
+    assert!(
+        git.operations()
+            .iter()
+            .all(|op| op == "operation.reconcile")
+    );
+    assert!(mock.seen().is_empty());
 }

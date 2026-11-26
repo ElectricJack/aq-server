@@ -361,7 +361,7 @@ pub async fn inspect_operation(
         .bind(identity.report_id).bind(original).fetch_optional(pool).await?;
     Ok(
         json!({"publication":summary(original,row.get("status"),&request,&row.get::<Option<Value>,_>("output").unwrap_or(Value::Null)),
-        "frozen_target":request["publication_target"],"recovery_receipt":receipt,
+        "frozen_target":request["publication_target"]["git"],"recovery_receipt":receipt,
         "publisher":delivery.inspect_publication(target,original,identity.task_id,request["expected_old"].as_str(),&identity.head).await}),
     )
 }
