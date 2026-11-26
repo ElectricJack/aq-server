@@ -206,6 +206,16 @@ impl CapabilitySources<'_> {
                 "Session event inspection requires a mounted observation owner and bounded session visibility",
             ),
             capability(
+                "attention.read",
+                a.owner,
+                "The full Needs you list requires an owner account",
+            ),
+            capability(
+                "attention.dismiss",
+                a.owner,
+                "Clearing Needs you entries requires an owner account",
+            ),
+            capability(
                 "projects.read",
                 a.owner,
                 "Project inspection requires an owner account",

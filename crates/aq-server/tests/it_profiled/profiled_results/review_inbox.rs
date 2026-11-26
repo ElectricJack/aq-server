@@ -414,6 +414,199 @@ async fn overview_attention_lists_waiting_decision_and_failed_task() {
     env.peer.abort();
 }
 
+async fn send(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    email: &str,
+    body: Option<Value>,
+) -> (u16, Value) {
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-aq-dev-email", email)
+        .header("x-aq-request", "1")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            body.map(|b| b.to_string()).unwrap_or_default(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), 1048576)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn attention_ids(items: &Value) -> Vec<String> {
+    let mut ids: Vec<String> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Owner report: the overview counted entries that View All did not list and
+/// nothing could clear. The list is now the overview's own list, and only an
+/// informational entry can be cleared, never a pending decision.
+#[tokio::test]
+async fn view_all_matches_the_overview_and_clearing_never_touches_a_decision() {
+    let owner = "owner@localhost";
+    let env = Box::pin(review_env_for_outcome(1, None, false, true)).await;
+    let request = admit_decision(&env).await;
+    let app = aq_server::build_admin_router_with_policy_owners(
+        env.f.state.clone(),
+        None,
+        Some(Arc::new(env.service.clone())),
+    );
+    let overview = overview_as(&app, "/api/v1/overview", owner).await;
+    let list = overview_as(&app, "/api/v1/attention", owner).await;
+    let entries = &overview["data"]["attention"];
+    assert!(entries.as_array().unwrap().len() >= 2, "{overview}");
+    assert_eq!(
+        attention_ids(&list["data"]["items"]),
+        attention_ids(entries)
+    );
+    assert_eq!(
+        list["data"]["total"],
+        overview["data"]["counts"]["needs_you"]
+    );
+    assert_eq!(list["data"]["has_more"], false);
+    let names = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["source"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(&list["data"]["sources"]),
+        names(&overview["data"]["sources"])
+    );
+    // Paging visits every entry once, whatever the page size.
+    let mut seen = vec![];
+    let mut path = "/api/v1/attention?limit=1".to_owned();
+    loop {
+        let page = overview_as(&app, &path, owner).await;
+        let items = page["data"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{page}");
+        seen.push(items[0].clone());
+        match page["data"]["next_cursor"].as_str() {
+            Some(next) => path = format!("/api/v1/attention?limit=1&cursor={next}"),
+            None => break,
+        }
+    }
+    assert_eq!(attention_ids(&json!(seen)), attention_ids(entries));
+    let failed_only = overview_as(&app, "/api/v1/attention?kind=failed", owner).await;
+    assert_eq!(failed_only["data"]["total"]["value"], 1);
+    assert_eq!(failed_only["data"]["items"][0]["kind"], "failed");
+    for bad in [
+        "/api/v1/attention?kind=nonsense",
+        "/api/v1/attention?cursor=nonsense",
+        "/api/v1/attention?limit=0",
+    ] {
+        assert_eq!(send(&app, "GET", bad, owner, None).await.0, 422, "{bad}");
+    }
+
+    let find = |kind: &str| {
+        entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["kind"] == kind)
+            .cloned()
+            .unwrap()
+    };
+    let (decision, failed) = (find("decision"), find("failed"));
+    assert!(decision.get("dismissible").is_none(), "{decision}");
+    assert_eq!(failed["dismissible"], true);
+    let dismissals = "/api/v1/attention/dismissals";
+    // A pending decision cannot be cleared: it stays listed and open.
+    let (status, body) = send(
+        &app,
+        "POST",
+        dismissals,
+        owner,
+        Some(json!({"attention_id": decision["id"]})),
+    )
+    .await;
+    assert_eq!(
+        (status, &body["code"]),
+        (409, &json!("attention_not_dismissible"))
+    );
+    let open = env.service.inbox(env.f.actor, &query()).await.unwrap();
+    assert_eq!(open.items[0].decision_id, request.decision_id);
+    assert_eq!(open.items[0].state, "pending");
+    // Not an owner, and not a body the route accepts.
+    let pool = env.f.db.pool().await;
+    sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'attention-viewer@localhost','viewer','dev','attention-viewer@localhost',now())").bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+    let clear = json!({"attention_id": failed["id"]});
+    let viewer = "attention-viewer@localhost";
+    let (status, _) = send(&app, "POST", dismissals, viewer, Some(clear.clone())).await;
+    assert_eq!(status, 403);
+    for bad in [
+        json!({}),
+        json!({"attention_id": ""}),
+        json!({"attention_id": failed["id"], "x": 1}),
+    ] {
+        let (status, _) = send(&app, "POST", dismissals, owner, Some(bad)).await;
+        assert_eq!(status, 422);
+    }
+    // Clearing the failed result hides it from both views at once and persists.
+    let before = overview["data"]["counts"]["needs_you"]["value"]
+        .as_u64()
+        .unwrap();
+    let (status, body) = send(&app, "POST", dismissals, owner, Some(clear.clone())).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["newly_dismissed"], true);
+    let (status, body) = send(&app, "POST", dismissals, owner, Some(clear)).await;
+    assert_eq!((status, &body["newly_dismissed"]), (200, &json!(false)));
+    // An entry the overview no longer lists can still be cleared.
+    let stale = json!({"attention_id": format!("result:{}:{}", Uuid::new_v4(), Uuid::new_v4())});
+    assert_eq!(
+        send(&app, "POST", dismissals, owner, Some(stale)).await.0,
+        200
+    );
+    let reloaded = aq_server::build_admin_router_with_policy_owners(
+        env.f.state.clone(),
+        None,
+        Some(Arc::new(env.service.clone())),
+    );
+    for router in [&app, &reloaded] {
+        let after = overview_as(router, "/api/v1/overview", owner).await;
+        let list = overview_as(router, "/api/v1/attention", owner).await;
+        let remaining = &after["data"]["attention"];
+        assert!(
+            !remaining
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["id"] == failed["id"])
+        );
+        assert!(
+            remaining
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["id"] == decision["id"])
+        );
+        assert_eq!(after["data"]["counts"]["needs_you"]["value"], before - 1);
+        assert_eq!(
+            attention_ids(&list["data"]["items"]),
+            attention_ids(remaining)
+        );
+        assert_eq!(list["data"]["total"], after["data"]["counts"]["needs_you"]);
+    }
+    env.peer.abort();
+}
+
 async fn assert_overview_authorization_and_partial_sources(
     env: &ReviewEnv,
     app: &axum::Router,

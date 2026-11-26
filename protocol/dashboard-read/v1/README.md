@@ -237,3 +237,34 @@ attempts whose compute is not proven stopped plus live claimed manual sessions;
 settlement may remain visible as finishing history without occupying compute.
 Machines retain independent child nodes, each with its own count. These are
 capacity facts, not proof that an unknown attempt stopped or permission to launch.
+
+## Needs you: View All and clearing
+
+`GET /api/v1/attention[?scope=…&kind=…&limit=1..100&cursor=…]` returns the
+whole overview attention list, paged (`Envelope<AttentionPage>`, capability
+`attention.read`). It is built by the same code as `GET /api/v1/overview`, from
+the same owners and with the same cleared-entry filter, so the overview
+`needs_you` count and this list agree. `total` counts the entries matching
+`kind` (exact, estimated or unknown with the same rule as `needs_you`; unknown,
+never zero, while the decision owner is unavailable), and `sources` carries the
+overview's per-source coverage so a partial list is not read as complete. Order
+is fixed (decisions, questions, uncertain operations, blocked, failed, internal
+work, offline workers; then id). The cursor is the last returned entry's sort
+key, so it stays valid when entries are resolved or cleared between requests;
+a malformed cursor or unknown `kind` is a 422. A non-owner receives the same
+hidden overview coverage (`owner_visibility_required`) with an unknown total.
+
+An entry with `dismissible: true` is informational (a retained failed process
+result, or failed internal work) and may be cleared with
+`POST /api/v1/attention/dismissals` and body `{"attention_id": "<item id>"}`
+(capability `attention.dismiss`, owner only). Clearing is a per-user
+notification state kept in the server's database, so it persists across
+refreshes and the overview count and list update at once. It is idempotent
+(`newly_dismissed` is false on a repeat), an id the overview no longer lists
+(stale or already resolved) can still be cleared, and a new failure has a new id
+and shows again. Clearing never approves, releases, cancels or otherwise decides
+the record behind the entry. Decisions, questions, uncertain operations, blocked
+work and offline workers are not dismissible: the request is refused with 409
+`attention_not_dismissible`, and they stay listed until resolved through their
+own controls. At most 5,000 cleared ids are kept per user (the oldest are
+forgotten first).

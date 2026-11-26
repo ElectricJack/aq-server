@@ -59,6 +59,18 @@ bootstrap["data"]["principal"]["authorization_revision"] = "sha256:" + "a" * 64
 assert not jsonschema.Draft202012Validator(schema).is_valid(bootstrap)
 print("Owner overview, null transition time, reference digest pins and strict numeric revisions checked")
 
+# View All: the attention page carries the overview's entries, in order, with the
+# overview's per-source coverage; only informational entries are clearable.
+attention = json.loads((root / "fixtures" / "attention-nonempty.json").read_text())
+jsonschema.validate(attention, schema)
+items = attention["data"]["items"]
+assert attention["data"]["total"]["value"] == len(items) and not attention["data"]["has_more"]
+assert all(i.get("dismissible", False) == (i["kind"] == "failed") for i in items)
+invalid = deepcopy(attention)
+invalid["data"]["extra"] = True
+assert not jsonschema.Draft202012Validator(schema).is_valid(invalid)
+print("Attention page fixture, clearable entries and invalid fields checked")
+
 search = json.loads((root / "fixtures" / "search.json").read_text())
 jsonschema.validate(search, schema)
 assert {g["type"] for g in search["data"]["groups"]} == {"task", "session", "result", "playbook", "knowledge"}

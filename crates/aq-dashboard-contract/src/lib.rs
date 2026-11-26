@@ -1,5 +1,6 @@
 //! dashboard-read-1 projections. These read claims never grant execution/control.
 pub mod action_contract;
+pub mod attention;
 pub mod capabilities;
 pub mod feedback_contract;
 pub mod overview;
@@ -378,7 +379,7 @@ pub struct Overview {
     #[serde(default)]
     pub sources: Vec<SourceObservation>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionKind {
     Decision,
@@ -411,6 +412,13 @@ pub struct AttentionItem {
     pub since: Option<Timestamp>,
     pub subject: EntityRef,
     pub action: Option<ActionDescriptor>,
+    /// True when the entry is informational and may be cleared with
+    /// `POST /api/v1/attention/dismissals`. Clearing hides this notification
+    /// for the caller only; it never resolves the underlying record. Absent
+    /// (false) for unresolved decisions and other entries that need their own
+    /// controls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissible: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -872,6 +880,8 @@ pub enum Response {
     Session(Box<Envelope<SessionDetail>>),
     SessionOperations(Box<Envelope<SessionOperations>>),
     Projects(Envelope<Page<ProjectRef>>),
+    Attention(Envelope<attention::AttentionPage>),
+    AttentionDismissal(attention::AttentionDismissal),
     QuestionInbox(QuestionInboxPage),
     QuestionDetail(Box<QuestionInboxDetail>),
 }

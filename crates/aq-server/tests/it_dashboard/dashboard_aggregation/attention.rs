@@ -70,7 +70,8 @@ async fn owner_escalated_internal_run_is_an_attention_item_pointing_at_the_affec
             "impact": "Review the owning record for current context",
             "since": "1970-01-01T00:00:02.000Z",
             "subject": {"type": "task", "id": task},
-            "action": null
+            "action": null,
+            "dismissible": true
         })
     );
     assert_eq!(items[0]["project"]["id"], json!(project));
@@ -218,4 +219,104 @@ async fn owner_escalated_internal_runs_are_never_dropped() {
             .any(|s| s["source"] == "internal_work" && s["coverage"]["state"] == "complete"),
         "{body}"
     );
+}
+
+async fn post(app: &axum::Router, body: serde_json::Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/attention/dismissals")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// View All lists every escalated run the overview shows (past one page), a
+/// cleared run leaves both views and stays cleared, and with the decision owner
+/// unmounted the total is unknown rather than zero.
+#[tokio::test]
+async fn escalated_internal_runs_are_listed_in_full_and_can_be_cleared() {
+    use aq_internal_work::store;
+    use serde_json::json;
+    use uuid::Uuid;
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    let mut runs = vec![];
+    for _ in 0..3 {
+        let work = classified_task(project, Uuid::new_v4());
+        let run = store::submit(&pool, &work, &[], 1_000).await.unwrap();
+        store::mark_owner(&pool, run, "no working model", 2_000)
+            .await
+            .unwrap();
+        runs.push(run);
+    }
+    let app = aq_server::build_admin_router(f.state.clone());
+    let ids = |body: &Value, field: &str| -> Vec<String> {
+        let mut ids: Vec<String> = body["data"][field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["id"].as_str().unwrap().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let (_, overview) = read(&app, "/api/v1/overview").await;
+    let (status, list) = read(&app, "/api/v1/attention").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(ids(&list, "items"), ids(&overview, "attention"));
+    assert_eq!(list["data"]["items"].as_array().unwrap().len(), 3);
+    assert!(list["data"]["total"]["value"].is_null(), "{list}");
+    assert!(list["data"]["items"][0]["dismissible"] == true);
+    let (_, page) = read(&app, "/api/v1/attention?limit=2").await;
+    assert_eq!(page["data"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(page["data"]["has_more"], true);
+    let cursor = page["data"]["next_cursor"].as_str().unwrap();
+    let (_, rest) = read(&app, &format!("/api/v1/attention?limit=2&cursor={cursor}")).await;
+    assert_eq!(rest["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(rest["data"]["has_more"], false);
+
+    let cleared = format!("internal_work:{}", runs[0]);
+    let (status, body) = post(&app, json!({"attention_id": cleared})).await;
+    assert_eq!(
+        (status, &body["newly_dismissed"]),
+        (StatusCode::OK, &json!(true))
+    );
+    let (status, body) = post(&app, json!({"attention_id": cleared})).await;
+    assert_eq!(
+        (status, &body["newly_dismissed"]),
+        (StatusCode::OK, &json!(false))
+    );
+    let (status, body) = post(
+        &app,
+        json!({"attention_id": format!("decision:{}:x", Uuid::new_v4())}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "attention_not_dismissible");
+    let (_, overview) = read(&app, "/api/v1/overview").await;
+    let (_, list) = read(&app, "/api/v1/attention").await;
+    assert_eq!(ids(&overview, "attention").len(), 2);
+    assert_eq!(ids(&list, "items"), ids(&overview, "attention"));
+    assert!(!ids(&list, "items").contains(&cleared));
+    // The run itself is untouched: clearing is not resolving it.
+    let open: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM internal_tasks WHERE escalation='owner'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(open, 3);
 }
