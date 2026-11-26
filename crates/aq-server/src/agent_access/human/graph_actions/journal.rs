@@ -33,17 +33,39 @@ pub(super) struct Admission<'a> {
     pub record: &'a ProjectRecord,
     pub service: &'a Value,
     pub body: &'a [u8],
+    #[cfg(feature = "project_environments")]
+    pub needs_task: Option<(Uuid, bool)>,
 }
 impl Admission<'_> {
-    pub(super) async fn retain(&self, state: &AppState, user: &User) -> Result<()> {
+    pub(super) async fn retain(&self, state: &AppState, user: &User) -> Result<bool> {
         let Admission {
             id,
             record,
             service,
             body,
+            #[cfg(feature = "project_environments")]
+            needs_task,
         } = *self;
         // An ambiguous insert is never a send license. A committed intent can be
         // recovered by lookup; no intent means no native effect was dispatched.
+        let mut tx = state.store.pool.begin().await.map_err(|_| unavailable())?;
+        #[cfg(feature = "project_environments")]
+        if let Some((task, direct)) = needs_task {
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| unavailable())?;
+            if !needs::writable(
+                state,
+                &mut tx,
+                (record.binding.project_id, task, user.id),
+                (record.revision, direct),
+            )
+            .await?
+            {
+                return Ok(false);
+            }
+        }
         let inserted = sqlx::query(
         "INSERT INTO dashboard_graph_intents(operation_id,project_id,project_revision,project_binding,workspace_id,service_identity,idempotency_key,body)
          SELECT operation_id,$3,$4,$5,$6,$7,$8,$9 FROM dashboard_operations
@@ -58,14 +80,15 @@ impl Admission<'_> {
     .bind(service)
     .bind(format!("aq-dashboard-action:{id}"))
     .bind(body)
-    .execute(&state.store.pool)
+    .execute(&mut *tx)
     .await
     .map_err(|_| unavailable())?
     .rows_affected();
         if inserted != 1 {
             return Err(unavailable());
         }
-        Ok(())
+        tx.commit().await.map_err(|_| unavailable())?;
+        Ok(true)
     }
 }
 pub(super) async fn load(

@@ -172,7 +172,7 @@ async fn a_pinned_profile_environment_wins_over_the_default() {
 }
 
 /// A replacement keeps its predecessor's environment. The task's metadata
-/// (written in Graph directly, not by `task.needs.set`, which refuses after a
+/// (written in Graph directly, not by `task.needs.set`, which refuses during a
 /// grant) comes to need `node`: a fresh choice would be `web` and wait for a
 /// node, while the replacement stays in `confined-worktree` and is held for
 /// lacking `node`. Needing nothing again, it runs there.

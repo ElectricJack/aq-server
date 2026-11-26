@@ -275,8 +275,7 @@ async fn filed_tasks_name_their_needs() {
     assert_eq!(x.posts().len(), 2, "a refused create never reaches Graph");
 }
 
-/// Spec 0017 §5.4: the owner sets or clears a task's needs until an attempt
-/// of it has been granted.
+/// An ungranted task's needs can be set or cleared. A live grant fences edits.
 #[cfg(feature = "project_environments")]
 #[tokio::test]
 async fn task_needs_set_sets_and_clears_needs_and_is_refused_after_a_grant() {
@@ -307,7 +306,7 @@ async fn task_needs_set_sets_and_clears_needs_and_is_refused_after_a_grant() {
     assert!(cleared.get("aq:needs").is_none(), "{cleared}");
     assert_eq!(cleared["example:weight"], 2);
 
-    // Once an attempt has been granted the needs are fixed.
+    // A live grant still fixes this attempt’s needs.
     let granted = r#"UPDATE execution_attempts SET state=state||'{"status":"granted","grant":{}}'::jsonb WHERE task_id=$1"#;
     sqlx::query(granted)
         .bind(task)

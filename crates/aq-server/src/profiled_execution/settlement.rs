@@ -52,3 +52,6 @@ fn default_policy_offers_name_the_policy_actor() {
     let other = r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
     assert_eq!(review_requirement(other), HumanOwner);
 }
+
+#[cfg(all(feature = "project_environments", feature = "delivery_playbook"))]
+pub(crate) use automatic::publication_retry::terminal_refusal;

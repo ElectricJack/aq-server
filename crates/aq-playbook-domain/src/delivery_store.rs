@@ -189,7 +189,13 @@ impl DeliveryPort for PgDelivery {
         .bind(event.project_id.to_string())
         .fetch_optional(&mut *db)
         .await?;
-        if held != Some(true) {
+        if held != Some(true)
+            || aq_machine_control::task_needs::blocks_observation(
+                db,
+                (event.project_id, event.task_id, event.version),
+            )
+            .await?
+        {
             return Ok(false);
         }
         let current: Option<Uuid> = sqlx::query_scalar(concat!(

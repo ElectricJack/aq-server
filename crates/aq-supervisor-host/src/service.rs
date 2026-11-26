@@ -212,7 +212,11 @@ fn pool_exhaustion_can_repoll_but_an_unconfirmed_turn_stays_failed() {
 }
 
 fn api_error(error: aq_server::error::AppError) -> anyhow::Error {
-    anyhow::anyhow!("Supervisor reservation or dispatch was refused: {error:?}")
+    // Supervisor logs need the refusal status. AppError also carries request details.
+    anyhow::anyhow!(
+        "Supervisor reservation or dispatch was refused ({})",
+        error.status().as_u16()
+    )
 }
 /// The re-check note the turn after `prior` starts with (`None` when it replied or never started).
 #[cfg(feature = "test-support")]

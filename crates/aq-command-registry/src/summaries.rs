@@ -78,7 +78,7 @@ fn task_and_worker_summary(kind: &str) -> Option<&'static str> {
             "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason; with fresh, starts a task held by a changed project binding from the current source"
         }
         "task.needs.set" => {
-            "Set or clear the capabilities a task needs from its environment, before any attempt of it has been granted"
+            "Set or clear a task’s environment capabilities before admission or after stopped work is reconciled"
         }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"
