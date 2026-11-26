@@ -216,4 +216,87 @@ mod tests {
             );
         }
     }
+
+    fn sources(items: Vec<AttentionItem>) -> overview::OverviewSources {
+        overview::OverviewSources {
+            attempts: Default::default(),
+            ready: Default::default(),
+            reviews: overview::Contribution {
+                needs_you: Some(overview::total(0, false)),
+                ..Default::default()
+            },
+            results: overview::Contribution {
+                attention: items,
+                ..Default::default()
+            },
+            settlements: Default::default(),
+            operations: Default::default(),
+            internal: Default::default(),
+        }
+    }
+
+    #[test]
+    fn non_decision_overview_items_are_reachable_beyond_the_first_page() {
+        // Reproduce the reported ten Needs you entries with an empty decisions
+        // inbox, then exercise more entries than the default View All page.
+        for count in [10, DEFAULT_LIMIT + 10] {
+            let overview = sources(
+                (0..count)
+                    .map(|n| item(AttentionKind::Failed, &format!("result:{n:03}")))
+                    .collect(),
+            )
+            .overview([], false);
+            assert_eq!(overview.counts.needs_you.value, Some(count as u32));
+            let (decisions, _, matching) = page(
+                overview.attention.clone(),
+                Some(&AttentionKind::Decision),
+                None,
+                DEFAULT_LIMIT,
+            )
+            .unwrap();
+            assert!(decisions.is_empty());
+            assert_eq!(matching, 0);
+
+            let mut cursor = None;
+            let mut listed = vec![];
+            loop {
+                let (items, next, matching) = page(
+                    overview.attention.clone(),
+                    None,
+                    cursor.as_deref(),
+                    DEFAULT_LIMIT,
+                )
+                .unwrap();
+                assert_eq!(matching, count);
+                listed.extend(items);
+                cursor = next;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(ids(&listed), ids(&overview.attention));
+        }
+    }
+
+    #[test]
+    fn clearing_updates_both_views_and_cannot_hide_an_unresolved_decision() {
+        let mut sources = sources(vec![
+            item(AttentionKind::Failed, "result:1"),
+            item(AttentionKind::Failed, "result:2"),
+        ]);
+        sources.reviews.attention = vec![item(AttentionKind::Decision, "decision:1")];
+        let cleared = ["result:1".into(), "decision:1".into()].into();
+        sources.without_cleared(&cleared);
+        sources.without_cleared(&cleared);
+        let overview = sources.overview([], false);
+        assert_eq!(overview.counts.needs_you.value, Some(2));
+        let (items, _, matching) = page(overview.attention, None, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(matching, 2);
+        assert_eq!(ids(&items), ["decision:1", "result:2"]);
+        assert!(!items[0].dismissible);
+        assert!(items[1].dismissible);
+        let (_, _, matching) =
+            page(items, Some(&AttentionKind::Failed), None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(matching, 1);
+    }
 }

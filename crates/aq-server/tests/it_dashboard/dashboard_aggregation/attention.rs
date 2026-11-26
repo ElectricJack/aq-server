@@ -319,4 +319,30 @@ async fn escalated_internal_runs_are_listed_in_full_and_can_be_cleared() {
             .await
             .unwrap();
     assert_eq!(open, 3);
+
+    // Clearing other notifications must not forget an older dismissal. These
+    // rows reproduce the former 5,000-entry eviction boundary without creating
+    // thousands of underlying runs.
+    sqlx::query(
+        "UPDATE dashboard_attention_dismissals SET dismissed_at_ms=1 WHERE attention_id=$1",
+    )
+    .bind(&cleared)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO dashboard_attention_dismissals(principal_id,attention_id,dismissed_at_ms) SELECT principal_id,'result:retained-' || n,2 FROM dashboard_attention_dismissals CROSS JOIN generate_series(1,5000) AS n WHERE attention_id=$1")
+        .bind(&cleared).execute(&pool).await.unwrap();
+    let (status, body) = post(
+        &app,
+        json!({"attention_id": format!("internal_work:{}", runs[1])}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, overview) = read(&app, "/api/v1/overview").await;
+    let (_, list) = read(&app, "/api/v1/attention").await;
+    assert_eq!(ids(&overview, "attention").len(), 1);
+    assert_eq!(ids(&list, "items"), ids(&overview, "attention"));
+    let (status, body) = post(&app, json!({"attention_id": cleared})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["newly_dismissed"], false);
 }

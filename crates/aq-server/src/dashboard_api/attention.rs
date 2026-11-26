@@ -14,9 +14,6 @@ use axum::extract::{
     rejection::{JsonRejection, QueryRejection},
 };
 
-/// Cleared entries kept per user; the oldest are forgotten beyond this.
-const KEPT: i64 = 5000;
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AttentionQuery {
@@ -131,8 +128,6 @@ async fn clear(
     let pool = &state.store.pool;
     let inserted = sqlx::query("INSERT INTO dashboard_attention_dismissals(principal_id,attention_id,dismissed_at_ms) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
         .bind(user.id).bind(&body.attention_id).bind(now).execute(pool).await?.rows_affected();
-    sqlx::query("DELETE FROM dashboard_attention_dismissals WHERE principal_id=$1 AND attention_id IN (SELECT attention_id FROM dashboard_attention_dismissals WHERE principal_id=$1 ORDER BY dismissed_at_ms DESC,attention_id OFFSET $2)")
-        .bind(user.id).bind(KEPT).execute(pool).await?;
     service::fence(state, runtime, user, &a).await?;
     Ok(view::AttentionDismissal {
         attention_id: body.attention_id,

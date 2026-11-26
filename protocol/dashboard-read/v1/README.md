@@ -240,6 +240,14 @@ capacity facts, not proof that an unknown attempt stopped or permission to launc
 
 ## Needs you: View All and clearing
 
+The overview counts attention entries of every kind, while the decision inbox
+contains only decision records. Ten failed-result notifications can therefore
+produce a Needs you count of ten with an empty decision inbox. View All must use
+the attention read below, preserving each item's subject link and supported
+action, rather than treating the decision inbox as the complete attention list.
+The contract tests reproduce this case and cover pagination beyond 25 entries,
+filtered totals, and clearing without hiding an unresolved decision.
+
 `GET /api/v1/attention[?scope=…&kind=…&limit=1..100&cursor=…]` returns the
 whole overview attention list, paged (`Envelope<AttentionPage>`, capability
 `attention.read`). It is built by the same code as `GET /api/v1/overview`, from
@@ -266,5 +274,5 @@ and shows again. Clearing never approves, releases, cancels or otherwise decides
 the record behind the entry. Decisions, questions, uncertain operations, blocked
 work and offline workers are not dismissible: the request is refused with 409
 `attention_not_dismissible`, and they stay listed until resolved through their
-own controls. At most 5,000 cleared ids are kept per user (the oldest are
-forgotten first).
+own controls. Cleared ids remain stored for that user: clearing more entries
+does not make older notifications reappear.
