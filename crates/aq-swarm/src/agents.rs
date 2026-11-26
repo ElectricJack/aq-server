@@ -126,7 +126,7 @@ fn held_query(modern: bool) -> String {
             )
             .replace(
                 "WHERE e.holds_task",
-                "WHERE e.holds_task AND native_attempt_holds_compute(e.attempt_id,e.node_id)",
+                "WHERE e.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=e.attempt_id AND c.released)",
             )
     } else {
         SQL.replace(

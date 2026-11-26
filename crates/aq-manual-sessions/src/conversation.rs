@@ -71,7 +71,7 @@ impl Subject {
         match self {
             Self::Manual => {
                 "SELECT m.id FROM manual_agent_sessions m JOIN nodes n ON n.id=m.node_id
-                WHERE m.id=$1 AND m.node_id=$2 AND n.revoked_at IS NULL FOR UPDATE OF m,n"
+                WHERE m.id=$1 AND m.node_id=$2 AND n.revoked_at IS NULL FOR UPDATE OF m FOR KEY SHARE OF n"
             }
             Self::Attempt => {
                 "SELECT a.session_id FROM execution_attempts a
@@ -206,7 +206,7 @@ impl Subject {
         // Match the profiled lifecycle's node-before-attempt lock order.
         if matches!(self, Subject::Attempt)
             && sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE",
+                "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR KEY SHARE",
             )
             .bind(node)
             .fetch_optional(&mut *conn)

@@ -536,7 +536,9 @@ async fn queued_and_manual_allocation_share_one_count_and_unknown_holds_only_its
     let pool = f.db.pool().await;
     let attempt = common::profiled::insert(&f).await;
     let mut tx = pool.begin().await.unwrap();
-    aq_machine_control::management::lock(&mut tx).await.unwrap();
+    aq_machine_control::allocation::lock(&mut tx, node)
+        .await
+        .unwrap();
     aq_machine_control::slots::assign(&mut tx, attempt, node, 1)
         .await
         .unwrap();
@@ -545,7 +547,9 @@ async fn queued_and_manual_allocation_share_one_count_and_unknown_holds_only_its
     sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','pending','Waiting',1,1)")
         .bind(manual).bind(f.actor).bind(node).bind(f.selection.lineage.project_id).execute(&pool).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    aq_machine_control::management::lock(&mut tx).await.unwrap();
+    aq_machine_control::allocation::lock(&mut tx, node)
+        .await
+        .unwrap();
     assert_eq!(
         aq_machine_control::slots::assign_manual(&mut tx, manual, node)
             .await
@@ -621,7 +625,9 @@ async fn two_nodes_on_one_machine_each_reserve_three_slots_and_refuse_a_seventh(
             // No launch or grant: synthetic native-shaped attempt tests only SQL allocation.
             let id = Uuid::new_v4();
             let mut tx = pool.begin().await.unwrap();
-            aq_machine_control::management::lock(&mut tx).await.unwrap();
+            aq_machine_control::allocation::lock(&mut tx, node)
+                .await
+                .unwrap();
             sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
                 .bind(id).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(serde_json::json!(f.profiled)).execute(&mut *tx).await.unwrap();
             aq_machine_control::slots::assign(&mut tx, id, node, slot)
@@ -660,6 +666,103 @@ async fn two_nodes_on_one_machine_each_reserve_three_slots_and_refuse_a_seventh(
             .await
             .unwrap(),
         6
+    );
+}
+
+/// Allocation excludes allocation on the node's `node_allocation` row, and a
+/// machine maximum extends that to every node of the machine. The exclusion
+/// is shown with NOWAIT (55P03) while the first claim is open; after it
+/// commits, a second claim of the same slot or past the machine maximum fails.
+#[tokio::test]
+async fn no_double_slot_allocation_including_a_machine_maximum_across_two_nodes() {
+    let f = fixture().await;
+    let pool = f.db.pool().await;
+    let (a, b) = (f.node.node_id, Uuid::new_v4());
+    sqlx::query("UPDATE nodes SET machine_key='slot-test-desktop',slot=1 WHERE id=$1")
+        .bind(a)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,machine_key,slot) VALUES($1,'sibling','slot-test-sibling','test',2,now(),'slot-test-desktop',2)").bind(b).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE worker_settings SET max_agents=2 WHERE kind='node'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let attempt = |node: Uuid| {
+        let (pool, state) = (pool.clone(), serde_json::json!(f.profiled));
+        async move {
+            let id = Uuid::new_v4();
+            let mut tx = pool.begin().await.unwrap();
+            aq_machine_control::allocation::lock(&mut tx, node)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
+                .bind(id).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(state).execute(&mut *tx).await.unwrap();
+            (tx, id)
+        }
+    };
+    let probes = f.db.pool().await;
+    let held = |node: Uuid| {
+        let pool = probes.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let r = sqlx::query("SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE NOWAIT")
+                .bind(node)
+                .execute(&mut *tx)
+                .await;
+            r.is_err_and(|e| aq_machine_control::is_lock_timeout(&e))
+        }
+    };
+    // One node: the first claim of slot 1 holds the row until it commits.
+    let (mut first, x) = attempt(a).await;
+    aq_machine_control::slots::assign(&mut first, x, a, 1)
+        .await
+        .unwrap();
+    assert!(
+        held(a).await,
+        "an open claim excludes other claims on its node"
+    );
+    assert!(
+        !held(b).await,
+        "without a machine maximum the sibling is free"
+    );
+    first.commit().await.unwrap();
+    let (mut second, y) = attempt(a).await;
+    assert!(
+        aq_machine_control::slots::assign(&mut second, y, a, 1)
+            .await
+            .is_err()
+    );
+    second.rollback().await.unwrap();
+    // A machine maximum of 2: a claim on B locks A's row too.
+    sqlx::query("INSERT INTO worker_settings(kind,id,max_agents,revision) VALUES('machine','slot-test-desktop',2,1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let before = aq_machine_control::management::capacity(&mut conn, b)
+        .await
+        .unwrap();
+    assert_eq!(before.machine_used, 1);
+    assert!(!before.full());
+    drop(conn);
+    let (mut third, z) = attempt(b).await;
+    assert!(
+        held(a).await,
+        "a machine maximum excludes claims on the sibling"
+    );
+    aq_machine_control::slots::assign(&mut third, z, b, 1)
+        .await
+        .unwrap();
+    third.commit().await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let full = aq_machine_control::management::capacity(&mut conn, a)
+        .await
+        .unwrap();
+    assert_eq!(full.machine_used, 2);
+    assert!(
+        full.full(),
+        "the machine maximum is reached across the two nodes"
     );
 }
 

@@ -8,7 +8,6 @@ use crate::{
 use aq_admission::scoped_presence::{InventoryIdentity, InventoryReceipt, InventoryV2};
 use aq_intelligence_config::LoadedRegistry;
 use aq_selection::{CapabilitySnapshot, DeliveryCapability, ExecutionTarget, InstalledHarness};
-use sqlx::Row;
 fn exact_request(a: &InventoryV2, b: &InventoryV2) -> Result<(), AppError> {
     if a.digest().map_err(|_| changed())? != b.digest().map_err(|_| changed())? {
         return Err(changed());
@@ -124,7 +123,7 @@ pub(super) async fn record_with_stage(
         return Err(changed());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
-    let revision = next_revision_locked(&mut tx, request).await?;
+    let revision = next_revision(&mut tx, request).await?;
     #[cfg(feature = "project_environments")]
     let harnesses = super::super::definitions::listed(state, &mut tx, auth.id(), harnesses).await?;
     let snapshot = CapabilitySnapshot {
@@ -241,7 +240,12 @@ async fn store_snapshot(
     }
     let digest = aq_admission::Digest::of(&bytes);
     let value = serde_json::to_value(snapshot).map_err(|_| AppError::Internal)?;
-    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(node).bind(request.identity.boot_id).bind(request.sequence as i64).bind(snapshot.revision as i64).bind(&value).execute(&mut **tx).await.map_err(storage::db)?;
+    // The sequence fence: no lock excludes another inventory of the node, so
+    // the write itself refuses a stale sequence or a revision already taken.
+    let written = sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot WHERE intelligence_node_snapshots.revision<excluded.revision AND (intelligence_node_snapshots.boot_id<>excluded.boot_id OR intelligence_node_snapshots.sequence<excluded.sequence)").bind(node).bind(request.identity.boot_id).bind(request.sequence as i64).bind(snapshot.revision as i64).bind(&value).execute(&mut **tx).await.map_err(storage::db)?;
+    if written.rows_affected() == 0 {
+        return Err(changed());
+    }
     Ok(digest)
 }
 
@@ -269,29 +273,28 @@ fn validate_bindings(
     Ok(())
 }
 
-async fn next_revision_locked(
+/// The revision this inventory would write; `store_snapshot` fences it.
+async fn next_revision(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     request: &InventoryV2,
 ) -> Result<u64, AppError> {
-    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(request.identity.node_id).fetch_optional(&mut **tx).await.map_err(storage::db)?;
-    if let Some(old) = old {
-        if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
-            && old.get::<i64, _>("sequence") as u64 >= request.sequence
-        {
-            return Err(changed());
-        }
-        Ok(old
-            .get::<i64, _>("revision")
-            .checked_add(1)
-            .ok_or_else(unavailable)? as u64)
-    } else {
-        Ok(1)
-    }
+    let old: Option<i64> =
+        sqlx::query_scalar("SELECT revision FROM intelligence_node_snapshots WHERE node_id=$1")
+            .bind(request.identity.node_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(storage::db)?;
+    Ok(old
+        .map_or(Some(1), |r| r.checked_add(1))
+        .ok_or_else(unavailable)? as u64)
 }
 
 fn require_fresh(time: u64, not_before: u64, observed: u64, expires: u64) -> Result<(), AppError> {
     if time < not_before
-        || time >= observed.checked_add(2000).ok_or_else(unavailable)?
+        || time
+            >= observed
+                .checked_add(aq_machine_control::limits::current().inventory_freshness_ms)
+                .ok_or_else(unavailable)?
         || time >= expires
     {
         return Err(unavailable());

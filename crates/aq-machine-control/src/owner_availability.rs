@@ -94,14 +94,11 @@ pub async fn set_owner_availability(
         let generation = current.generation;
         return Err(Error::Conflict { generation });
     }
-    // Fix round 3 (I2 race): touch the live node rows first, as set_desired
-    // does, so a publication racing this change waits or fails to serialize.
+    // Fix round 3 (I2 race): fence every node first, as set_desired does, so
+    // a publication racing this change waits or fails to serialize.
     // N1: locked in id order, with a bounded wait. The state is re-read under them.
     bound(tx).await?;
-    lock_live_nodes(tx, None).await?;
-    sqlx::query("UPDATE nodes SET machine_key=machine_key WHERE revoked_at IS NULL")
-        .execute(&mut *tx)
-        .await?;
+    crate::allocation::fence(tx, None).await?;
     let current = owner_availability(tx).await?;
     if change.unchanged(&current) {
         return Ok(current);

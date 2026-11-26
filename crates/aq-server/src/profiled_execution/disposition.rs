@@ -104,7 +104,7 @@ pub async fn abandon(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_one(&mut *tx)
         .await

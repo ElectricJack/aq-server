@@ -101,7 +101,7 @@ fn verify_binding(view: &AuthorityView, binding: &Binding) -> Result<()> {
 }
 async fn live_node(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<()> {
     let revoked: Option<bool> =
-        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1 FOR UPDATE")
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1 FOR KEY SHARE")
             .bind(node)
             .fetch_optional(&mut **tx)
             .await?;

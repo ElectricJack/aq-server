@@ -28,7 +28,7 @@ pub(super) fn worker_routes() -> Router<Service> {
 }
 /// The attempt's node, and whether the attempt still runs there.
 pub(super) async fn subject(s: &Service, id: Uuid) -> Result<(Uuid, bool)> {
-    let row: Option<(Uuid, bool)> = sqlx::query_as("SELECT a.node_id,a.holds_task AND native_attempt_holds_compute(a.attempt_id,a.node_id) AND n.revoked_at IS NULL FROM execution_attempts a JOIN nodes n ON n.id=a.node_id WHERE a.attempt_id=$1")
+    let row: Option<(Uuid, bool)> = sqlx::query_as("SELECT a.node_id,a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released) AND n.revoked_at IS NULL FROM execution_attempts a JOIN nodes n ON n.id=a.node_id WHERE a.attempt_id=$1")
         .bind(id)
         .fetch_optional(&s.pool)
         .await?;

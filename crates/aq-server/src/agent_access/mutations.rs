@@ -358,7 +358,7 @@ async fn recover_rows(
     let attempt = id(&request["attempt"], "attempt_id")?;
     let mut tx = state.store.pool.begin().await?;
     let active: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR UPDATE",
+        "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR KEY SHARE",
     )
     .bind(node.id)
     .bind(crate::tokens::verifier(bearer(headers)?))
@@ -367,6 +367,13 @@ async fn recover_rows(
     if active.is_none() {
         return Err(Error("unauthorized"));
     }
+    // The cursor cap and the page's operation bound are per attempt: admissions
+    // lock this row, so none is in flight while the page is read.
+    sqlx::query("SELECT 1 FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 FOR UPDATE")
+        .bind(attempt)
+        .bind(node.id)
+        .execute(&mut *tx)
+        .await?;
     let query = RecoveryQuery {
         node: node.id,
         attempt,

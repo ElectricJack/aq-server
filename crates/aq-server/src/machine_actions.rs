@@ -215,8 +215,8 @@ impl<D: Desired> ActionKind for SetDesired<D> {
         }
     }
 }
-/// M1 residual: the owner's machine transaction locks every live node row of the machine in id
-/// order (revoke takes the machine lock first; 1 s `OWNER_LOCK_TIMEOUT`) before any write, and
+/// M1 residual: the owner's machine transaction locks every live node's row of the machine in id
+/// order (revoke takes the machine lock first; `owner_lock_timeout_ms`) before any write, and
 /// rolls back as a whole. A lock timeout, deadlock or serialization failure therefore changed
 /// nothing: a definite refusal with the reason `busy` (a new submission may succeed), never an
 /// unknown outcome.
@@ -300,13 +300,22 @@ impl ActionKind for RevokeMachine {
         _: &ActionRequest,
         p: WorkerRevoke,
     ) -> Outcome {
+        let now = (state.clock)();
         let run = async {
             let mut tx = state.store.pool.begin().await?;
-            mc::revoke_machine(&mut tx, &p.machine, (state.clock)()).await?;
-            tx.commit().await.map_err(mc::Error::from)
+            let revoked = mc::revoke_machine(&mut tx, &p.machine, now).await?;
+            tx.commit().await.map_err(mc::Error::from)?;
+            Ok::<_, mc::Error>(revoked)
         };
         match run.await {
-            Ok(()) => confirmed(p.operation_id, &p.machine, None),
+            Ok(revoked) => {
+                // The revocation is committed: no new worker request passes. A
+                // drain that does not finish leaves only requests already running.
+                if let Err(e) = mc::drain_revoked(&state.store.pool, &revoked, now).await {
+                    tracing::warn!(machine = %p.machine, "revoke drain: {e}");
+                }
+                confirmed(p.operation_id, &p.machine, None)
+            }
             Err(e) => not_applied(e),
         }
     }
