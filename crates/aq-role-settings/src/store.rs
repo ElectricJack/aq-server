@@ -360,6 +360,20 @@ pub async fn delivery_limits(pool: &PgPool) -> Result<(delivery::DeliveryLimits,
     let settings = settings(pool).await?;
     Ok((settings.delivery_limits, settings.delivery_limits_revision))
 }
+/// The node limits and their revision (the defaults at revision 0 until first
+/// saved), read on the caller's connection, apart from the other Settings values.
+pub async fn node_limits(conn: &mut PgConnection) -> sqlx::Result<(crate::node::NodeLimits, i64)> {
+    let (stored, revision): (Option<serde_json::Value>, i64) = sqlx::query_as(
+        "SELECT node_limits,node_limits_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    let limits = match stored {
+        Some(value) => serde_json::from_value(value).map_err(|e| sqlx::Error::Decode(e.into()))?,
+        None => Default::default(),
+    };
+    Ok((limits, revision))
+}
 /// The node observation limits and their revision (the defaults at revision
 /// 0 until first saved), read on the caller's connection: a cap check reads
 /// them inside its own transaction, under the locks it already holds. They

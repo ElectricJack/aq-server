@@ -30,4 +30,5 @@ def invalid(edit):
 invalid(lambda b: b.update(cpu_busy_bps=10001))
 invalid(lambda b: b.update(source="windows"))
 invalid(lambda b: b.update(extra=1))
-print("worker-machine-1: 2 fixtures and 3 invalid cases checked")
+invalid(lambda b: b["sandbox_admission"].update(code="Disk full"))
+print("worker-machine-1: 2 fixtures and 4 invalid cases checked")

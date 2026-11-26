@@ -8,11 +8,12 @@ fn digest<T: Serialize>(body: &T) -> Result<Digest> {
     ))
 }
 async fn boot(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<Uuid> {
-    let identity: Option<Value> =
-        sqlx::query_scalar("SELECT state->'identity' FROM execution_nodes WHERE node_id=$1")
-            .bind(node)
-            .fetch_optional(&mut **tx)
-            .await?;
+    let identity: Option<Value> = sqlx::query_scalar(
+        "SELECT state->'identity' FROM execution_nodes WHERE node_id=$1 FOR SHARE",
+    )
+    .bind(node)
+    .fetch_optional(&mut **tx)
+    .await?;
     let identity: aq_worker_protocol::NodeIdentity = parse(identity.ok_or(Error::Refused)?)?;
     if identity.node_id != node || identity.boot_id.is_nil() {
         return Err(Error::Refused);

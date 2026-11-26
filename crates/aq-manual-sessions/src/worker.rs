@@ -46,7 +46,7 @@ async fn poll(
     v.validate()?;
     let at = now();
     let mut tx = s.pool.begin().await?;
-    aq_machine_control::management::lock(&mut tx)
+    aq_machine_control::allocation::lock(&mut tx, node)
         .await
         .map_err(management::storage)?;
     // A single node lock orders start/slot mutations and poll claims.
@@ -55,7 +55,7 @@ async fn poll(
         .execute(&mut *tx)
         .await?;
     let active: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
+        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR KEY SHARE")
             .bind(node)
             .fetch_optional(&mut *tx)
             .await?;

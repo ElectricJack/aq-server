@@ -121,7 +121,7 @@ pub async fn install_execution_locked(
 }
 
 pub(crate) async fn boot(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<Uuid, AppError> {
-    sqlx::query_scalar("SELECT COALESCE((SELECT boot_id FROM delegated_node_boots WHERE node_id=$1),(SELECT (state#>>'{identity,boot_id}')::uuid FROM execution_nodes WHERE node_id=$1))")
+    sqlx::query_scalar("SELECT COALESCE((SELECT boot_id FROM delegated_node_boots WHERE node_id=$1 FOR SHARE),(SELECT (state#>>'{identity,boot_id}')::uuid FROM execution_nodes WHERE node_id=$1 FOR SHARE))")
         .bind(node).fetch_one(&mut **tx).await.map_err(db)
 }
 
@@ -207,7 +207,7 @@ pub(crate) async fn lock_owner(
 ) -> Result<(), AppError> {
     let p = &current.record;
     let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
+        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR KEY SHARE")
             .bind(p.binding.node.node_id)
             .fetch_optional(&mut **tx)
             .await

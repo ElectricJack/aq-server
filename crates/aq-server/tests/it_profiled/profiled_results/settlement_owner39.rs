@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 const POLICY: &str =
     r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
 const USER_AUTHORIZATION_LOCK: &str = "SELECT role,email,issuer,subject,xmin::text AS authorization_revision FROM users WHERE id=$1 FOR SHARE";
-const CANCELLATION_NODE_LOCK: &str = "SELECT id FROM nodes WHERE id=$1 FOR UPDATE";
+// The credential check no longer orders the two owners (0185); the attempt row does.
+const CANCELLATION_ATTEMPT_LOCK: &str = "SELECT l.launch_binding,h.state,h.authority_revision FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) JOIN profiled_launches l USING(attempt_id) WHERE a.attempt_id=$1 AND a.node_id=$2 FOR UPDATE OF a,h";
 pub(super) fn policy() -> aq_server::profiled_execution::definitions::Definition {
     aq_server::profiled_execution::definitions::Definition::new(
         artifact("pilot-settlement-policy", POLICY.as_bytes()),
@@ -436,7 +437,7 @@ async fn native_cancellation_waits_for_acceptance_owner_and_preserves_accepted_r
     wait_for_lock(
         &pool,
         acceptance_owner,
-        CANCELLATION_NODE_LOCK,
+        CANCELLATION_ATTEMPT_LOCK,
         &mut cancelling,
     )
     .await;

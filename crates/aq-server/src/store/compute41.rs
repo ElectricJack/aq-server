@@ -10,8 +10,16 @@ pub(super) fn function_body(name: &str) -> Result<&'static str> {
     aq_profiled_state::sql_function_body(sql, name).ok_or_else(corrupt)
 }
 const IDS: &str = include_str!("../../migrations/0149_admission_contract_ids.sql");
-/// Format 149 redefines the two admission-contract owners to key on the contract id.
+const NODE_ROW: &str =
+    include_str!("../../migrations/0185_node_allocation_and_compute_release.sql");
+/// Format 149 redefines the two admission-contract owners to key on the contract id;
+/// format 185 has `profiled_close_ungranted` check the node row FOR KEY SHARE.
 pub(super) fn contract_ids(supported: u32, name: &str) -> Option<&'static str> {
+    if supported >= 185
+        && let Some(body) = aq_profiled_state::sql_function_body(NODE_ROW, name)
+    {
+        return Some(body);
+    }
     (supported >= 149).then(|| aq_profiled_state::sql_function_body(IDS, name))?
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
@@ -51,7 +59,7 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
     let guarded: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('execution_nodes') AND tgname='native_incarnation_guard' AND NOT tgisinternal AND tgenabled='O' AND tgtype=23 AND tgnargs=0 AND tgqual IS NULL AND tgfoid=to_regprocedure('native_incarnation_guard()'))")
         .fetch_one(&mut **tx).await?;
     if supported >= 135 {
-        aq_machine_control::slots::validate(tx)
+        aq_machine_control::slots::validate(tx, supported)
             .await
             .map_err(|_| corrupt())?;
     }

@@ -39,9 +39,10 @@ pub async fn current_runtime_locked(
     node: Uuid,
     boot: Uuid,
 ) -> Result<RegisteredRuntime, AppError> {
-    let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_nodes WHERE node_id=$1 AND state#>>'{identity,boot_id}'=$2)")
-        .bind(node).bind(boot.to_string()).fetch_one(&mut **tx).await.map_err(crate::error::db)?;
-    if !current {
+    // Shared before the boot is compared: a registration cannot replace it until commit.
+    let current: Option<bool> = sqlx::query_scalar("SELECT COALESCE(state#>>'{identity,boot_id}'=$2,FALSE) FROM execution_nodes WHERE node_id=$1 FOR SHARE")
+        .bind(node).bind(boot.to_string()).fetch_optional(&mut **tx).await.map_err(crate::error::db)?;
+    if current != Some(true) {
         return Err(AppError::Conflict(
             "execution boot must be registered".into(),
         ));
@@ -177,6 +178,11 @@ async fn register_slots_locked(
     }
     .map_err(|_| AppError::Internal)?;
     let semantic = semantic_digest(request)?;
+    // A registration excludes publication, claims and other registrations of
+    // the node; the credential check alone does not.
+    aq_machine_control::allocation::lock(tx, auth.id())
+        .await
+        .map_err(crate::machine_api::mapped)?;
     crate::worker_api::lock_current_node(tx, auth).await?;
     if let Some(row) = sqlx::query("SELECT request_digest,response FROM native_registration_receipts WHERE node_id=$1 AND operation_id=$2")
         .bind(auth.id()).bind(request.operation_id).fetch_optional(&mut **tx).await.map_err(|_| AppError::Internal)? {
@@ -196,6 +202,13 @@ async fn register_slots_locked(
         .map_err(|_| AppError::Conflict("native runtime qualification unavailable".into()))?
         .qualification
         .clone();
+    // Held attempts before the registration row: other worker requests lock
+    // their attempt and then read the registration, so this order cannot deadlock.
+    sqlx::query("SELECT 1 FROM execution_attempts WHERE node_id=$1 AND holds_task ORDER BY attempt_id FOR UPDATE")
+        .bind(auth.id())
+        .execute(&mut **tx)
+        .await
+        .map_err(crate::error::db)?;
     let existing: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1 FOR UPDATE")
             .bind(auth.id())

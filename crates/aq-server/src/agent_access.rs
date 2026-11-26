@@ -596,7 +596,7 @@ async fn revoke(
             .fetch_optional(&state.store.pool)
             .await?;
     let mut tx = state.store.pool.begin().await?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node.ok_or(Error("not_found"))?)
         .execute(&mut *tx)
         .await?;

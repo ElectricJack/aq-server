@@ -229,6 +229,46 @@ pub fn attested_trigger_rows() -> Vec<serde_json::Value> {
     ]
 }
 
+/// The stored compute release (migration 0185): its triggers on the attested
+/// attempt and hot tables, and their function, whose body is the migration's own.
+pub fn attested_compute_release_rows() -> Vec<serde_json::Value> {
+    const SQL: &str =
+        include_str!("../../aq-server/migrations/0185_node_allocation_and_compute_release.sql");
+    const HEAD: &str = "execution_attempt_compute_refresh() RETURNS trigger LANGUAGE plpgsql AS $$";
+    let body = (SQL
+        .split_once(HEAD)
+        .and_then(|(_, rest)| rest.split_once("$$")))
+    .map_or("", |(body, _)| body);
+    let trigger = |table: &str, name: &str, events: &str, kind: i64| {
+        serde_json::json!({"kind": "trigger", "name": format!("{table}.{name}"),
+            "body": {"definition": format!("CREATE TRIGGER {name} AFTER {events} ON public.{table} FOR EACH ROW EXECUTE FUNCTION execution_attempt_compute_refresh()"),
+            "enabled": "O", "type": kind, "deferrable": false, "deferred": false}})
+    };
+    vec![
+        trigger(
+            "execution_attempts",
+            "execution_attempt_compute_insert",
+            "INSERT",
+            5,
+        ),
+        trigger(
+            "execution_attempts",
+            "execution_attempt_compute_refresh",
+            "UPDATE OF holds_task, node_id, kind",
+            17,
+        ),
+        trigger(
+            "profiled_authority_hot",
+            "execution_attempt_compute_refresh",
+            "INSERT OR DELETE OR UPDATE",
+            29,
+        ),
+        serde_json::json!({"kind": "function", "name": "execution_attempt_compute_refresh", "body": {"set": false, "args": "",
+            "body": body, "kind": "f", "config": null, "strict": false, "returns": "trigger",
+            "language": "plpgsql", "parallel": "u", "volatility": "v", "security_definer": false}}),
+    ]
+}
+
 /// Whether the attested catalog equals the expected one. From format 103 the
 /// expected rows include `ATTESTED_INDEXES`, and from 106 the task holds trigger; both sides
 /// are compared in (kind, name) order, so the database collation does not matter.
@@ -246,6 +286,9 @@ pub fn catalog_matches(
             }
             if supported >= 106 {
                 expected.extend(attested_trigger_rows());
+            }
+            if supported >= 185 {
+                expected.extend(attested_compute_release_rows());
             }
             expected.sort_by_key(key);
             actual.sort_by_key(key);
