@@ -1764,6 +1764,73 @@ mod delivery {
         }
     }
 
+    /// The delivery record is authored against catalog 2.6.0 (vendored and
+    /// pinned byte for byte): a Host10 namespace accepts its contracts, the
+    /// 2.6.0 work.read included, beside routing's 2.2.0 one.
+    #[test]
+    fn host10_accepts_the_delivery_records_catalog_2_6_0() {
+        let registry = CatalogProfile::Host10.registry();
+        let manifest: Value = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.6.0/manifest.json"
+        ))
+        .unwrap();
+        assert_eq!(manifest["version"], "2.6.0");
+        assert_eq!(manifest["supersedes"]["fingerprint"], HOST10_FINGERPRINT);
+        let v2_6: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.6.0/registry.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            digest(&("2.6.0", &v2_6)).unwrap(),
+            manifest["fingerprint"].as_str().unwrap()
+        );
+        // Without environments (spec 0017, see playbook_environments) the
+        // record's catalog is 2.6.0 whole.
+        #[cfg(not(feature = "project_environments"))]
+        {
+            let record = aq_playbook_authoring::builtin::delivery();
+            let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
+            assert_eq!(pinned, v2_6);
+            let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
+            assert!(kept.commands.contains_key("judgment.assess"));
+        }
+        for contract in v2_6.commands.values() {
+            assert!(
+                aq_playbook_host::accepts_command(&registry, contract),
+                "{}",
+                contract.name
+            );
+        }
+        let host9 = CatalogProfile::Host9.registry();
+        assert!(aq_playbook_host::accepts_command(
+            &registry,
+            &host9.commands["work.read"]
+        ));
+        // A namespace of another catalog does not take it.
+        assert!(!aq_playbook_host::accepts_command(
+            &host9,
+            &v2_6.commands["work.read"]
+        ));
+        // The pin lists the vendored files byte for byte.
+        let pin: Value = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.6.0-source.json"
+        ))
+        .unwrap();
+        assert_eq!(pin["catalog_fingerprint"], manifest["fingerprint"]);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../vendor/aq-host-catalog-2.6.0");
+        let files = pin["files"].as_array().unwrap();
+        assert_eq!(files.len(), std::fs::read_dir(&root).unwrap().count());
+        for file in files {
+            let bytes = std::fs::read(root.join(file["path"].as_str().unwrap())).unwrap();
+            assert_eq!(file["bytes"], bytes.len());
+            assert_eq!(
+                file["sha256"].as_str().unwrap(),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
+            );
+        }
+    }
+
     /// What the server records of results: pending results, the latest result
     /// of a task and which projects it runs.
     #[derive(Default)]
@@ -2058,6 +2125,7 @@ mod delivery {
                 changed: true,
                 head: "a".repeat(40),
                 base: "b".repeat(40),
+                conclusion: String::new(),
             };
             self.port.pending.lock().unwrap().push(pending);
             self.port.latest.lock().unwrap().insert(task, latest);
@@ -2397,6 +2465,54 @@ mod delivery {
             json!({"number": 7, "url": "https://example.test/pr/7", "state": "open",
                 "mergeable": "mergeable", "checks": {"state": "failed", "failed": ["unit", "lint"]}})
         );
+    }
+
+    /// Catalog 2.6.0's work.read, which the delivery source is authored
+    /// against, adds the task's acceptance criteria and the latest result's
+    /// conclusion; the 2.3.0 one on the same namespace keeps its shape.
+    #[tokio::test]
+    async fn work_read_2_6_0_gives_the_acceptance_criteria_and_the_conclusion() {
+        let h = delivery(false).await;
+        let own = h.scope.project_id;
+        h.routing.on_router.lock().unwrap().insert(own);
+        let (task, _) = h.stopped(own, "success");
+        let criteria = "Every command in the guide runs.";
+        h.graph.nodes.lock().unwrap().get_mut(&task).unwrap()["acceptance_criteria"] =
+            json!(criteria);
+        let conclusion = "Outcome: done; Changes: none; the check block ran with exit code 0.";
+        h.port
+            .latest
+            .lock()
+            .unwrap()
+            .get_mut(&task)
+            .unwrap()
+            .conclusion = conclusion.into();
+        let v2_6: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.6.0/registry.json"
+        ))
+        .unwrap();
+        let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+        let mut intent = h.intent("read-2-6", "work.read", input);
+        intent.command = v2_6.commands["work.read"].clone();
+        let read = h.try_run(&intent).await.unwrap();
+        intent.command.outcomes["observed"]
+            .validate(&read.output)
+            .unwrap();
+        let facts = &read.output["facts"];
+        assert_eq!(facts["acceptance_criteria"], criteria);
+        assert_eq!(facts["conclusion"], conclusion);
+        assert_eq!(facts["outcome"], "success");
+        // A task without a result: both present, the conclusion empty.
+        let fresh = h.graph.task("Not run yet", json!({}));
+        let input = json!({"subject": {"id": fresh.to_string(), "revision": 1}});
+        let mut intent = h.intent("read-2-6-fresh", "work.read", input);
+        intent.command = v2_6.commands["work.read"].clone();
+        let read = h.try_run(&intent).await.unwrap();
+        assert_eq!(read.output["facts"]["conclusion"], "");
+        assert_eq!(read.output["facts"]["acceptance_criteria"], "");
+        // 2.3.0's answer (h.read validates it against 2.3.0) has neither.
+        let old = h.read(task).await.output["facts"].clone();
+        assert!(old.get("conclusion").is_none() && old.get("acceptance_criteria").is_none());
     }
 
     #[tokio::test]

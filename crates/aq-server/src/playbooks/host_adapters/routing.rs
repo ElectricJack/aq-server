@@ -272,15 +272,16 @@ impl Service {
     }
 
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
-    /// those of its latest result, for a task of any bound project.
+    /// those of its latest result, for a task of any bound project. The 2.6.0
+    /// one adds the task's acceptance criteria and the result's conclusion.
     #[cfg(feature = "delivery_playbook")]
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         input: &Value,
-        _version: &str,
+        version: &str,
     ) -> Result<HostResult> {
-        use aq_playbook_domain::delivery_store as store;
+        use aq_playbook_domain::{delivery_store as store, host10};
         let (ports, id) = (self.ports()?, text(&input["subject"], "id")?);
         let asked = input["subject"]["revision"]
             .as_i64()
@@ -288,7 +289,7 @@ impl Service {
         let refused = |reason| Ok(host_result("refused", host9::refusal(id, asked, reason)));
         // Catalog 2.5.0 is routing's: only a task on the automatic router.
         #[cfg(feature = "project_environments")]
-        if _version == "2.5.0"
+        if version == "2.5.0"
             && let Err(reason) = self.routed_task(&input["subject"]).await?
         {
             return refused(reason);
@@ -309,8 +310,12 @@ impl Service {
         let (charged, ended) = ports.routing.attempts(task).await?;
         let facts = (self.namespace_work(tx, task).await?, charged, ended);
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
-        #[cfg(feature = "project_environments")]
-        let output = match _version {
+        let output = match version {
+            "2.6.0" => {
+                let conclusion = latest.as_ref().map_or("", |l| l.conclusion.as_str());
+                host10::with_judgment_facts(output, &node, conclusion)
+            }
+            #[cfg(feature = "project_environments")]
             "2.5.0" => {
                 (ports.routing.environments(at.1).await?).read_output(output, &node["metadata"])
             }

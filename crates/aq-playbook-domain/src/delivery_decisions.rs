@@ -539,6 +539,7 @@ mod tests {
                 changed,
                 head: head.into(),
                 base: String::new(),
+                conclusion: String::new(),
             };
             let expected = format!(
                 "Delivery hold checks_failed for project {}, task {} (revision 5), attempt {}, result {}.\n{expected_evidence}\n\nInspect the failed check.\n\nUse task.work, task.history and the current result or check evidence to find the cause, and check whether other tasks in this project are held for the same one. {}",

@@ -152,8 +152,9 @@ async fn assert_delivery_authoring_request(pool: &sqlx::PgPool) {
     };
     assert_eq!(record["events"], events);
     let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
-    assert_eq!(catalog["commands"]["work.read"]["version"], "2.3.0");
+    assert_eq!(catalog["commands"]["work.read"]["version"], "2.6.0");
     for command in [
+        "judgment.assess",
         "work.complete",
         "work.return",
         "work.hold",
@@ -228,6 +229,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
         changed: true,
         head: "a".repeat(40),
         base: "b".repeat(40),
+        conclusion: String::new(),
     };
     let graph = Arc::new(GatewayGraph(state.agent_access.clone().unwrap()));
     let mut service = Service::new_host2(
