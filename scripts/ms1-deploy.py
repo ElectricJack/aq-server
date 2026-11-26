@@ -321,7 +321,7 @@ class Deployer:
         if not running or not image or self.host.image(image)["Id"] != running:
             raise ValueError(f"{self.cfg.release_env} must name the running server image before the first run")
         current = release(image, self.host.image(image))
-        return {"current": current, "previous": None, "in_flight": None, "failed": {}, "needs_operator": None}
+        return {"current": current, "previous": None, "in_flight": None, "failed": {}, "needs_operator": None, "paused": None}
 
     def save(self, state):
         staged = self.path.with_suffix(".next")
@@ -351,15 +351,22 @@ class Deployer:
         state, _ = self.availability()
         return self.set_availability(False) if state == "on" else None
 
-    def resume(self, paused):
-        """On again, unless someone changed availability after we paused it."""
+    def resume(self, state):
+        """On again if this script turned it off, unless someone changed it since. Recorded in
+        state.json, so a run that dies with availability off is followed by one that restores it."""
+        paused = state.get("paused")
         if paused is None:
             return
-        with contextlib.suppress(Failure, ValueError, KeyError):
-            state, generation = self.availability()
-            if state == "off" and generation == paused:
+        try:
+            current, generation = self.availability()
+            if current == "off" and generation == paused:
                 self.set_availability(True)
                 log("availability restored")
+        except (Failure, ValueError, KeyError) as error:
+            log(f"availability not restored yet ({error}); the next run tries again")
+            return
+        state["paused"] = None
+        self.save(state)
 
     # ----------------------------------------------------------- checks
 
@@ -417,22 +424,22 @@ class Deployer:
             raise Failure(state["needs_operator"]) from None
         state["in_flight"] = None
         self.save(state)
-        self.resume(flight.get("paused"))
+        self.resume(state)
         log("rolled back")
 
     def commit(self, state, flight):
         state["previous"], state["current"] = flight["previous"], {**flight["target"], "backup": flight["backup"]}
         state["in_flight"] = None
         self.save(state)
-        self.resume(flight.get("paused"))
+        self.resume(state)
         self.prune(state)
 
     def recover(self, state):
         flight = state["in_flight"]
         log(f"finishing the interrupted deploy of {flight['target']['revision'][:12]}")
         try:
-            if not self.ready(flight["target"]):
-                raise Failure("the interrupted deploy is not ready")
+            eventually(self.host, self.cfg.ready_timeout_secs, lambda: self.ready(flight["target"]),
+                       "readiness of the interrupted deploy")
         except Failure as error:
             self.roll_back(state, flight, str(error))
             return
@@ -457,6 +464,7 @@ class Deployer:
         if state["in_flight"]:
             self.recover(state)
             return
+        self.resume(state)
         ref = ref or self.cfg.image
         self.host.pull(ref)
         info = self.host.image(ref)
@@ -482,11 +490,12 @@ class Deployer:
             self.save(state)
             raise Failure(refusal)
         log(f"deploying {target['revision'][:12]} ({target['image']}) over {current['revision'][:12]}")
-        paused = self.pause()
+        state["paused"] = self.pause()
+        self.save(state)
         try:
             eventually(self.host, self.cfg.quiet_timeout_secs, self.quiet, "no supervisor mid-turn")
         except Failure:
-            self.resume(paused)
+            self.resume(state)
             raise Deferred("supervisors stayed busy; trying again on the next run") from None
         workers = self.online_workers()
         self.cfg.backups.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -495,9 +504,9 @@ class Deployer:
             self.host.backup(backup)
         except Failure:
             backup.unlink(missing_ok=True)
-            self.resume(paused)
+            self.resume(state)
             raise
-        flight = {"target": target, "previous": current, "backup": str(backup), "paused": paused}
+        flight = {"target": target, "previous": current, "backup": str(backup)}
         state["in_flight"] = flight
         self.save(state)
         try:
@@ -519,8 +528,8 @@ class Deployer:
             raise Failure(f"the previous release reads state format {previous['state_format']}, the database is at "
                           f"{current['state_format']}: pass --restore-backup to restore {current.get('backup')} "
                           "(every change since that backup is lost)")
-        flight = {"target": current, "previous": previous, "backup": current.get("backup"), "paused": self.pause()}
-        state["in_flight"] = flight
+        flight = {"target": current, "previous": previous, "backup": current.get("backup")}
+        state["in_flight"], state["paused"] = flight, self.pause()
         self.save(state)
         self.roll_back(state, flight, "operator rollback")
         state["failed"].pop(current["image"], None)

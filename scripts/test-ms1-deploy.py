@@ -266,7 +266,7 @@ def test_an_interrupted_deploy_is_committed_when_ready_or_rolled_back(cfg):
     d, host = deployer(cfg)
     s = d.load()
     target = deploy.release(NEW_REF, host.images[NEW_REF])
-    s["in_flight"] = {"target": target, "previous": s["current"], "backup": None, "paused": 7}
+    s["in_flight"], s["paused"] = {"target": target, "previous": s["current"], "backup": None}, 7
     d.save(s)
     host.running, host.availability, host.db_format = "sha256:new", ["off", 7], 185
     d.apply()
@@ -274,7 +274,7 @@ def test_an_interrupted_deploy_is_committed_when_ready_or_rolled_back(cfg):
     assert s["current"]["image"] == NEW_REF and s["in_flight"] is None and host.availability[0] == "on"
 
     s["in_flight"] = {"target": deploy.release(OLD_REF, host.images[OLD_REF]) | {"image": "x", "id": "sha256:gone"},
-                      "previous": s["current"], "backup": None, "paused": None}
+                      "previous": s["current"], "backup": None}
     d.save(s)
     d.apply()  # the target is not running: roll back to the recorded previous release
     s = state(cfg)
@@ -318,3 +318,16 @@ def test_repository_and_pinning():
         deploy.pinned(f"{REPO}:main", info("i", NEW, 1, "other/repo@sha256:" + "1" * 64))
     with pytest.raises(deploy.Failure):
         deploy.release("x", {"Id": "i", "Config": {"Labels": {}}})
+
+
+def test_a_run_that_died_with_availability_off_is_followed_by_one_that_restores_it(cfg):
+    d, host = deployer(cfg)
+    s = d.load()
+    s["paused"] = 8
+    d.save(s)
+    host.availability = ["off", 8]
+    host.running = "sha256:new"  # nothing to deploy: the restore still happens first
+    s["current"] = deploy.release(NEW_REF, host.images[NEW_REF])
+    d.save(s)
+    d.apply()
+    assert host.availability[0] == "on" and state(cfg)["paused"] is None
