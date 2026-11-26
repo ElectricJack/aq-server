@@ -191,8 +191,15 @@ pub(super) async fn work(
         (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
         _ => None,
     };
+    let workspace_wait = if open {
+        let running = hold.as_ref().filter(|h| h.running()).map(|h| h.attempt_id);
+        crate::task_workspace_resume::work_reason(&r.pool, p, id, running).await?
+    } else {
+        None
+    };
     let held = held
         .into_iter()
+        .chain(workspace_wait)
         .chain(recovery)
         .chain(role_hold)
         .chain(offer_hold)

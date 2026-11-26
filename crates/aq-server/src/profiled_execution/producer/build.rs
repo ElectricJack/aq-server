@@ -40,6 +40,7 @@ pub struct Built {
     pub decision: Decision,
     pub deadline: u64,
     pub supports_git_author: bool,
+    pub workspace: crate::task_workspace_resume::Scope,
     /// Spec 0016 §5.2: recorded with the attempt and served by `/v1/git/grants`.
     #[cfg(feature = "delivery_playbook")]
     pub git: Option<aq_delivery::git_grant::GitGrant>,
@@ -183,6 +184,7 @@ pub struct Assembly<'a> {
     pub generation: u64,
     pub enrolled: bool,
     pub supports_git_author: bool,
+    pub workspace: &'a crate::task_workspace_resume::Scope,
 }
 /// Re-derives the frozen confinement mode from the selection's placement facts
 /// and the role's execution profile.
@@ -215,6 +217,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         generation,
         enrolled,
         supports_git_author,
+        workspace,
     } = input;
     let selected: &ResolvedSelection = decision
         .outcome
@@ -745,6 +748,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         decision,
         deadline,
         supports_git_author,
+        workspace: workspace.clone(),
         #[cfg(feature = "delivery_playbook")]
         git,
     })

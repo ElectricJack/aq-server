@@ -1,0 +1,138 @@
+{
+  "behavioral_tests": [
+    "lost_acceptance_replay_reduces_ttl_and_changed_bytes_conflict",
+    "expiry_stale_incarnation_and_generation_are_refused",
+    "observation_sequences_and_report_replays_are_immutable",
+    "cancellation_race_and_late_generation_retain_evidence",
+    "spec_tampering_and_response_overflow_are_invalid"
+  ],
+  "execution_protocol": 2,
+  "fixture_format": 1,
+  "foundation_connectivity": [
+    1,
+    1
+  ],
+  "invalid": [
+    {
+      "body": {
+        "operation_id": "00000000-0000-0000-0000-000000000000"
+      },
+      "message": "ack"
+    }
+  ],
+  "package": "aq-worker-protocol",
+  "valid": [
+    {
+      "body": {
+        "directives": [],
+        "offers": [
+          {
+            "attempt": {
+              "attempt_id": "00000000-0000-0000-0000-000000000005",
+              "generation": 1,
+              "session_id": "00000000-0000-0000-0000-000000000006"
+            },
+            "identity": {
+              "boot_id": "00000000-0000-0000-0000-000000000002",
+              "node_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "offer_expires_at_ms": 100000,
+            "offer_id": "00000000-0000-0000-0000-000000000004",
+            "reservation_ttl_ms": 10000,
+            "spec": {
+              "fixture_output": "synthetic result\n",
+              "harness": "deterministic-agent-v1",
+              "project_id": "00000000-0000-0000-0000-000000000003",
+              "required_capabilities": [
+                "deterministic-agent-v1"
+              ],
+              "resolved_spec_digest": "36a63e77b5ed05291683730c7eaa6c2b0be4425fde17c5c66cb190a4df52cf95",
+              "resources": {
+                "cpu_millis": 1000,
+                "disk_bytes": 1024,
+                "memory_bytes": 1024,
+                "slots": 1
+              }
+            }
+          }
+        ],
+        "server_time_ms": 100
+      },
+      "message": "poll_response"
+    },
+    {
+      "body": {
+        "attempt": {
+          "attempt_id": "00000000-0000-0000-0000-000000000005",
+          "generation": 1,
+          "session_id": "00000000-0000-0000-0000-000000000006"
+        },
+        "identity": {
+          "boot_id": "00000000-0000-0000-0000-000000000002",
+          "node_id": "00000000-0000-0000-0000-000000000001"
+        },
+        "offer_id": "00000000-0000-0000-0000-000000000004",
+        "operation_id": "00000000-0000-0000-0000-000000000007",
+        "reservation_deadline_ms": 10100,
+        "reservation_id": "00000000-0000-0000-0000-000000000008",
+        "reservation_remaining_ms": 10000,
+        "resolved_spec_digest": "36a63e77b5ed05291683730c7eaa6c2b0be4425fde17c5c66cb190a4df52cf95"
+      },
+      "message": "accept_request"
+    },
+    {
+      "body": {
+        "grant": {
+          "attempt": {
+            "attempt_id": "00000000-0000-0000-0000-000000000005",
+            "generation": 1,
+            "session_id": "00000000-0000-0000-0000-000000000006"
+          },
+          "grant_sequence": 1,
+          "identity": {
+            "boot_id": "00000000-0000-0000-0000-000000000002",
+            "node_id": "00000000-0000-0000-0000-000000000001"
+          },
+          "offer_id": "00000000-0000-0000-0000-000000000004",
+          "reservation_deadline_ms": 10100,
+          "reservation_id": "00000000-0000-0000-0000-000000000008",
+          "resolved_spec_digest": "36a63e77b5ed05291683730c7eaa6c2b0be4425fde17c5c66cb190a4df52cf95",
+          "valid_for_ms": 10000
+        }
+      },
+      "message": "accept_response"
+    },
+    {
+      "body": {
+        "artifacts": [],
+        "attempt": {
+          "attempt_id": "00000000-0000-0000-0000-000000000005",
+          "generation": 1,
+          "session_id": "00000000-0000-0000-0000-000000000006"
+        },
+        "claimed_success": true,
+        "identity": {
+          "boot_id": "00000000-0000-0000-0000-000000000002",
+          "node_id": "00000000-0000-0000-0000-000000000001"
+        },
+        "outcome": "success",
+        "output": "synthetic result\n",
+        "pending_operation_ids": [],
+        "report_id": "00000000-0000-0000-0000-000000000009",
+        "resolved_spec_digest": "36a63e77b5ed05291683730c7eaa6c2b0be4425fde17c5c66cb190a4df52cf95",
+        "stop_certainty": "confirmed_stopped",
+        "supersedes_report_id": null
+      },
+      "message": "result_report"
+    },
+    {
+      "body": {
+        "disposition": "accepted",
+        "report_id": "00000000-0000-0000-0000-000000000009",
+        "retention_release": true
+      },
+      "message": "result_response"
+    }
+  ],
+  "version": "0.2.0"
+}

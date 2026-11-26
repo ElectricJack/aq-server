@@ -27,22 +27,22 @@ macro_rules! priors {
     };
 }
 pub const PRIORS: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))"
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop','workspace_expansion'))"
 );
 pub const PRIORS_PRE_101: &str = priors!("FALSE");
 /// From migration 102: a lost attempt released after a reboot can be uncharged (D2 ruling C).
 pub const PRIORS_102: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)"
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop','workspace_expansion')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)"
 );
 /// From migration 151: the owner's override of a budget hold starts the budget again.
 pub const PRIORS_151: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)",
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop','workspace_expansion')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)"
 );
 /// From migration 157: an owner's fresh start (`aq_machine_control::fresh`) leaves the attempts
 /// it released out of the history, so the task's next attempt is a first attempt.
 pub const PRIORS_157: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)",
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop','workspace_expansion')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)",
     " AND NOT EXISTS(SELECT 1 FROM task_fresh_starts f WHERE f.attempt_id=a.attempt_id)"
 );
@@ -248,9 +248,10 @@ pub const PLACEMENT_FIELDS: [&str; 3] = [
     "allowed_worker_groups",
 ];
 
-/// Whether the binding `attempt`'s source export pinned is the project's binding at
-/// `project_revision` apart from [`PLACEMENT_FIELDS`], however many revisions lie between.
-/// False without an export, or without the pinned revision's binding history record.
+/// Compare the export's pinned binding to the current project binding. Node
+/// placement can change and the environment allow-list can grow. The next
+/// offer still resolves and validates its environment under current policy.
+/// All other fields stay exact. Missing export or historical binding refuses.
 pub async fn pinned_binding_current<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
     attempt: uuid::Uuid,
@@ -259,7 +260,20 @@ pub async fn pinned_binding_current<'e>(
     let revision = i64::try_from(project_revision)
         .map_err(|_| aq_machine_control::Error::Invalid("project revision"))?;
     let current: Option<Option<bool>> = sqlx::query_scalar(
-        "SELECT p.revision=$2 OR (SELECT (h.record->'binding') - $3::text[] = b.binding - $3::text[] FROM project_execution_binding_history h JOIN project_execution_bindings b USING(project_id) WHERE h.project_id=e.project_id AND h.revision=p.revision AND b.revision=$2) FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id), LATERAL (SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT AS revision) p WHERE x.attempt_id=$1",
+        "SELECT p.revision=b.revision OR (
+           (h.record->'binding') - ($3::text[] || ARRAY['allowed_environments'])
+                = b.binding - ($3::text[] || ARRAY['allowed_environments'])
+           AND (pinned.environments IS NOT DISTINCT FROM current.environments
+             OR (jsonb_typeof(pinned.environments)='array' AND jsonb_typeof(current.environments)='array'
+                 AND current.environments @> pinned.environments))
+         )
+         FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id)
+         JOIN project_execution_bindings b ON b.project_id=e.project_id AND b.revision=$2
+         CROSS JOIN LATERAL (SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT AS revision) p
+         LEFT JOIN project_execution_binding_history h ON h.project_id=e.project_id AND h.revision=p.revision
+         CROSS JOIN LATERAL (SELECT h.record#>'{binding,allowed_environments}' AS environments) pinned
+         CROSS JOIN LATERAL (SELECT b.binding->'allowed_environments' AS environments) current
+         WHERE x.attempt_id=$1",
     )
     .bind(attempt)
     .bind(revision)
@@ -269,9 +283,8 @@ pub async fn pinned_binding_current<'e>(
     Ok(current.flatten().unwrap_or(false))
 }
 
-/// Whether `export` re-pins `predecessor`'s retained source to a later binding revision that
-/// differs only in placement: the same commit, repository and generation, held by the
-/// predecessor's export ([`pinned_binding_current`]).
+/// Whether `export` re-pins the predecessor's retained commit in the same
+/// repository and binding generation under a compatible current project binding.
 pub async fn repins_retained(
     conn: &mut sqlx::PgConnection,
     predecessor: uuid::Uuid,

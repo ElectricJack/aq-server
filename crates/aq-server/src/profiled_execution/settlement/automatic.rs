@@ -5,7 +5,7 @@
 use super::facts;
 use super::{completion, owner::*};
 use crate::execution::authority::{self, Policy};
-use crate::{AppState, profiled_execution::results};
+use crate::{AppState, error::AppError, profiled_execution::results};
 #[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
@@ -15,8 +15,11 @@ use aq_profiled_state::graph_completion::{
 pub use aq_profiled_state::graph_completion::{AutoDisposition, AutoSettlement};
 pub use aq_profiled_state::result_reads::ReplacementFacts;
 use serde_json::{Value, json};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
+
+#[cfg(feature = "delivery_playbook")]
+pub(super) mod publication_retry;
 
 const OWNER: &str = "aq.settlement-owner.auto.1";
 const ACTOR: &str = "aq.settlement.default-policy@1";
@@ -30,6 +33,33 @@ pub(super) async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>>
         .map_err(db)?;
     Ok(tx)
 }
+// The stopped result remains immutable even when the harness naturally exits
+// before receiving the handoff. Record checkpoint rework in the same write.
+pub(crate) async fn settle_workspace_checkpoint_locked(
+    connection: &mut PgConnection,
+    receipt: &aq_admission::result_record::Receipt,
+) -> Result<bool> {
+    let attempt = receipt.binding.attempt_id;
+    if !crate::task_workspace_resume::checkpoint_required(connection, attempt).await? {
+        return Ok(false);
+    }
+    graph_completion::fence_transaction(connection, OWNER)
+        .await
+        .map_err(db)?;
+    graph_completion::record_noncompletion(
+        connection,
+        receipt.report_id,
+        attempt,
+        (ACTOR, "rework_required", crate::task_workspace_resume::REQUESTED),
+        &serde_json::json!({"decided_by":"workspace_expansion","report_digest":receipt.report_digest}),
+        i64::try_from(receipt.recorded_at_ms).map_err(|_| AppError::Internal)?,
+    )
+    .await
+    .map_err(db)?
+    .ok_or(AppError::Internal)?;
+    Ok(true)
+}
+
 /// Only a Success report is acceptable (MS1 review B1). A native worker reports
 /// Success only for a harness exit it proved (exit 0 plus an explicit claim);
 /// Unknown, Failed, Expired and Cancelled go to rework, never to completion.
@@ -99,6 +129,14 @@ pub async fn settle_after_record(
         Some((reason, evidence)) => (Verdict::Hold(reason), evidence),
         None => evaluate_locked(state, &mut tx, &r, delivery).await?,
     };
+    #[cfg(feature = "delivery_playbook")]
+    let verdict = if matches!(verdict, Verdict::Complete)
+        && !crate::task_workspace_delivery::gate(state, &mut tx, &r, true).await?
+    {
+        Verdict::Hold("workspace_delivery_pending")
+    } else {
+        verdict
+    };
     let time = now(state)?;
     let (disposition, reason) = match verdict {
         Verdict::Rework(reason) => ("rework_required", reason),
@@ -151,20 +189,21 @@ pub async fn record_replacement_facts(
     state: &AppState,
     report_id: Uuid,
 ) -> Result<ReplacementFacts> {
-    replacement_facts(state, report_id, false).await
+    replacement_facts(state, report_id, false, None).await
 }
 
 /// Reconcile the current delivery hold supported by its recorded worker and PR outcomes.
 /// Resolve the current report from the task so an earlier result cannot authorize a retry.
 #[cfg(feature = "delivery_playbook")]
 pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
-    recover_held_for_retry_exact(state, task, None).await
+    recover_held_for_retry_exact(state, task, None, None).await
 }
 #[cfg(feature = "delivery_playbook")]
 pub(crate) async fn recover_held_for_retry_exact(
     state: &AppState,
     task: Uuid,
     predecessor: Option<Uuid>,
+    owner_operation: Option<Uuid>,
 ) -> Result<()> {
     let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
         .await
@@ -175,12 +214,24 @@ pub(crate) async fn recover_held_for_retry_exact(
             .await
             .map_err(db)?,
     };
+    let report = match (report, predecessor, owner_operation) {
+        (None, Some(attempt), Some(_)) => sqlx::query_scalar(
+            "SELECT h.report_id FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
+             WHERE h.attempt_id=$1 AND a.task_id=$2 AND a.holds_task",
+        )
+        .bind(attempt)
+        .bind(task)
+        .fetch_optional(&state.store.pool)
+        .await
+        .map_err(db)?,
+        _ => report,
+    };
     if let Some(report) = report
         && aq_delivery::git_grant::is_retry_report(&state.store.pool, report, predecessor)
             .await
             .map_err(db)?
     {
-        Box::pin(replacement_facts(state, report, true)).await?;
+        Box::pin(replacement_facts(state, report, true, owner_operation)).await?;
     }
     Ok(())
 }
@@ -189,6 +240,7 @@ async fn replacement_facts(
     state: &AppState,
     report_id: Uuid,
     owner_retry: bool,
+    _owner_operation: Option<Uuid>,
 ) -> Result<ReplacementFacts> {
     use crate::execution::{
         authority::{self, hot::HotState},
@@ -233,7 +285,7 @@ async fn replacement_facts(
             .await?
             .is_none();
     let reworked = match settlement {
-        Some(s) => s.disposition == AutoDisposition::ReworkRequired,
+        Some(ref s) => s.disposition == AutoDisposition::ReworkRequired,
         #[cfg(feature = "delivery_playbook")]
         None if owner_retry || (!view.revoked && view.cancellation_id.is_none()) => {
             cancelled_retry
@@ -244,6 +296,15 @@ async fn replacement_facts(
         }
         None => false,
     };
+    #[cfg(feature = "delivery_playbook")]
+    let publication_retry = match _owner_operation {
+        Some(operation) if !reworked && !platform_retry && settlement.is_none() => {
+            publication_retry::evidence(&mut tx, &r, operation).await?
+        }
+        _ => None,
+    };
+    #[cfg(not(feature = "delivery_playbook"))]
+    let publication_retry: Option<Value> = None;
     let attempt = r.report.binding.attempt_id;
     let owner_settled = aq_profiled_state::result_reads::owner_settled(&mut tx, attempt)
         .await
@@ -256,7 +317,7 @@ async fn replacement_facts(
         effects_quiescent: matches!(hot.effects, Effects::Quiescent { .. }),
         changed: false,
     };
-    if !(reworked || platform_retry)
+    if !(reworked || platform_retry || publication_retry.is_some())
         || !r.is_current_report_head
         || !view.holds_task
         || !view.stopped
@@ -281,6 +342,23 @@ async fn replacement_facts(
         changed,
         ..current(&hot)
     };
+    #[cfg(feature = "delivery_playbook")]
+    if let Some(evidence) = publication_retry
+        && facts.source_retained
+        && facts.effects_quiescent
+    {
+        graph_completion::record_noncompletion(
+            &mut tx,
+            report_id,
+            attempt,
+            (ACTOR, "rework_required", publication_retry::REASON),
+            &evidence,
+            now(state)?,
+        )
+        .await
+        .map_err(db)?
+        .ok_or(AppError::Internal)?;
+    }
     if platform_retry && facts.source_retained && facts.effects_quiescent {
         let reason = aq_machine_control::platform_retry::REASON;
         let evidence =
@@ -665,6 +743,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
         AutoDisposition::Held | AutoDisposition::ReworkRequired => Settled::Stale,
     };
     let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    let fenced = fenced
+        && !crate::task_workspace_resume::checkpoint_required(&mut tx, r.report.binding.attempt_id)
+            .await?;
     let prior = existing.as_ref().map(status).transpose()?;
     match prior {
         Some(s)
@@ -687,6 +768,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
             return Ok(Settled::Stale);
         }
         _ => {}
+    }
+    if !crate::task_workspace_delivery::gate(state, &mut tx, &r, false).await? {
+        return Ok(Settled::Pending);
     }
     let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.complete", "report": r.receipt_artifact});
     let row = prepare_locked(state, &mut tx, &r, evidence, now(state)?, "Playbook").await?;

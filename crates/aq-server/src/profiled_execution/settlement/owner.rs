@@ -226,6 +226,8 @@ impl Service {
             tx.commit().await.map_err(db)?;
             return Ok(r);
         }
+        crate::task_workspace_resume::fence_completion(&mut tx, result.report.binding.attempt_id)
+            .await?;
         let source =
             source_retention::load_confirmed_locked(&mut tx, request.source_operation_id, &result)
                 .await?;
@@ -265,6 +267,14 @@ impl Service {
             },
         )?;
         let eligible = plan.disposition == Disposition::Eligible;
+        #[cfg(feature = "delivery_playbook")]
+        if eligible
+            && !crate::task_workspace_delivery::gate(&self.state, &mut tx, &result, true).await?
+        {
+            return Err(AppError::Conflict(
+                "workspace delivery evidence is incomplete".into(),
+            ));
+        }
         let count: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM profiled_settlement_evaluations WHERE attempt_id=$1",
         )

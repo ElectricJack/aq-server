@@ -95,7 +95,15 @@ COPY --from=git-build /opt/aq-git-runtime /opt/aq-git-runtime
 RUN ln -s /opt/aq-git-runtime/bin/git /usr/bin/git
 COPY vendor/git-candidate.json /usr/share/agent-q/git-candidate.json
 ENV PATH="/opt/aq-git-runtime/bin:${PATH}"
+<<<<<<< HEAD
 COPY --from=dashboard-build /dashboard /usr/share/agent-q/dashboard
+=======
+COPY vendor/aq-dashboard-v0.1.7.tar.gz /tmp/dashboard.tar.gz
+RUN echo '16b05ac79dfce3ab7adfa163e4971e1de9b1512fdb544ce668a4205c90ec9d90  /tmp/dashboard.tar.gz' | sha256sum -c - \
+    && mkdir -p /usr/share/agent-q/dashboard \
+    && tar -xzf /tmp/dashboard.tar.gz -C /usr/share/agent-q/dashboard \
+    && rm /tmp/dashboard.tar.gz
+>>>>>>> refs/remotes/central/main
 COPY vendor/dashboard-candidate.json /usr/share/agent-q/dashboard-candidate.json
 ENV AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard
 ENV AQ_VAULT_DIR=/vault

@@ -96,6 +96,14 @@ impl Installed {
             if !ctl.enabled {
                 return Ok(None);
             }
+            // Central never prepared this generation, so nothing refers to the turn:
+            // past its admission window it is set aside and re-planned from its dispatch.
+            if stale(turn) {
+                archive_turn(service.config, turn)?;
+                let stage = "Re-planning a turn whose start window passed";
+                service.report("waiting", stage, None).await?;
+                return Ok(None);
+            }
             if let Some(reason) =
                 crate::config::swarm_wait(pool, turn.swarm_profile.as_ref()).await?
             {
@@ -125,6 +133,10 @@ impl Installed {
         };
         Ok(Some(state))
     }
+}
+
+fn stale(turn: &Config) -> bool {
+    crate::admission_clock(&turn.host).is_err()
 }
 
 #[cfg(test)]

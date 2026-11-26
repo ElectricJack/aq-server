@@ -1,0 +1,1864 @@
+{
+  "$defs": {
+    "AcceptRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "reservation_deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "reservation_remaining_ms": {
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "resolved_spec_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "offer_id",
+        "attempt",
+        "resolved_spec_digest",
+        "reservation_id",
+        "reservation_deadline_ms",
+        "reservation_remaining_ms"
+      ],
+      "type": "object"
+    },
+    "AcceptResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/Grant"
+        }
+      },
+      "required": [
+        "grant"
+      ],
+      "type": "object"
+    },
+    "Ack": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "ArtifactHandoffRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "attempt",
+        "artifact",
+        "offset",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "ArtifactHandoffResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledged_offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "central_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "acknowledged_offset"
+      ],
+      "type": "object"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "central_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "digest",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "AttemptRef": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "session_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "session_id",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "CentralRetentionReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "manifest_digest": {
+          "type": "string"
+        },
+        "receipt_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "retention_handle": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "transfer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "transfer_id",
+        "repository_id",
+        "binding_generation",
+        "source",
+        "retention_handle",
+        "manifest_digest"
+      ],
+      "type": "object"
+    },
+    "DeclineRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 4096,
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "offer_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Directive": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "directive_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DirectiveKind"
+        }
+      },
+      "required": [
+        "directive_id",
+        "attempt",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "DirectiveAck": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "directive_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/DirectiveDisposition"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "directive_id",
+        "attempt",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "DirectiveDisposition": {
+      "enum": [
+        "received",
+        "stopped",
+        "stop_uncertain"
+      ],
+      "type": "string"
+    },
+    "DirectiveKind": {
+      "enum": [
+        "cancel",
+        "drain"
+      ],
+      "type": "string"
+    },
+    "ErrorCode": {
+      "enum": [
+        "unsupported_protocol",
+        "unsupported_capability",
+        "invalid_request",
+        "invalid_credential",
+        "credential_revoked",
+        "stale_boot",
+        "stale_generation",
+        "id_conflict",
+        "offer_expired",
+        "reservation_expired",
+        "grant_expired",
+        "cancelled",
+        "capacity_unavailable",
+        "not_found",
+        "overloaded",
+        "internal"
+      ],
+      "type": "string"
+    },
+    "ExecutionBindings": {
+      "additionalProperties": false,
+      "properties": {
+        "graph": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ExecutionSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "bindings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionBindings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fixture_output": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "harness": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "resolved_spec_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        }
+      },
+      "required": [
+        "project_id",
+        "harness",
+        "resolved_spec_digest",
+        "fixture_output",
+        "resources",
+        "required_capabilities"
+      ],
+      "type": "object"
+    },
+    "Grant": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "grant_sequence": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "reservation_deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "resolved_spec_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "valid_for_ms": {
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "identity",
+        "attempt",
+        "offer_id",
+        "reservation_id",
+        "resolved_spec_digest",
+        "grant_sequence",
+        "valid_for_ms",
+        "reservation_deadline_ms"
+      ],
+      "type": "object"
+    },
+    "GraphBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "context_digest": {
+          "type": "string"
+        },
+        "profile_digest": {
+          "type": "string"
+        },
+        "profile_id": {
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "profile_revision": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "profile_id",
+        "profile_revision",
+        "profile_digest",
+        "context_digest"
+      ],
+      "type": "object"
+    },
+    "NodeIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "boot_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "node_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "boot_id"
+      ],
+      "type": "object"
+    },
+    "ObjectAlgorithm": {
+      "enum": [
+        "sha1"
+      ],
+      "type": "string"
+    },
+    "ObjectId": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "$ref": "#/$defs/ObjectAlgorithm"
+        },
+        "hex": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "detail": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "stop_certainty": {
+          "$ref": "#/$defs/StopCertainty"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "attempt",
+        "sequence",
+        "phase",
+        "stop_certainty",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "Offer": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "offer_expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "reservation_ttl_ms": {
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "spec": {
+          "$ref": "#/$defs/ExecutionSpec"
+        }
+      },
+      "required": [
+        "offer_id",
+        "identity",
+        "attempt",
+        "spec",
+        "offer_expires_at_ms",
+        "reservation_ttl_ms"
+      ],
+      "type": "object"
+    },
+    "Phase": {
+      "enum": [
+        "reserved",
+        "authorized",
+        "preparing",
+        "running",
+        "stopping",
+        "collecting",
+        "reporting",
+        "acknowledged",
+        "retired",
+        "launch_uncertain"
+      ],
+      "type": "string"
+    },
+    "PollRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "$ref": "#/$defs/Resources"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "inventory_sequence": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_items": {
+          "format": "uint32",
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "inventory_sequence",
+        "available",
+        "max_items"
+      ],
+      "type": "object"
+    },
+    "PollResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "directives": {
+          "items": {
+            "$ref": "#/$defs/Directive"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "offers": {
+          "items": {
+            "$ref": "#/$defs/Offer"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "server_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "server_time_ms",
+        "offers",
+        "directives"
+      ],
+      "type": "object"
+    },
+    "ProcessOutcome": {
+      "enum": [
+        "success",
+        "failed",
+        "cancelled",
+        "expired",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ProtocolError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "ReconcileAction": {
+      "enum": [
+        "stop_and_preserve",
+        "await_report",
+        "acknowledged",
+        "renewed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ReconcileAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "previous_boot_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "report_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stop_certainty": {
+          "$ref": "#/$defs/StopCertainty"
+        }
+      },
+      "required": [
+        "attempt",
+        "previous_boot_id",
+        "phase",
+        "stop_certainty"
+      ],
+      "type": "object"
+    },
+    "ReconcileDisposition": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ReconcileAction"
+        },
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Grant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResultResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attempt",
+        "action"
+      ],
+      "type": "object"
+    },
+    "ReconcileRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/ReconcileAttempt"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "max_items": {
+          "format": "uint32",
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "attempts",
+        "max_items"
+      ],
+      "type": "object"
+    },
+    "ReconcileResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/ReconcileDisposition"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempts"
+      ],
+      "type": "object"
+    },
+    "RegisterRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worker_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "protocol_version",
+        "worker_version",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "RegisterResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "identity",
+        "protocol_version",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "RenewRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "grant_sequence": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "attempt",
+        "grant_sequence"
+      ],
+      "type": "object"
+    },
+    "RenewResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/Grant"
+        }
+      },
+      "required": [
+        "grant"
+      ],
+      "type": "object"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_millis": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "disk_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slots": {
+          "format": "uint32",
+          "maximum": 1024,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slots",
+        "cpu_millis",
+        "memory_bytes",
+        "disk_bytes"
+      ],
+      "type": "object"
+    },
+    "ResultDisposition": {
+      "enum": [
+        "accepted",
+        "retained_cancelled",
+        "retained_stale",
+        "rejected"
+      ],
+      "type": "string"
+    },
+    "ResultReport": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "claimed_success": {
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ProcessOutcome"
+        },
+        "output": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "pending_operation_ids": {
+          "items": {
+            "format": "uuid",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            },
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "report_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "resolved_spec_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "stop_certainty": {
+          "$ref": "#/$defs/StopCertainty"
+        },
+        "supersedes_report_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "identity",
+        "report_id",
+        "attempt",
+        "resolved_spec_digest",
+        "outcome",
+        "stop_certainty",
+        "claimed_success",
+        "output",
+        "artifacts",
+        "pending_operation_ids"
+      ],
+      "type": "object"
+    },
+    "ResultResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/ResultDisposition"
+        },
+        "report_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "retention_release": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "report_id",
+        "disposition",
+        "retention_release"
+      ],
+      "type": "object"
+    },
+    "SourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "binding_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "logical_identity": {
+          "type": "string"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_id",
+        "binding_generation",
+        "logical_identity",
+        "base"
+      ],
+      "type": "object"
+    },
+    "SourceRole": {
+      "enum": [
+        "base",
+        "checkpoint"
+      ],
+      "type": "string"
+    },
+    "StopCertainty": {
+      "enum": [
+        "not_started",
+        "running",
+        "confirmed_stopped",
+        "stop_uncertain"
+      ],
+      "type": "string"
+    },
+    "TransferChunkRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "file": {
+          "$ref": "#/$defs/TransferFile"
+        },
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "length": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "transfer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "transfer_id",
+        "file",
+        "offset",
+        "length",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "TransferFile": {
+      "enum": [
+        "manifest",
+        "bundle"
+      ],
+      "type": "string"
+    },
+    "TransferManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "bundle_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "bundle_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "manifest_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "manifest_digest": {
+          "type": "string"
+        },
+        "resolved_spec_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/SourceRole"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceBinding"
+        },
+        "transfer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id",
+        "role",
+        "checkpoint",
+        "attempt",
+        "resolved_spec_digest",
+        "source",
+        "artifact_id",
+        "manifest_digest",
+        "manifest_bytes",
+        "bundle_bytes"
+      ],
+      "type": "object"
+    },
+    "TransferStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "manifest_offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CentralRetentionReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transfer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id",
+        "manifest_offset",
+        "bundle_offset"
+      ],
+      "type": "object"
+    },
+    "TransferStatusRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/NodeIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "transfer_id": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "operation_id",
+        "transfer_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Root union makes every message available in the single generated JSON schema.",
+  "oneOf": [
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/TransferManifest"
+        },
+        "message": {
+          "const": "transfer_manifest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/TransferChunkRequest"
+        },
+        "message": {
+          "const": "transfer_chunk_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/TransferStatusRequest"
+        },
+        "message": {
+          "const": "transfer_status_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/TransferStatus"
+        },
+        "message": {
+          "const": "transfer_status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/CentralRetentionReceipt"
+        },
+        "message": {
+          "const": "central_retention_receipt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RegisterRequest"
+        },
+        "message": {
+          "const": "register_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RegisterResponse"
+        },
+        "message": {
+          "const": "register_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PollRequest"
+        },
+        "message": {
+          "const": "poll_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PollResponse"
+        },
+        "message": {
+          "const": "poll_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/AcceptRequest"
+        },
+        "message": {
+          "const": "accept_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/AcceptResponse"
+        },
+        "message": {
+          "const": "accept_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/DeclineRequest"
+        },
+        "message": {
+          "const": "decline_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RenewRequest"
+        },
+        "message": {
+          "const": "renew_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RenewResponse"
+        },
+        "message": {
+          "const": "renew_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Observation"
+        },
+        "message": {
+          "const": "observation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Ack"
+        },
+        "message": {
+          "const": "ack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/DirectiveAck"
+        },
+        "message": {
+          "const": "directive_ack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ArtifactHandoffRequest"
+        },
+        "message": {
+          "const": "artifact_handoff_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ArtifactHandoffResponse"
+        },
+        "message": {
+          "const": "artifact_handoff_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ResultReport"
+        },
+        "message": {
+          "const": "result_report",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ResultResponse"
+        },
+        "message": {
+          "const": "result_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ReconcileRequest"
+        },
+        "message": {
+          "const": "reconcile_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ReconcileResponse"
+        },
+        "message": {
+          "const": "reconcile_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ProtocolError"
+        },
+        "message": {
+          "const": "protocol_error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "body"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "WireMessage"
+}

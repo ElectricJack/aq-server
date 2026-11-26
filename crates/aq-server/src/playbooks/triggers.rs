@@ -159,11 +159,6 @@ impl Service {
         let (limits, _) = aq_role_settings::delivery_limits(&self.pool)
             .await
             .map_err(|_| Error::Unknown)?;
-        let repeat = limits.decision_repeat_ms as i64;
-        let bounds = (
-            repeat,
-            (limits.longest_check_wait_ms as i64).saturating_add(repeat),
-        );
         let (now, ns_key) = (
             self.now()?,
             (self.namespace.namespace_id, self.namespace.generation),
@@ -178,7 +173,7 @@ impl Service {
             project,
             limit,
             now,
-            bounds,
+            &limits,
         )
         .await?;
         let contract = self.registry().events["aq.work.result_ready"].clone();
