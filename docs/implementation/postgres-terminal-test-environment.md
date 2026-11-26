@@ -14,8 +14,7 @@ versions as the PostgreSQL-only recipe. It verifies the Node 24.11.0 and pnpm
 worker's fixed shell path, `/usr/local/bin:/usr/bin:/bin`. The checks run
 as the image's agent user and verify tool resolution and PostgreSQL cluster initialization.
 
-On a checkout carrying the retained terminal regression scripts, run
-`node --test scripts/test-dashboard-terminal.mjs` and
+On a checkout carrying the dashboard release scripts, run
 `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-dashboard-candidate.py`.
 These checks use the checkout and task-local scratch space. Use the existing
 locked server and dashboard CI workflows for Rust and dependency-backed

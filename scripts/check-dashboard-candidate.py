@@ -2,7 +2,6 @@
 """Verify the published dashboard pin, bounded archive, and server-image wiring."""
 import argparse
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -41,12 +40,8 @@ def verify(root=ROOT):
     require(sha256(archive_path.read_bytes()) == pin["archive_sha256"], "archive SHA256 mismatch")
     files = read_archive(archive_path)
     verify_manifest(files, pin)
-    verify_server_image(root, archive)
-    spec = importlib.util.spec_from_file_location("dashboard_terminal_patch", root / "scripts/patch-dashboard-terminal.py")
-    patch = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(patch)
-    files = patch.apply(files, root)
-    return dict(pin, upstream_dashboard_digest=pin["dashboard_digest"], dashboard_digest="sha256:" + sha256(files["dashboard-manifest.json"])), files
+    verify_server_image(root, archive, pin)
+    return pin, files
 
 
 def read_archive(archive_path):
@@ -84,19 +79,19 @@ def verify_manifest(files, pin):
     files["dashboard-manifest.json"] = manifest_bytes
 
 
-def verify_server_image(root, archive):
+def verify_server_image(root, archive, pin):
     docker = (root / "Dockerfile").read_text()
-    require("FROM rust:1.96.1-bookworm@" in docker and " AS dashboard-build\n" in docker, "Docker dashboard build stage missing")
-    require(f"COPY vendor/{archive} /build/vendor/{archive}\n" in docker, "Docker dashboard archive differs from pin")
-    # Verification runs inside the image build, including the upstream checksum,
-    # manifest inventory, local patch match, and regenerated asset integrity.
-    require("RUN mkdir /dashboard && python3 scripts/check-dashboard-candidate.py --extract /dashboard\n" in docker,
-            "Docker dashboard verification/extraction missing")
     runtime = docker.split("FROM runtime AS server\n", 1)[1]
-    wiring = "COPY --from=dashboard-build /dashboard /usr/share/agent-q/dashboard\n"
-    require(wiring in runtime, "Docker server stage dashboard wiring differs from pin")
+    install = (
+        f"COPY vendor/{archive} /tmp/dashboard.tar.gz\n"
+        f"RUN echo '{pin['archive_sha256']}  /tmp/dashboard.tar.gz' | sha256sum -c - \\\n"
+        "    && mkdir -p /usr/share/agent-q/dashboard \\\n"
+        "    && tar -xzf /tmp/dashboard.tar.gz -C /usr/share/agent-q/dashboard \\\n"
+        "    && rm /tmp/dashboard.tar.gz\n"
+    )
+    require(install in runtime, "Docker server stage dashboard wiring differs from pin")
     require("ENV AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard\n" in runtime, "Docker dashboard directory missing")
-    require(runtime.index(wiring) < runtime.index("USER 10001:10001"), "dashboard must be installed before dropping privileges")
+    require(runtime.index(install) < runtime.index("USER 10001:10001"), "dashboard must be installed before dropping privileges")
 
 
 def extract(files, destination):
@@ -116,7 +111,7 @@ def main():
     pin, files = verify()
     if args.extract:
         extract(files, args.extract)
-    print(json.dumps({"tag": pin["tag"], "archive_sha256": pin["archive_sha256"], "dashboard_digest": pin["dashboard_digest"], "upstream_dashboard_digest": pin["upstream_dashboard_digest"], "local_terminal_patch": True, "files": len(files) - 1}))
+    print(json.dumps({"tag": pin["tag"], "archive_sha256": pin["archive_sha256"], "dashboard_digest": pin["dashboard_digest"], "files": len(files) - 1}))
 
 
 if __name__ == "__main__":

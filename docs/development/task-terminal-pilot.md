@@ -20,6 +20,31 @@ used a rootful Docker daemon. The native worker control, archive and scheduler
 paths have separate tests. This host lacks the UID/GID mapping helpers for a
 physical multi-UID rootless worker rehearsal.
 
+## Black terminal for a running task agent: cause and fix
+
+Task `a3c72f06-d1a6-428e-bf67-b0f1c734a8c9`. In the v0.1.5 dashboard,
+`nativeTerminalClient.liveAttempt` resolved the selected terminal to its attempt
+and also made a throwaway `POST /api/attempt-terminals/{attempt}/terminal/connect`
+with a separate client ID, swallowing every error. A refused or failed preflight
+returned `null`, so the pane silently fell back to the input-disabled finite relay
+instead of the live attempt terminal. The result was a black pane with no input
+path, and a successful preflight acquired control twice for one socket.
+
+The server needed no change. Dashboard v0.1.7 (`ce34824e`, pinned in
+`vendor/dashboard-candidate.json`) makes discovery read-only, acquires control
+once per live socket, and carries the focused client tests and
+`tests/live/running-task-terminal.spec.ts`. An earlier retained attempt
+patched the compiled v0.1.5 bundle in the image build; that overlay is removed
+because the pinned official release contains the repair. The image installs the
+verified archive directly, and `scripts/check-dashboard-candidate.py` checks the
+pin, archive and that wiring.
+
+Evidence in this change: `python3 -I scripts/check-dashboard-candidate.py` and
+`python3 -I scripts/test-dashboard-candidate.py` (4 tests) pass. The browser
+check in "Run the pilot" below is the end-to-end running-task check. It needs
+Docker, PostgreSQL, tmux and Chromium, which the authoring sandbox lacked, so it
+was not re-run for v0.1.7 here.
+
 ## Run the pilot
 
 Run this from the server pilot worktree. The build uses the existing dashboard integration binary and the worktree's own Cargo target. The runner needs Docker with the local `postgres:17-bookworm` and Graph images, tmux, and Python with `websockets` 16.
