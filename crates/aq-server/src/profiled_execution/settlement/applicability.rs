@@ -71,6 +71,32 @@ struct Original {
     task: aq_admission::TaskRevision,
     source_operation: Uuid,
 }
+impl Original {
+    fn validate_context(
+        &self,
+        state: &AppState,
+        graph: &crate::agent_access::scheduling::TaskContext,
+        project: &ProjectBinding,
+        task: &aq_admission::TaskRevision,
+    ) -> Result<(), AppError> {
+        let projection = context_projection::project(
+            graph,
+            project.project_id,
+            project.repository_id,
+            project.graph_workspace_id,
+            &self.permissions,
+            now(state)?,
+        )
+        .map_err(|_| changed())?;
+        if !no_required_neighbors(&projection.context, task)
+            || !same_content(&self.context, &projection.context)
+        {
+            return Err(changed());
+        }
+        Ok(())
+    }
+}
+
 pub(super) async fn fence_project_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
@@ -124,18 +150,10 @@ pub(crate) fn policy(
         .ok_or_else(unavailable)?;
     PilotPolicy::from_definition(d)
 }
-async fn load_original(
-    state: &AppState,
+async fn load_task_context(
     tx: &mut Transaction<'_, Postgres>,
-    report: Uuid,
-    source_operation: Uuid,
-) -> Result<Original, AppError> {
-    let r = results::load_locked(state, tx, report).await?;
-    if !r.is_current_report_head {
-        return Err(changed());
-    }
-    policy(state, &r)?;
-    let project = fence_project_locked(state, tx, &r).await?;
+    r: &results::RecordedResult,
+) -> Result<Option<Value>, AppError> {
     let mut context = None;
     let mut refs = r.outcome.inputs.clone();
     refs.push(r.spec.task_context.clone());
@@ -179,6 +197,22 @@ async fn load_original(
             return Err(changed());
         }
     }
+    Ok(context)
+}
+
+async fn load_original(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    report: Uuid,
+    source_operation: Uuid,
+) -> Result<Original, AppError> {
+    let r = results::load_locked(state, tx, report).await?;
+    if !r.is_current_report_head {
+        return Err(changed());
+    }
+    policy(state, &r)?;
+    let project = fence_project_locked(state, tx, &r).await?;
+    let context = load_task_context(tx, &r).await?;
     let source = source_retention::load_confirmed_locked(tx, source_operation, &r).await?;
     let permissions = project
         .ceilings
@@ -263,20 +297,7 @@ impl Observation {
         })
         .await
         .map_err(|_| unavailable())??;
-        let projection = context_projection::project(
-            &graph,
-            original.project.project_id,
-            original.project.repository_id,
-            original.project.graph_workspace_id,
-            &original.permissions,
-            now(state)?,
-        )
-        .map_err(|_| changed())?;
-        if !no_required_neighbors(&projection.context, &original.task)
-            || !same_content(&original.context, &projection.context)
-        {
-            return Err(changed());
-        }
+        original.validate_context(state, &graph, &original.project, &original.task)?;
         Ok(Self {
             original,
             graph,
@@ -303,20 +324,8 @@ impl Observation {
         {
             return Err(changed());
         }
-        let projection = context_projection::project(
-            &self.graph,
-            project.project_id,
-            project.repository_id,
-            project.graph_workspace_id,
-            &self.original.permissions,
-            now(state)?,
-        )
-        .map_err(|_| changed())?;
-        if !no_required_neighbors(&projection.context, &result.spec.task)
-            || !same_content(&self.original.context, &projection.context)
-        {
-            return Err(changed());
-        }
+        self.original
+            .validate_context(state, &self.graph, &project, &result.spec.task)?;
         self.retention.validate_current(state, source)?;
         let view = crate::execution::authority::load_locked(
             state,
@@ -339,20 +348,8 @@ impl Observation {
     /// before commit. It does not turn saved graph bytes into a new request.
     pub(crate) fn validate_fresh(&self, state: &AppState) -> Result<(), AppError> {
         let p = &self.original.project;
-        let projection = context_projection::project(
-            &self.graph,
-            p.project_id,
-            p.repository_id,
-            p.graph_workspace_id,
-            &self.original.permissions,
-            now(state)?,
-        )
-        .map_err(|_| changed())?;
-        if !no_required_neighbors(&projection.context, &self.original.task)
-            || !same_content(&self.original.context, &projection.context)
-        {
-            return Err(changed());
-        }
+        self.original
+            .validate_context(state, &self.graph, p, &self.original.task)?;
         self.retention
             .validate_current(state, &self.original.source)
     }
@@ -360,5 +357,66 @@ impl Observation {
         Ok(
             json!({"policy":"task_only_mutable_inputs_v1","report":self.original.report,"task":self.original.task,"source":source_digest(&self.original.source)?,"graph_response_digest":self.graph.digest,"graph_requested_at_ms":self.graph.stamp.requested_at_ms,"graph_received_at_ms":self.graph.stamp.received_at_ms,"graph_expires_at_ms":self.graph.stamp.expires_at_ms,"project_digest":self.original.project_digest,"scope":"initial/current task-only context observed; original task CAS fences admitted mutable inputs, not all future incoming citations"}),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_context() -> (Value, aq_admission::TaskRevision) {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/base.json"
+        ))
+        .unwrap();
+        let mut context = fixture["context"]["context"].clone();
+        context["nodes"].as_array_mut().unwrap().truncate(1);
+        context["edges"] = json!([]);
+        context["pinned_revisions"] = json!([]);
+        context["coverage"]["status"] = json!("complete");
+        context["coverage"]["reasons"] = json!([]);
+        let node = &context["nodes"][0];
+        let task = aq_admission::TaskRevision {
+            workspace_id: Uuid::new_v4(),
+            task_id: node["id"].as_str().unwrap().parse().unwrap(),
+            version: node["version"].as_str().unwrap().parse().unwrap(),
+            content_revision: node["content_revision"].as_str().unwrap().parse().unwrap(),
+        };
+        assert!(no_required_neighbors(&context, &task));
+        (context, task)
+    }
+
+    #[test]
+    fn settlement_context_ignores_only_observation_time() {
+        let (context, _) = task_context();
+        let mut observed = context.clone();
+        observed["observed_at"] = json!("2026-11-26T18:00:00Z");
+        assert!(same_content(&context, &observed));
+        observed["nodes"][0]["body"] = json!("changed task content");
+        assert!(!same_content(&context, &observed));
+        let mut missing_time = context.clone();
+        missing_time.as_object_mut().unwrap().remove("observed_at");
+        assert!(!same_content(&context, &missing_time));
+        assert!(!same_content(&missing_time, &missing_time));
+    }
+
+    #[test]
+    fn settlement_context_refuses_neighbors_incomplete_coverage_and_changed_revisions() {
+        let (context, task) = task_context();
+        let mut neighbor = context.clone();
+        neighbor["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(context["nodes"][0].clone());
+        assert!(!no_required_neighbors(&neighbor, &task));
+        let mut incomplete = context.clone();
+        incomplete["coverage"]["status"] = json!("incomplete");
+        assert!(!no_required_neighbors(&incomplete, &task));
+        let mut changed_task = task.clone();
+        changed_task.content_revision += 1;
+        assert!(!no_required_neighbors(&context, &changed_task));
+        changed_task = task.clone();
+        changed_task.version += 1;
+        assert!(!no_required_neighbors(&context, &changed_task));
     }
 }

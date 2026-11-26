@@ -35,12 +35,11 @@ fn now(state: &AppState) -> Result<u64, AppError> {
 fn scope(binding: &LaunchBinding, node: Uuid, boot: Uuid) -> bool {
     matches!(binding.session,SessionIdentity::Remote {node_id,boot_id,..} if node_id==node && boot_id==boot)
 }
-async fn snapshot(
-    tx: &mut Transaction<'_, Postgres>,
-    row: sqlx::postgres::PgRow,
+fn decode_snapshot(
+    row: &sqlx::postgres::PgRow,
     request: &Reconcile,
     expected: Option<&ReconcileAttempt>,
-) -> Result<Snapshot, AppError> {
+) -> Result<(LaunchBinding, HotState, Versions), AppError> {
     let binding: LaunchBinding =
         serde_json::from_value(row.get("launch_binding")).map_err(|_| invalid())?;
     aq_session_protocol::Validate::validate(&binding).map_err(|_| invalid())?;
@@ -89,6 +88,15 @@ async fn snapshot(
     if (versions.grant_revision > 0) != hot.grant.is_some() {
         return Err(invalid());
     }
+    Ok((binding, hot, versions))
+}
+async fn snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    row: sqlx::postgres::PgRow,
+    request: &Reconcile,
+    expected: Option<&ReconcileAttempt>,
+) -> Result<Snapshot, AppError> {
+    let (binding, hot, versions) = decode_snapshot(&row, request, expected)?;
     let holds_task: bool = row.get("holds_task");
     let release = if !holds_task && expected.is_some() {
         lapsed_release(
@@ -191,16 +199,36 @@ async fn read(
         let id = row.get::<Uuid, _>("attempt_id");
         let expected = request.attempts.iter().find(|a| a.binding.attempt_id == id);
         // SQL errors abort the transaction and cannot be concealed as row data.
-        let result = snapshot(&mut tx, row, request, expected).await;
-        if matches!(
-            &result,
-            Err(AppError::UpdatesUnavailable(_) | AppError::Internal)
-        ) {
-            return Err(result.err().unwrap());
-        }
+        let result = match snapshot(&mut tx, row, request, expected).await {
+            Err(error @ (AppError::UpdatesUnavailable(_) | AppError::Internal)) => {
+                return Err(error);
+            }
+            result => result,
+        };
         snapshots.insert(id, result);
     }
     let time = now(state)?;
+    let attempts = render_attempts(request, snapshots, time, current_boot);
+    let page = ReconcilePage {
+        schema_version: 1,
+        operation_id: request.operation_id,
+        identity: request.identity.clone(),
+        delivery_nonce: nonce,
+        server_time_ms: time,
+        attempts,
+        next_after,
+    };
+    page.validate_for(request, nonce).map_err(|_| invalid())?;
+    tx.commit().await.map_err(db)?;
+    Ok(page)
+}
+fn render_attempts(
+    request: &Reconcile,
+    mut snapshots: std::collections::BTreeMap<Uuid, Result<Snapshot, AppError>>,
+    time: u64,
+    current_boot: bool,
+) -> Vec<ReconcileEntry> {
+    let explicit = !request.attempts.is_empty();
     let mut attempts = Vec::new();
     if explicit {
         for wanted in &request.attempts {
@@ -235,18 +263,7 @@ async fn read(
             }
         }
     }
-    let page = ReconcilePage {
-        schema_version: 1,
-        operation_id: request.operation_id,
-        identity: request.identity.clone(),
-        delivery_nonce: nonce,
-        server_time_ms: time,
-        attempts,
-        next_after,
-    };
-    page.validate_for(request, nonce).map_err(|_| invalid())?;
-    tx.commit().await.map_err(db)?;
-    Ok(page)
+    attempts
 }
 pub async fn reconcile(
     state: &AppState,

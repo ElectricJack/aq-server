@@ -67,48 +67,28 @@ pub(super) async fn load(
     stopped
         .validate_for(&context, &started)
         .map_err(|_| conflict())?;
-    for (row, outer, ack, digest, inner, inner_ack, inner_digest) in [
-        (
-            &start,
-            &start_bytes,
-            &start_ack_bytes,
-            started.digest().map_err(|_| conflict())?,
-            canonical(&started.original)?,
-            canonical(&started_ack.original)?,
-            started.original.digest().map_err(|_| conflict())?,
-        ),
-        (
-            &stop,
-            &stop_bytes,
-            &stop_ack_bytes,
-            stopped.digest().map_err(|_| conflict())?,
-            canonical(&stopped.original)?,
-            canonical(&stopped_ack.original)?,
-            stopped.original.digest().map_err(|_| conflict())?,
-        ),
-    ] {
-        if row.get::<Uuid, _>("node_id") != node
-            || row.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
-            || row
-                .get::<Option<String>, _>("initial_authority_receipt_digest")
-                .as_deref()
-                != Some(history.receipt_digest.as_str())
-            || row
-                .get::<Option<String>, _>("phase_request_digest")
-                .as_deref()
-                != Some(digest.as_str())
-            || row
-                .get::<Option<String>, _>("phase_envelope_digest")
-                .as_deref()
-                != Some(Digest::of(outer).as_str())
-            || row.get::<Option<String>, _>("phase_ack_digest").as_deref()
-                != Some(Digest::of(ack).as_str())
-            || row.get::<Vec<u8>, _>("request_bytes") != inner
-            || row.get::<Vec<u8>, _>("receipt_bytes") != inner_ack
-            || row.get::<String, _>("request_digest") != inner_digest.as_str()
-        {
-            return Err(conflict());
-        }
+    let evidence = [
+        ReceiptEvidence {
+            row: &start,
+            envelope: &start_bytes,
+            ack: &start_ack_bytes,
+            request_digest: started.digest().map_err(|_| conflict())?,
+            original_request: canonical(&started.original)?,
+            original_ack: canonical(&started_ack.original)?,
+            original_digest: started.original.digest().map_err(|_| conflict())?,
+        },
+        ReceiptEvidence {
+            row: &stop,
+            envelope: &stop_bytes,
+            ack: &stop_ack_bytes,
+            request_digest: stopped.digest().map_err(|_| conflict())?,
+            original_request: canonical(&stopped.original)?,
+            original_ack: canonical(&stopped_ack.original)?,
+            original_digest: stopped.original.digest().map_err(|_| conflict())?,
+        },
+    ];
+    for receipt in evidence {
+        receipt.validate(node, &history.receipt_digest)?;
     }
     let qualification: ArtifactRef = serde_json::from_value(
         stop.get::<Option<serde_json::Value>, _>("phase_terminal_qualification")
@@ -148,4 +128,41 @@ pub(super) async fn load(
         stopped,
         stopped_ack,
     })
+}
+
+struct ReceiptEvidence<'a> {
+    row: &'a PgRow,
+    envelope: &'a [u8],
+    ack: &'a [u8],
+    request_digest: Digest,
+    original_request: Vec<u8>,
+    original_ack: Vec<u8>,
+    original_digest: Digest,
+}
+impl ReceiptEvidence<'_> {
+    fn validate(&self, node: Uuid, execution_digest: &Digest) -> Result<()> {
+        if self.row.get::<Uuid, _>("node_id") != node
+            || self.row.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
+            || self.row
+                .get::<Option<String>, _>("initial_authority_receipt_digest")
+                .as_deref()
+                != Some(execution_digest.as_str())
+            || self.row
+                .get::<Option<String>, _>("phase_request_digest")
+                .as_deref()
+                != Some(self.request_digest.as_str())
+            || self.row
+                .get::<Option<String>, _>("phase_envelope_digest")
+                .as_deref()
+                != Some(Digest::of(self.envelope).as_str())
+            || self.row.get::<Option<String>, _>("phase_ack_digest").as_deref()
+                != Some(Digest::of(self.ack).as_str())
+            || self.row.get::<Vec<u8>, _>("request_bytes") != self.original_request
+            || self.row.get::<Vec<u8>, _>("receipt_bytes") != self.original_ack
+            || self.row.get::<String, _>("request_digest") != self.original_digest.as_str()
+        {
+            return Err(conflict());
+        }
+        Ok(())
+    }
 }
