@@ -254,7 +254,7 @@ impl GitHubAdapter for GitHubApp {
         let head_sha = commit_sha(&pull_request.head_sha).map_err(|_| {
             GitHubApiError::Protocol("pull request head is not an object id".into())
         })?;
-        let mut requirements = s.required_checks(base).await?;
+        let (mut requirements, merge_queue) = s.base_rules(base).await?;
         for name in required.into_iter().flatten() {
             requirements.entry(name.clone()).or_default();
         }
@@ -265,6 +265,7 @@ impl GitHubAdapter for GitHubApp {
             failed,
             required: requirements.into_keys().collect(),
             pull_request,
+            merge_queue,
         })
     }
 

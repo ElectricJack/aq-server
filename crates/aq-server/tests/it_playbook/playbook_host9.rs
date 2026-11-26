@@ -2596,6 +2596,7 @@ mod delivery {
                     failed,
                     required: vec![],
                     pull_request: self.pull_request(repo, pr).await?,
+                    merge_queue: false,
                 })
             }
             async fn merge(

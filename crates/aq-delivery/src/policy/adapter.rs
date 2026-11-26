@@ -47,6 +47,9 @@ pub struct Checks {
     pub required: Vec<String>,
     /// The same pull request observation that selected the check head and base.
     pub pull_request: PullRequest,
+    /// The base branch's rules require a merge queue: a head behind its base
+    /// needs no refresh, the queue merges it onto the base it builds.
+    pub merge_queue: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
