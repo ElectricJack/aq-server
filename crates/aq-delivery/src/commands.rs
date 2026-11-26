@@ -285,6 +285,11 @@ impl Delivery {
                 diagnostic: Some("remote_rejected"),
                 ..Completion::refused("unreachable")
             },
+            // An earlier push of the branch with an unknown outcome still holds it.
+            Err(e) if e.code == "operation_indeterminate" => Completion {
+                diagnostic: Some("publication_indeterminate"),
+                ..Completion::refused("unreachable")
+            },
             Err(_) => Completion::refused("unreachable"),
         })
     }

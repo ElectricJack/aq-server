@@ -635,7 +635,12 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     let provenance = json!({"result_ready":{"task_id":task,"project_id":project,"attempt_id":attempt,"result_id":report},"result_head":head});
     sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused','{\"reason\":\"unreachable\"}',$6,$6)")
         .bind(publication).bind(h.namespace).bind(publication.to_string())
-        .bind(task.to_string()).bind(provenance).bind(NOW as i64).execute(&h.pool).await.unwrap();
+        .bind(task.to_string()).bind(&provenance).bind(NOW as i64).execute(&h.pool).await.unwrap();
+    // An earlier refusal, from a destination aq-git held, does not hide the later rejection.
+    let held = Uuid::new_v4();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5 || '{\"answer_note\":\"publication_indeterminate\"}'::jsonb,'refused','{\"reason\":\"unreachable\"}',$6,$6)")
+        .bind(held).bind(h.namespace).bind(held.to_string())
+        .bind(task.to_string()).bind(&provenance).bind(NOW as i64 - 1).execute(&h.pool).await.unwrap();
 
     let query = json!({"operation_id":original,"kind":"task.retry",
         "subject":{"type":"task","id":task,"revision":version},"expected_versions":{"task":version},

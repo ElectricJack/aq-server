@@ -2645,6 +2645,7 @@ mod delivery {
                         code: "transport".into(),
                         message: "cleanup unavailable".into(),
                         transient: true,
+                        details: serde_json::Value::Null,
                     });
                 }
                 Ok(RefDeletion::Deleted)
