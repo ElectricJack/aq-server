@@ -188,17 +188,15 @@ impl DeliveryRuns<'_> {
             ),
             _ => None,
         };
-        let (longest_check_wait_ms, check_log_bytes) = if name == "pull_request.await_checks" {
+        let limits = if matches!(name, "pull_request.await_checks" | "pull_request.merge") {
             let (limits, _) = aq_role_settings::delivery_limits(self.pool)
                 .await
                 .map_err(|_| Error::Unknown)?;
-            (
-                Some(limits.longest_check_wait_ms),
-                Some(limits.check_log_bytes),
-            )
+            Some(limits)
         } else {
-            (None, None)
+            None
         };
+        let waits = |wanted: &str| limits.filter(|_| name == wanted);
         let accepting = Accepting {
             command: name,
             project: subject.project,
@@ -206,8 +204,11 @@ impl DeliveryRuns<'_> {
             head: latest.map_or("", |record| record.head.as_str()),
             subject: crate::host_values::subject(&subject.id, 0),
             text,
-            longest_check_wait_ms,
-            check_log_bytes,
+            longest_check_wait_ms: waits("pull_request.await_checks")
+                .map(|l| l.longest_check_wait_ms),
+            check_log_bytes: limits.map(|l| l.check_log_bytes),
+            longest_merge_queue_wait_ms: waits("pull_request.merge")
+                .map(|l| l.longest_merge_queue_wait_ms),
             target: if matches!(name, "pull_request.merge" | "pull_request.await_checks") {
                 self.operations.target(subject.project).await?
             } else {

@@ -104,6 +104,7 @@ async fn a_behind_green_pr_is_refreshed_checked_again_and_merged_at_the_new_head
 
     // The merge is pinned to 1; the central ref is still b.
     mock.reply(200, vec![], at('1', 'd', "clean"));
+    no_queue(&mock);
     mock.reply(200, vec![], json!({"sha": sha('f'), "merged": true}));
     assert_eq!(merge(&delivery, Some('1')).await.outcome, "merged");
     let seen = mock.seen();

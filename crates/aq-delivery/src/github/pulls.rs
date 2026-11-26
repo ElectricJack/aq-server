@@ -9,7 +9,7 @@ use super::{
 };
 use crate::policy::{
     BranchDeletion, Checks, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod,
-    MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState,
+    MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState, QueueWait,
 };
 use reqwest::Method;
 use serde::Deserialize;
@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod checks;
 mod merge;
+mod queue;
 
 /// GitHub protocol: the largest `per_page` list endpoints accept.
 const GITHUB_MAX_PER_PAGE: usize = 100;
@@ -317,12 +318,15 @@ impl GitHubAdapter for GitHubApp {
         method: MergeMethod,
         expected_head_sha: &str,
         expected_base: &str,
+        queue: QueueWait,
     ) -> GitHubResult<MergeOutcome> {
         let expected = commit_sha(expected_head_sha)?;
         let s = Session::new(self, repo).await?;
         merge::MergeTarget {
+            repo,
             head: expected,
             base: expected_base,
+            queue,
         }
         .merge(&s, pr, method)
         .await

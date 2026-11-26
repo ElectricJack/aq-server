@@ -2605,6 +2605,7 @@ mod delivery {
                 method: MergeMethod,
                 expected_head_sha: &str,
                 _: &str,
+                _: aq_delivery::QueueWait,
             ) -> GitHubResult<MergeOutcome> {
                 self.log
                     .lock()

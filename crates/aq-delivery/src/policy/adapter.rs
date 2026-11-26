@@ -101,14 +101,33 @@ pub enum MergeOutcome {
     Conflict,
     /// GitHub positively observed that the tracked head is behind its base.
     Behind,
-    /// GitHub 405: not mergeable now (protection, pending checks, ...).
+    /// GitHub 405: not mergeable now (protection, pending checks, ...), or
+    /// the merge queue took it out for a reason other than a conflict or
+    /// failed checks.
     NotMergeable {
         message: String,
+    },
+    /// In the base branch's merge queue: enqueued now or earlier. Look again.
+    Queued,
+    /// The merge queue took it out because required checks failed on its
+    /// merge group commit `merge_group` (`None` when GitHub shows no run).
+    ChecksFailed {
+        names: Vec<String>,
+        merge_group: Option<String>,
     },
     Refused {
         reason: MergeRefusal,
         message: String,
     },
+}
+
+/// What a merge into a branch that requires a merge queue needs besides the
+/// head: when the operation began, so that only a removal from the queue
+/// after it counts, and whether its wait is over (take it out, enqueue none).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueueWait {
+    pub since_ms: i64,
+    pub give_up: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,7 +176,9 @@ pub trait GitHubAdapter: Send + Sync {
     ) -> GitHubResult<Option<String>> {
         Ok(None)
     }
-    /// Check the base branch and submit the merge with the expected head SHA.
+    /// Check the base branch and submit the merge with the expected head SHA,
+    /// or, when the base branch requires a merge queue, enqueue it there and
+    /// report its place ([`MergeOutcome::Queued`]) until it is merged or out.
     async fn merge(
         &self,
         repo: &GitHubRepository,
@@ -165,6 +186,7 @@ pub trait GitHubAdapter: Send + Sync {
         method: MergeMethod,
         expected_head_sha: &str,
         expected_base: &str,
+        queue: QueueWait,
     ) -> GitHubResult<MergeOutcome>;
     async fn close(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest>;
     async fn branch_head(
@@ -230,6 +252,7 @@ impl GitHubAdapter for UnconfiguredGitHub {
         _: MergeMethod,
         _: &str,
         _: &str,
+        _: QueueWait,
     ) -> GitHubResult<MergeOutcome> {
         Err(GitHubApiError::Unconfigured)
     }

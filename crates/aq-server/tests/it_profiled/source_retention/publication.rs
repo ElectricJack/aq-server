@@ -72,6 +72,7 @@ impl GitHubAdapter for FakeGitHub {
         _: MergeMethod,
         _: &str,
         _: &str,
+        _: aq_server::delivery::QueueWait,
     ) -> GitHubResult<MergeOutcome> {
         self.call("merge")
     }
