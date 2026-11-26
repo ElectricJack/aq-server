@@ -191,16 +191,36 @@ async fn read(
         let id = row.get::<Uuid, _>("attempt_id");
         let expected = request.attempts.iter().find(|a| a.binding.attempt_id == id);
         // SQL errors abort the transaction and cannot be concealed as row data.
-        let result = snapshot(&mut tx, row, request, expected).await;
-        if matches!(
-            &result,
-            Err(AppError::UpdatesUnavailable(_) | AppError::Internal)
-        ) {
-            return Err(result.err().unwrap());
-        }
+        let result = match snapshot(&mut tx, row, request, expected).await {
+            Err(error @ (AppError::UpdatesUnavailable(_) | AppError::Internal)) => {
+                return Err(error);
+            }
+            result => result,
+        };
         snapshots.insert(id, result);
     }
     let time = now(state)?;
+    let attempts = render_attempts(snapshots, request, time, current_boot);
+    let page = ReconcilePage {
+        schema_version: 1,
+        operation_id: request.operation_id,
+        identity: request.identity.clone(),
+        delivery_nonce: nonce,
+        server_time_ms: time,
+        attempts,
+        next_after,
+    };
+    page.validate_for(request, nonce).map_err(|_| invalid())?;
+    tx.commit().await.map_err(db)?;
+    Ok(page)
+}
+fn render_attempts(
+    mut snapshots: std::collections::BTreeMap<Uuid, Result<Snapshot, AppError>>,
+    request: &Reconcile,
+    time: u64,
+    current_boot: bool,
+) -> Vec<ReconcileEntry> {
+    let explicit = !request.attempts.is_empty();
     let mut attempts = Vec::new();
     if explicit {
         for wanted in &request.attempts {
@@ -235,18 +255,7 @@ async fn read(
             }
         }
     }
-    let page = ReconcilePage {
-        schema_version: 1,
-        operation_id: request.operation_id,
-        identity: request.identity.clone(),
-        delivery_nonce: nonce,
-        server_time_ms: time,
-        attempts,
-        next_after,
-    };
-    page.validate_for(request, nonce).map_err(|_| invalid())?;
-    tx.commit().await.map_err(db)?;
-    Ok(page)
+    attempts
 }
 pub async fn reconcile(
     state: &AppState,
@@ -279,3 +288,6 @@ pub async fn reconcile(
         )
     })?
 }
+
+#[cfg(test)]
+mod tests;

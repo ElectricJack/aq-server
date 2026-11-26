@@ -67,48 +67,27 @@ pub(super) async fn load(
     stopped
         .validate_for(&context, &started)
         .map_err(|_| conflict())?;
-    for (row, outer, ack, digest, inner, inner_ack, inner_digest) in [
-        (
-            &start,
-            &start_bytes,
-            &start_ack_bytes,
-            started.digest().map_err(|_| conflict())?,
-            canonical(&started.original)?,
-            canonical(&started_ack.original)?,
-            started.original.digest().map_err(|_| conflict())?,
-        ),
-        (
-            &stop,
-            &stop_bytes,
-            &stop_ack_bytes,
-            stopped.digest().map_err(|_| conflict())?,
-            canonical(&stopped.original)?,
-            canonical(&stopped_ack.original)?,
-            stopped.original.digest().map_err(|_| conflict())?,
-        ),
+    for envelope in [
+        TerminalEnvelope {
+            row: &start,
+            phase_envelope_bytes: &start_bytes,
+            phase_ack_bytes: &start_ack_bytes,
+            phase_request_digest: started.digest().map_err(|_| conflict())?,
+            request_bytes: canonical(&started.original)?,
+            receipt_bytes: canonical(&started_ack.original)?,
+            request_digest: started.original.digest().map_err(|_| conflict())?,
+        },
+        TerminalEnvelope {
+            row: &stop,
+            phase_envelope_bytes: &stop_bytes,
+            phase_ack_bytes: &stop_ack_bytes,
+            phase_request_digest: stopped.digest().map_err(|_| conflict())?,
+            request_bytes: canonical(&stopped.original)?,
+            receipt_bytes: canonical(&stopped_ack.original)?,
+            request_digest: stopped.original.digest().map_err(|_| conflict())?,
+        },
     ] {
-        if row.get::<Uuid, _>("node_id") != node
-            || row.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
-            || row
-                .get::<Option<String>, _>("initial_authority_receipt_digest")
-                .as_deref()
-                != Some(history.receipt_digest.as_str())
-            || row
-                .get::<Option<String>, _>("phase_request_digest")
-                .as_deref()
-                != Some(digest.as_str())
-            || row
-                .get::<Option<String>, _>("phase_envelope_digest")
-                .as_deref()
-                != Some(Digest::of(outer).as_str())
-            || row.get::<Option<String>, _>("phase_ack_digest").as_deref()
-                != Some(Digest::of(ack).as_str())
-            || row.get::<Vec<u8>, _>("request_bytes") != inner
-            || row.get::<Vec<u8>, _>("receipt_bytes") != inner_ack
-            || row.get::<String, _>("request_digest") != inner_digest.as_str()
-        {
-            return Err(conflict());
-        }
+        envelope.verify(node, &history.receipt_digest)?;
     }
     let qualification: ArtifactRef = serde_json::from_value(
         stop.get::<Option<serde_json::Value>, _>("phase_terminal_qualification")
@@ -148,4 +127,41 @@ pub(super) async fn load(
         stopped,
         stopped_ack,
     })
+}
+struct TerminalEnvelope<'a> {
+    row: &'a PgRow,
+    phase_envelope_bytes: &'a [u8],
+    phase_ack_bytes: &'a [u8],
+    phase_request_digest: Digest,
+    request_bytes: Vec<u8>,
+    receipt_bytes: Vec<u8>,
+    request_digest: Digest,
+}
+impl TerminalEnvelope<'_> {
+    fn verify(&self, node: Uuid, execution: &Digest) -> Result<()> {
+        let row = self.row;
+        if row.get::<Uuid, _>("node_id") != node
+            || row.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
+            || row
+                .get::<Option<String>, _>("initial_authority_receipt_digest")
+                .as_deref()
+                != Some(execution.as_str())
+            || row
+                .get::<Option<String>, _>("phase_request_digest")
+                .as_deref()
+                != Some(self.phase_request_digest.as_str())
+            || row
+                .get::<Option<String>, _>("phase_envelope_digest")
+                .as_deref()
+                != Some(Digest::of(self.phase_envelope_bytes).as_str())
+            || row.get::<Option<String>, _>("phase_ack_digest").as_deref()
+                != Some(Digest::of(self.phase_ack_bytes).as_str())
+            || row.get::<Vec<u8>, _>("request_bytes") != self.request_bytes
+            || row.get::<Vec<u8>, _>("receipt_bytes") != self.receipt_bytes
+            || row.get::<String, _>("request_digest") != self.request_digest.as_str()
+        {
+            return Err(conflict());
+        }
+        Ok(())
+    }
 }

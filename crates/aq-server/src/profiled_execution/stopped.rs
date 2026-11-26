@@ -15,7 +15,7 @@ use aq_admission::{
     stopped::{Receipt, Request},
     transport::Feature,
 };
-use sqlx::Row;
+use sqlx::{Row, postgres::PgRow};
 fn conflict() -> AppError {
     AppError::Conflict("stopped evidence conflicts with original launch owner".into())
 }
@@ -24,6 +24,47 @@ fn canonical(value: &impl serde::Serialize) -> Result<Vec<u8>, AppError> {
     let mut value = serde_json::to_value(value).map_err(|_| AppError::Internal)?;
     value.sort_all_objects();
     serde_json::to_vec(&value).map_err(|_| AppError::Internal)
+}
+async fn load_started_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    attempt: uuid::Uuid,
+) -> Result<aq_admission::started::Request, AppError> {
+    let original=sqlx::query("SELECT request_bytes,request_digest,receipt_bytes FROM profiled_started_receipts WHERE attempt_id=$1 FOR SHARE")
+        .bind(attempt).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(conflict)?;
+    let original_bytes: Vec<u8> = original.get("request_bytes");
+    if Digest::of(&original_bytes).as_str() != original.get::<String, _>("request_digest") {
+        return Err(AppError::Internal);
+    }
+    let started =
+        aq_admission::started::decode_request(&original_bytes).map_err(|_| AppError::Internal)?;
+    aq_admission::started::decode_receipt(&original.get::<Vec<u8>, _>("receipt_bytes"), &started)
+        .map_err(|_| AppError::Internal)?;
+    Ok(started)
+}
+fn replay(
+    existing: &[PgRow],
+    request: &Request,
+    digest: &Digest,
+) -> Result<Option<Receipt>, AppError> {
+    if existing.is_empty() {
+        return Ok(None);
+    }
+    let binding = &request.evidence.binding;
+    let operation = request.evidence.stop_operation_id;
+    if existing.len() != 1 {
+        return Err(conflict());
+    }
+    let old = &existing[0];
+    if old.get::<uuid::Uuid, _>("attempt_id") != binding.attempt_id
+        || old.get::<uuid::Uuid, _>("operation_id") != operation
+        || old.get::<String, _>("request_digest") != digest.as_str()
+    {
+        return Err(conflict());
+    }
+    let receipt =
+        aq_admission::stopped::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), request)
+            .map_err(|_| AppError::Internal)?;
+    Ok(Some(receipt))
 }
 pub async fn record(
     state: &AppState,
@@ -94,35 +135,13 @@ pub async fn record(
         return Err(conflict());
     }
     super::initial_authority::require_legacy_origin_locked(&mut tx, binding).await?;
-    let original=sqlx::query("SELECT request_bytes,request_digest,receipt_bytes FROM profiled_started_receipts WHERE attempt_id=$1 FOR SHARE")
-        .bind(binding.attempt_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(conflict)?;
-    let original_bytes: Vec<u8> = original.get("request_bytes");
-    if Digest::of(&original_bytes).as_str() != original.get::<String, _>("request_digest") {
-        return Err(AppError::Internal);
-    }
-    let started =
-        aq_admission::started::decode_request(&original_bytes).map_err(|_| AppError::Internal)?;
-    aq_admission::started::decode_receipt(&original.get::<Vec<u8>, _>("receipt_bytes"), &started)
-        .map_err(|_| AppError::Internal)?;
+    let started = load_started_locked(&mut tx, binding.attempt_id).await?;
     request.validate_after(&started).map_err(|_| conflict())?;
     let digest = request.digest().map_err(|_| AppError::Internal)?;
     let operation = request.evidence.stop_operation_id;
     let existing=sqlx::query("SELECT attempt_id,operation_id,request_digest,receipt_bytes FROM profiled_stopped_receipts WHERE attempt_id=$1 OR(node_id=$2 AND operation_id=$3) FOR SHARE")
         .bind(binding.attempt_id).bind(node_id).bind(operation).fetch_all(&mut *tx).await.map_err(db)?;
-    if !existing.is_empty() {
-        if existing.len() != 1 {
-            return Err(conflict());
-        }
-        let old = &existing[0];
-        if old.get::<uuid::Uuid, _>("attempt_id") != binding.attempt_id
-            || old.get::<uuid::Uuid, _>("operation_id") != operation
-            || old.get::<String, _>("request_digest") != digest.as_str()
-        {
-            return Err(conflict());
-        }
-        let receipt =
-            aq_admission::stopped::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), request)
-                .map_err(|_| AppError::Internal)?;
+    if let Some(receipt) = replay(&existing, request, &digest)? {
         // An exact historical acknowledgement grants no new execution or release.
         tx.commit().await.map_err(db)?;
         return Ok(receipt);

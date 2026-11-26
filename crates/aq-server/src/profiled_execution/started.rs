@@ -11,10 +11,10 @@ use crate::{
     worker_api::AuthenticatedNode,
 };
 use aq_admission::{
-    SessionIdentity,
+    Digest, SessionIdentity,
     started::{Receipt, Request},
 };
-use sqlx::Row;
+use sqlx::{Row, postgres::PgRow};
 fn conflict() -> AppError {
     AppError::Conflict("started evidence conflicts with current launch owner".into())
 }
@@ -33,6 +33,29 @@ async fn enroll_observation_source(state: &AppState, attempt: uuid::Uuid, node: 
     {
         tracing::debug!(%attempt, ?error, "observation source enrollment deferred");
     }
+}
+fn replay(
+    existing: &[PgRow],
+    request: &Request,
+    digest: &Digest,
+) -> Result<Option<Receipt>, AppError> {
+    if existing.is_empty() {
+        return Ok(None);
+    }
+    if existing.len() != 1 {
+        return Err(conflict());
+    }
+    let old = &existing[0];
+    if old.get::<uuid::Uuid, _>("attempt_id") != request.binding.attempt_id
+        || old.get::<uuid::Uuid, _>("operation_id") != request.operation_id
+        || old.get::<String, _>("request_digest") != digest.as_str()
+    {
+        return Err(conflict());
+    }
+    let receipt =
+        aq_admission::started::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), request)
+            .map_err(|_| AppError::Internal)?;
+    Ok(Some(receipt))
 }
 pub async fn record(
     state: &AppState,
@@ -101,20 +124,7 @@ pub async fn record(
     super::closure::ensure_launch_open_locked(&mut tx, &request.binding).await?;
     let digest = request.digest().map_err(|_| AppError::Internal)?;
     let existing=sqlx::query("SELECT attempt_id,operation_id,request_digest,receipt_bytes FROM profiled_started_receipts WHERE attempt_id=$1 OR(node_id=$2 AND operation_id=$3) FOR SHARE").bind(request.binding.attempt_id).bind(node_id).bind(request.operation_id).fetch_all(&mut *tx).await.map_err(db)?;
-    if !existing.is_empty() {
-        if existing.len() != 1 {
-            return Err(conflict());
-        }
-        let old = &existing[0];
-        if old.get::<uuid::Uuid, _>("attempt_id") != request.binding.attempt_id
-            || old.get::<uuid::Uuid, _>("operation_id") != request.operation_id
-            || old.get::<String, _>("request_digest") != digest.as_str()
-        {
-            return Err(conflict());
-        }
-        let receipt =
-            aq_admission::started::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), request)
-                .map_err(|_| AppError::Internal)?;
+    if let Some(receipt) = replay(&existing, request, &digest)? {
         // Exact historical ack: cancellation/expiry/stop are not undone.
         tx.commit().await.map_err(db)?;
         enroll_observation_source(state, request.binding.attempt_id, node_id).await;

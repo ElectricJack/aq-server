@@ -71,6 +71,31 @@ struct Original {
     task: aq_admission::TaskRevision,
     source_operation: Uuid,
 }
+impl Original {
+    fn validate_context(
+        &self,
+        state: &AppState,
+        graph: &crate::agent_access::scheduling::TaskContext,
+        project: &ProjectBinding,
+        task: &aq_admission::TaskRevision,
+    ) -> Result<(), AppError> {
+        let projection = context_projection::project(
+            graph,
+            project.project_id,
+            project.repository_id,
+            project.graph_workspace_id,
+            &self.permissions,
+            now(state)?,
+        )
+        .map_err(|_| changed())?;
+        if !no_required_neighbors(&projection.context, task)
+            || !same_content(&self.context, &projection.context)
+        {
+            return Err(changed());
+        }
+        Ok(())
+    }
+}
 pub(super) async fn fence_project_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
@@ -136,6 +161,35 @@ async fn load_original(
     }
     policy(state, &r)?;
     let project = fence_project_locked(state, tx, &r).await?;
+    let context = load_context_locked(tx, &r).await?;
+    let source = source_retention::load_confirmed_locked(tx, source_operation, &r).await?;
+    let permissions = project
+        .ceilings
+        .permissions
+        .iter()
+        .map(|p| aq_session_api::Permission {
+            operation: p.operation.clone(),
+            scope_reference: p.scope_reference.clone(),
+        })
+        .collect();
+    let project_digest =
+        aq_agent_api::digest(&serde_json::to_value(&project).map_err(|_| AppError::Internal)?)
+            .map_err(|_| AppError::Internal)?;
+    Ok(Original {
+        report: r.receipt_artifact,
+        source,
+        context: context.ok_or_else(changed)?,
+        project,
+        project_digest,
+        permissions,
+        task: r.spec.task,
+        source_operation,
+    })
+}
+async fn load_context_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+) -> Result<Option<Value>, AppError> {
     let mut context = None;
     let mut refs = r.outcome.inputs.clone();
     refs.push(r.spec.task_context.clone());
@@ -179,29 +233,7 @@ async fn load_original(
             return Err(changed());
         }
     }
-    let source = source_retention::load_confirmed_locked(tx, source_operation, &r).await?;
-    let permissions = project
-        .ceilings
-        .permissions
-        .iter()
-        .map(|p| aq_session_api::Permission {
-            operation: p.operation.clone(),
-            scope_reference: p.scope_reference.clone(),
-        })
-        .collect();
-    let project_digest =
-        aq_agent_api::digest(&serde_json::to_value(&project).map_err(|_| AppError::Internal)?)
-            .map_err(|_| AppError::Internal)?;
-    Ok(Original {
-        report: r.receipt_artifact,
-        source,
-        context: context.ok_or_else(changed)?,
-        project,
-        project_digest,
-        permissions,
-        task: r.spec.task,
-        source_operation,
-    })
+    Ok(context)
 }
 /// Actual observer product; no Deserialize, caller freshness flag, or granted DTO.
 pub(crate) struct Observation {
@@ -263,20 +295,7 @@ impl Observation {
         })
         .await
         .map_err(|_| unavailable())??;
-        let projection = context_projection::project(
-            &graph,
-            original.project.project_id,
-            original.project.repository_id,
-            original.project.graph_workspace_id,
-            &original.permissions,
-            now(state)?,
-        )
-        .map_err(|_| changed())?;
-        if !no_required_neighbors(&projection.context, &original.task)
-            || !same_content(&original.context, &projection.context)
-        {
-            return Err(changed());
-        }
+        original.validate_context(state, &graph, &original.project, &original.task)?;
         Ok(Self {
             original,
             graph,
@@ -303,20 +322,8 @@ impl Observation {
         {
             return Err(changed());
         }
-        let projection = context_projection::project(
-            &self.graph,
-            project.project_id,
-            project.repository_id,
-            project.graph_workspace_id,
-            &self.original.permissions,
-            now(state)?,
-        )
-        .map_err(|_| changed())?;
-        if !no_required_neighbors(&projection.context, &result.spec.task)
-            || !same_content(&self.original.context, &projection.context)
-        {
-            return Err(changed());
-        }
+        self.original
+            .validate_context(state, &self.graph, &project, &result.spec.task)?;
         self.retention.validate_current(state, source)?;
         let view = crate::execution::authority::load_locked(
             state,
@@ -338,21 +345,12 @@ impl Observation {
     /// CPU-only last fence, after every SQL/user/review wait and immediately
     /// before commit. It does not turn saved graph bytes into a new request.
     pub(crate) fn validate_fresh(&self, state: &AppState) -> Result<(), AppError> {
-        let p = &self.original.project;
-        let projection = context_projection::project(
+        self.original.validate_context(
+            state,
             &self.graph,
-            p.project_id,
-            p.repository_id,
-            p.graph_workspace_id,
-            &self.original.permissions,
-            now(state)?,
-        )
-        .map_err(|_| changed())?;
-        if !no_required_neighbors(&projection.context, &self.original.task)
-            || !same_content(&self.original.context, &projection.context)
-        {
-            return Err(changed());
-        }
+            &self.original.project,
+            &self.original.task,
+        )?;
         self.retention
             .validate_current(state, &self.original.source)
     }
