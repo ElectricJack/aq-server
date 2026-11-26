@@ -52,9 +52,14 @@ fn sole_offer(body: &Value) -> NativeOffer {
     page.offers.remove(0)
 }
 
-/// The granted predecessor starts, saves `checkpoint`, is stopped by its owner
-/// (an `owner_stop` handoff) and reports Failed with that checkpoint's receipt.
-async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &str) {
+/// Start the predecessor and save its result from a known stopped owner.
+/// A workspace request can exist before a natural success reaches AQ.
+async fn run_and_hand_off(
+    c: &Case,
+    grant: &InitialGrantDelivery,
+    checkpoint: &str,
+    expanded: bool,
+) {
     let state = &c.env.env.state;
     let auth = auth(c).await;
     let g = &grant.original;
@@ -82,7 +87,17 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     intent.manifest_digest = start.binding.launch_manifest_digest.clone();
     start.observation_digest = start.observation.digest().unwrap();
     started::record(state, &auth, &start).await.unwrap();
-    let stop = native_started::stop_request(&start);
+    if expanded {
+        sqlx::query("INSERT INTO task_workspace_services(home_project_id,task_id,service,requested_attempt_id) VALUES($1,$2,'postgres',$3)")
+            .bind(c.env.lineage.project_id)
+            .bind(c.env.lineage.task_id)
+            .bind(start.binding.attempt_id)
+            .execute(&c.env.env.pool).await.unwrap();
+    }
+    let mut stop = native_started::stop_request(&start);
+    if expanded {
+        stop.evidence.reason = aq_admission::transport::StopReason::Completed;
+    }
     // The legacy stop and result owners need host stop evidence: the synthetic
     // host advertises it for those reports, then the registration is restored.
     let pool = &c.env.env.pool;
@@ -129,8 +144,10 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
         unreachable!()
     };
     let source = retain_checkpoint(c, binding, checkpoint).await;
-    sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
-        .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
+    if !expanded {
+        sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
+            .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
+    }
     let report = ResultReport {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -138,13 +155,31 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
         identity: c.request.identity.clone(),
         binding: binding.clone(),
         supersedes: None,
-        outcome: ProcessOutcome::Failed,
+        outcome: if expanded {
+            ProcessOutcome::Success
+        } else {
+            ProcessOutcome::Failed
+        },
         stop: stop.evidence,
         source_receipt_ids: vec![source],
         pending_effect_ids: vec![],
         conclusion: Label::new("Handoff (owner stop): step1 and step2 saved").unwrap(),
     };
     results::record(state, &auth, &report).await.unwrap();
+    if expanded {
+        let (worker_outcome, disposition, reason): (String, String, String) = sqlx::query_as(
+            "SELECT convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome', s.disposition, s.reason
+             FROM profiled_result_reports r JOIN profiled_auto_settlements s USING(report_id)
+             WHERE r.report_id=$1",
+        )
+        .bind(report.report_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(worker_outcome, "success");
+        assert_eq!(disposition, "rework_required");
+        assert_eq!(reason, "workspace_expansion_requested");
+    }
     registered(native).await;
 
     // Synthetic retained and quiescent owner facts; the actual stop is kept.
@@ -239,8 +274,17 @@ async fn refused_poll(c: &Case) {
 async fn handed_off() -> (Case, Uuid) {
     let (mut c, first) = native_offer::published().await;
     let grant = granted(&mut c, &first).await;
-    run_and_hand_off(&c, &grant, &"5".repeat(40)).await;
+    run_and_hand_off(&c, &grant, &"5".repeat(40), false).await;
     (c, first.offered.offer.binding.attempt_id)
+}
+
+#[tokio::test]
+async fn workspace_request_retains_natural_success_as_checkpoint_rework() {
+    let (mut c, first) = native_offer::published().await;
+    let grant = granted(&mut c, &first).await;
+    // The worker submits its physical success before the machine poll has
+    // delivered the workspace stop request.
+    run_and_hand_off(&c, &grant, &"5".repeat(40), true).await;
 }
 
 #[tokio::test]
@@ -417,4 +461,213 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     assert!(super::holds::swarm(&c).await.is_empty());
     let rows = super::holds::hold_rows(&c, task).await;
     assert_eq!(rows[0].3.as_deref(), Some("task_closed"), "{rows:?}");
+}
+
+#[cfg(feature = "delivery_playbook")]
+async fn workspace_poll(c: &Case) -> Value {
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let response = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/poll")
+                .header("authorization", format!("Bearer {}", c.env.env.credential))
+                .header("content-type", "application/json")
+                .header("AQ-Workspace-Expansion", "1")
+                .body(Body::from(serde_json::to_vec(&c.request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
+        .unwrap()
+}
+
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[tokio::test]
+async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
+    use super::environments::{TEMPLATE, definition_of, on_web, ready, republish};
+    use crate::common::roles;
+    use aq_profiles::roles::Kind;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let mut c = native_offer::setup().await;
+    on_web(&mut c).await;
+    // Keep the original job's profile pin even though the project permits an
+    // additional environment and the node can launch either image.
+    roles::save(
+        &c.env.env.pool,
+        c.env.actor,
+        Kind::Execution,
+        "sandbox",
+        &roles::execution(8192),
+    )
+    .await;
+    sqlx::query("UPDATE environment_versions SET provides=$1 WHERE environment_id='example.web'")
+        .bind(json!(["postgres"]))
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    ready(&c, json!([TEMPLATE])).await;
+    republish(&c).await;
+
+    let (status, body) = native_offer::poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let first = sole_offer(&body);
+    assert_eq!(
+        first.offered.offer.manifest.harness.environment.id.as_str(),
+        roles::ENVIRONMENT
+    );
+    let first_grant = granted(&mut c, &first).await;
+    run_and_hand_off(&c, &first_grant, &"5".repeat(40), false).await;
+    // An owner adds the service after the prior result has been retained.
+    sqlx::query("INSERT INTO task_workspace_services(home_project_id,task_id,service) VALUES($1,$2,'postgres')")
+        .bind(c.env.lineage.project_id)
+        .bind(c.env.lineage.task_id)
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+
+    c.request.operation_id = Uuid::new_v4();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let successor = loop {
+        let body = workspace_poll(&c).await;
+        let decoded = aq_profiled_state::git_author::decode_poll_reply(
+            &serde_json::to_vec(&body).unwrap(),
+            &c.request,
+        )
+        .unwrap();
+        if let [offer] = decoded.offers.as_slice() {
+            assert!(offer.workspace_required);
+            break offer.native.clone();
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let readiness = super::holds::work(&c, c.env.lineage.task_id).await;
+            panic!("no workspace successor: poll={body}, readiness={readiness}");
+        }
+        native_offer::assembled(&c).await;
+    };
+    assert_eq!(
+        successor.offered.offer.manifest.harness.environment,
+        definition_of(&c).await
+    );
+    assert_eq!(
+        successor.offered.offer.manifest.bindings.task_id,
+        first.offered.offer.manifest.bindings.task_id
+    );
+    assert_eq!(
+        successor.offered.offer.manifest.agent_profile,
+        first.offered.offer.manifest.agent_profile
+    );
+    assert_eq!(
+        successor.offered.offer.manifest.execution_profile,
+        first.offered.offer.manifest.execution_profile
+    );
+    let attempt = successor.offered.offer.binding.attempt_id;
+    assert_ne!(attempt, first.offered.offer.binding.attempt_id);
+    let scope: Value =
+        sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(scope["services"], json!(["postgres"]));
+    let (_, source) = export_of(&c, attempt).await;
+    assert_eq!(source["base"]["hex"], HANDOFF_CANDIDATE);
+
+    let (_, plan, request, _) = native_offer::prepare_request(&mut c, &successor).await;
+    let nonce = Uuid::new_v4();
+    let response = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/prepare")
+                .header("authorization", format!("Bearer {}", c.env.env.credential))
+                .header("content-type", "application/json")
+                .header("aq-delivery-nonce", nonce.to_string())
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&request).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let ControlReply::InitialGrant(delivery) = decode_reply(&bytes).unwrap() else {
+        panic!("expected initial grant");
+    };
+    delivery
+        .validate_for(&request, &plan, &successor, nonce)
+        .unwrap();
+    assert_eq!(delivery.original.grant.binding.attempt_id, attempt);
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
+    let c = native_offer::setup().await;
+    let pool = &c.env.env.pool;
+    let (home, task) = (c.env.lineage.project_id, c.env.lineage.task_id);
+    let (sibling, repository) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO project_execution_bindings
+         (project_id,revision,binding,validated_at_ms,binding_observation)
+         VALUES ($1,1,jsonb_build_object('enabled',true,'repository_id',$2::text,
+                                         'repository_binding_generation',1),1,'{}')",
+    )
+    .bind(sibling)
+    .bind(repository.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO task_workspace_sources
+         (home_project_id,task_id,target_project_id,project_revision,repository_id,
+          binding_generation,commit_oid,access,state)
+         VALUES($1,$2,$3,1,$4,1,repeat('a',40),'read','pending')",
+    )
+    .bind(home)
+    .bind(task)
+    .bind(sibling)
+    .bind(repository)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    assert_eq!(workspace_poll(&c).await["body"]["offers"], json!([]));
+    native_offer::assembled(&c).await;
+    sqlx::query("UPDATE task_workspace_sources SET state='approved' WHERE task_id=$1")
+        .bind(task)
+        .execute(pool)
+        .await
+        .unwrap();
+    refused_poll(&c).await;
+
+    let mut body = workspace_poll(&c).await;
+    native_offer::assembled(&c).await;
+    if body["body"]["offers"] == json!([]) {
+        body = workspace_poll(&c).await;
+    }
+    assert_eq!(body["body"]["offers"][0]["workspace_required"], true);
+    let decoded = aq_profiled_state::git_author::decode_poll_reply(
+        &serde_json::to_vec(&body).unwrap(),
+        &c.request,
+    )
+    .unwrap();
+    assert!(decoded.offers[0].workspace_required);
+    let offer = decoded.offers[0].native.clone();
+    let attempt = offer.offered.offer.binding.attempt_id;
+    let frozen: Value =
+        sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(frozen["sources"][0]["target_project_id"], json!(sibling));
+    assert_eq!(frozen["sources"][0]["commit_oid"], json!("a".repeat(40)));
+    assert_eq!(frozen["services"], json!([]));
+    refused_poll(&c).await;
 }

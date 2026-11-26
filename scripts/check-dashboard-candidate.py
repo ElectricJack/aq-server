@@ -40,7 +40,7 @@ def verify(root=ROOT):
     require(sha256(archive_path.read_bytes()) == pin["archive_sha256"], "archive SHA256 mismatch")
     files = read_archive(archive_path)
     verify_manifest(files, pin)
-    verify_server_image(root, archive, pin["archive_sha256"])
+    verify_server_image(root, archive, pin)
     return pin, files
 
 
@@ -79,18 +79,19 @@ def verify_manifest(files, pin):
     files["dashboard-manifest.json"] = manifest_bytes
 
 
-def verify_server_image(root, archive, archive_sha256):
-    docker = (root / "Dockerfile").read_text().split("FROM runtime AS server\n", 1)[1]
-    wiring = (
+def verify_server_image(root, archive, pin):
+    docker = (root / "Dockerfile").read_text()
+    runtime = docker.split("FROM runtime AS server\n", 1)[1]
+    install = (
         f"COPY vendor/{archive} /tmp/dashboard.tar.gz\n"
-        f"RUN echo '{archive_sha256}  /tmp/dashboard.tar.gz' | sha256sum -c - \\\n"
+        f"RUN echo '{pin['archive_sha256']}  /tmp/dashboard.tar.gz' | sha256sum -c - \\\n"
         "    && mkdir -p /usr/share/agent-q/dashboard \\\n"
         "    && tar -xzf /tmp/dashboard.tar.gz -C /usr/share/agent-q/dashboard \\\n"
         "    && rm /tmp/dashboard.tar.gz\n"
     )
-    require(wiring in docker, "Docker server stage archive verification/extraction differs from pin")
-    require("ENV AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard\n" in docker, "Docker dashboard directory missing")
-    require(docker.index(wiring) < docker.index("USER 10001:10001"), "dashboard must be installed before dropping privileges")
+    require(install in runtime, "Docker server stage dashboard wiring differs from pin")
+    require("ENV AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard\n" in runtime, "Docker dashboard directory missing")
+    require(runtime.index(install) < runtime.index("USER 10001:10001"), "dashboard must be installed before dropping privileges")
 
 
 def extract(files, destination):

@@ -6,8 +6,13 @@
 //! and the completion event). Nothing here decides anything about a result.
 use super::{
     Completion, Delivery, DeliveryTarget, FrozenCommand, GitTarget, MergeGuard,
+<<<<<<< HEAD
     PullRequestObserved, REFRESHES, Refreshed, Run, SocketGit, Step, TaskOperation, bounded_text,
     bounded_wait_ms, merge_method, without_delivery, without_target,
+=======
+    PullRequestObserved, Refreshed, SocketGit, Step, TaskOperation, bounded_text, bounded_wait_ms,
+    merge_method, without_delivery, without_target,
+>>>>>>> refs/remotes/central/main
 };
 use crate::DeliveryError;
 use crate::github::{GitHubApp, GitHubAppConfig};
@@ -284,8 +289,10 @@ pub async fn accepted_head<'c>(
 /// request at a time, oldest queued first: another task's row holds the slot
 /// while its pull request is open, its checks have not failed and either its
 /// refresh or (queued earlier than this one) its last look is younger than
-/// `longest_check_wait_ms`. A pending refresh of this task waits for GitHub.
-/// After [`REFRESHES`] a behind head goes back to the playbook as a conflict.
+/// `longest_check_wait_ms`, and no decision on the task came after both. A
+/// pending refresh of this task waits for GitHub. Nothing caps refreshes:
+/// each needs green checks on the current head and a (head, base) pair not
+/// asked for before, so they are bounded by how often main moves.
 async fn with_refresh(
     db: &mut PgConnection,
     request: &Value,
@@ -299,21 +306,16 @@ async fn with_refresh(
     };
     let longest = request["longest_check_wait_ms"].as_i64();
     let since = now_ms.saturating_sub(longest.unwrap_or(0));
-    type Row = (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        i32,
-        bool,
-        bool,
-    );
-    let (from, base, merged, refreshes, pending, taken): Row = sqlx::query_as(
-        "SELECT r.from_head,r.base_head,r.merged_head,COALESCE(r.refreshes,0),
+    type Row = (Option<String>, Option<String>, Option<String>, bool, bool);
+    let (from, base, merged, pending, taken): Row = sqlx::query_as(
+        "SELECT r.from_head,r.base_head,r.merged_head,
          COALESCE(r.merged_head IS NULL AND r.requested_at_ms>$3,false),
          EXISTS(SELECT 1 FROM delivery_branch_refreshes o JOIN delivery_pull_requests p ON p.task_id=o.task_id
            WHERE o.repository_id=$4 AND o.task_id<>$1 AND p.state='open' AND p.checks_state<>'failed'
            AND (o.requested_at_ms>$3 OR (o.seen_at_ms>$3
-             AND (o.queued_at_ms,o.task_id)<(COALESCE(r.queued_at_ms,$5),$1))))
+             AND (o.queued_at_ms,o.task_id)<(COALESCE(r.queued_at_ms,$5),$1)))
+           AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.task_id=o.task_id
+             AND d.decided_at_ms>=GREATEST(o.seen_at_ms,COALESCE(o.requested_at_ms,0))))
          FROM (SELECT $1::uuid AS task_id) t
          LEFT JOIN delivery_branch_refreshes r ON r.task_id=t.task_id AND r.result_head=$2",
     )
@@ -324,9 +326,9 @@ async fn with_refresh(
     .bind(now_ms)
     .fetch_one(db)
     .await?;
-    let allow = (refreshes < REFRESHES).then_some(!pending && !taken);
+    let allow = !pending && !taken;
     request["refresh"] = json!({
-        "from": from, "base": base, "merged": merged, "allow": longest.and(allow),
+        "from": from, "base": base, "merged": merged, "allow": longest.map(|_| allow),
     });
     Ok(request)
 }
@@ -350,7 +352,7 @@ async fn record_refresh(
         Refreshed::Requested { from, base } => sqlx::query("INSERT INTO delivery_branch_refreshes(task_id,project_id,repository_id,result_head,from_head,base_head,refreshes,queued_at_ms,seen_at_ms,requested_at_ms) VALUES($1,$2,$3,$4,$5,$6,1,$7,$7,$7) \
              ON CONFLICT(task_id) DO UPDATE SET project_id=$2,repository_id=$3,result_head=$4,from_head=$5,base_head=$6,merged_head=NULL,seen_at_ms=$7,requested_at_ms=$7, \
              queued_at_ms=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN delivery_branch_refreshes.queued_at_ms ELSE $7 END, \
-             refreshes=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN delivery_branch_refreshes.refreshes+1 ELSE 1 END")
+             refreshes=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN LEAST(delivery_branch_refreshes.refreshes+1,1000) ELSE 1 END")
             .bind(task).bind(project).bind(repository).bind(result).bind(from).bind(base).bind(now_ms),
         Refreshed::Merged(head) => sqlx::query("UPDATE delivery_branch_refreshes SET merged_head=$3 WHERE task_id=$1 AND result_head=$2 AND merged_head IS NULL")
             .bind(task).bind(result).bind(head),

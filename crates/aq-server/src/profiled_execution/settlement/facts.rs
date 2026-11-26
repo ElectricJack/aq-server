@@ -92,6 +92,18 @@ async fn gather_source_locked(
     Ok(SourceFacts::default())
 }
 
+#[cfg(feature = "delivery_playbook")]
+pub(crate) async fn retained_bundle_head(
+    tx: &mut Transaction<'_, Postgres>,
+    result: &results::RecordedResult,
+) -> Result<Option<(String, bool)>> {
+    let facts = gather_confirmed_source_locked(tx, result).await?;
+    Ok(facts
+        .pin
+        .filter(|_| !facts.lineage_unknown)
+        .map(|(_, head, changed)| (head, changed)))
+}
+
 async fn gather_confirmed_source_locked(
     tx: &mut Transaction<'_, Postgres>,
     r: &results::RecordedResult,

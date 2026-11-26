@@ -574,19 +574,12 @@ mod adapters {
     }
 
     #[tokio::test]
-    async fn a_route_naming_an_unoffered_level_or_harness_is_refused() {
+    async fn a_route_naming_an_unoffered_level_is_refused_but_preferences_are_optional() {
         let h = host(true, None).await;
         let task = h.graph.task("Nothing can take it", json!({}));
-        for change in [
-            json!({"level": "deep-high"}),
-            json!({"harnesses": ["cursor"]}),
-            json!({"providers": ["google"]}),
-            json!({"level": "complex-high", "harnesses": ["codex"]}),
-        ] {
-            let refused = h.route(task, 3, change.clone()).await;
-            assert_eq!(refused.outcome, "refused", "{change}");
-            assert_eq!(refused.output["reason"], "not_offered", "{change}");
-        }
+        let refused = h.route(task, 3, json!({"level": "deep-high"})).await;
+        assert_eq!(refused.outcome, "refused");
+        assert_eq!(refused.output["reason"], "not_offered");
         assert!(h.routing.writes.lock().unwrap().is_empty());
         // Recorded, so the server does not ask again until something changes.
         let (version, outcome, reasons) = h.emission(task).await.unwrap();
@@ -602,7 +595,7 @@ mod adapters {
             .await;
         assert_eq!(kept.outcome, "routed");
         assert_eq!(kept.output["harnesses"], json!(["codex"]));
-        assert_eq!(kept.output["prefer"], json!(["codex"]));
+        assert_eq!(kept.output["prefer"], json!(["codex", "claude"]));
         assert_eq!(h.graph.stored(task).unwrap().h, ["codex"]);
     }
 
@@ -626,7 +619,7 @@ mod adapters {
     }
 
     #[tokio::test]
-    async fn the_route_records_the_artifact_digest_and_hold_pins_the_provider() {
+    async fn the_route_records_the_artifact_digest_and_uses_only_preferences() {
         let h = host(true, None).await;
         let digest = format!("sha256:{}", "ab".repeat(32));
         h.activated(&digest).await;
@@ -642,7 +635,7 @@ mod adapters {
         assert_eq!(stored.d.as_deref(), Some(&digest[..16]));
         assert_eq!(
             (stored.s, stored.i, stored.a),
-            (Source::Router, ProviderIntent::Pinned, 2)
+            (Source::Router, ProviderIntent::Any, 2)
         );
         let (_, route) = h.routing.writes.lock().unwrap()[0].clone();
         let route = route.unwrap();
@@ -2177,6 +2170,94 @@ mod delivery {
     }
 
     #[tokio::test]
+    async fn definitive_publication_rejection_uses_the_slow_followup_cadence() {
+        let h = delivery(false).await;
+        h.limits(DeliveryLimits {
+            decision_repeat_ms: 120_000,
+            hold_followup_interval_ms: 600_000,
+            ..Default::default()
+        })
+        .await;
+        h.activated().await;
+        let (task, pending) = h.stopped(h.scope.project_id, "success");
+        let refused = |at, diagnostic: Option<&str>| {
+            let id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO playbook_host_operations
+                 (operation_id,namespace_id,generation,intent_id,command_name,subject_id,
+                  subject_revision,request,status,output,created_at_ms,completed_at_ms)
+                 VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused',
+                        jsonb_build_object('reason','unreachable'),$6,$6)",
+            )
+            .bind(id)
+            .bind(h.service.namespace.namespace_id)
+            .bind(id.to_string())
+            .bind(task.to_string())
+            .bind(json!({
+                "result_ready": {
+                    "project_id":pending.project_id,
+                    "attempt_id":pending.attempt_id,
+                    "result_id":pending.result_id,
+                },
+                "result_head":"a".repeat(40),
+                "expected_old":null,
+                "answer_note":diagnostic,
+            }))
+            .bind(at)
+        };
+        assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
+        refused(h.clock(), Some("remote_rejected"))
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        h.later(120_000);
+        assert_eq!(
+            h.asked().await,
+            0,
+            "a timer is not new publication evidence"
+        );
+        h.later(120_000);
+        assert_eq!(
+            h.asked().await,
+            0,
+            "the exact rejection survives more ticks"
+        );
+
+        h.main_moved(pending.project_id, &"c".repeat(40)).await;
+        assert_eq!(h.asked().await, 1, "changed facts still start delivery");
+        h.acknowledge_ready(Some(&[]), true).await;
+        refused(h.clock(), Some("remote_rejected"))
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        h.later(120_000);
+        assert_eq!(h.asked().await, 0, "a second exact rejection is durable");
+        h.later(479_999);
+        assert_eq!(h.asked().await, 0, "wait for the configured follow-up");
+        h.later(1);
+        assert_eq!(
+            h.asked().await,
+            1,
+            "allow recovery from unseen authority changes"
+        );
+        assert_eq!(h.asked().await, 0, "the emitted event suppresses any burst");
+        h.acknowledge_ready(Some(&[]), true).await;
+
+        h.later(1);
+        refused(h.clock(), None)
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        h.later(119_999);
+        assert_eq!(
+            h.asked().await,
+            1,
+            "an unresolved transport refusal retries normally"
+        );
+    }
+
+    #[tokio::test]
     async fn queued_and_admitted_delivery_block_a_second_event_before_work_read() {
         let h = delivery(false).await;
         h.activated().await;
@@ -2405,6 +2486,8 @@ mod delivery {
             branch_head: Mutex<String>,
             refresh_refused: Mutex<bool>,
             pr_head: Mutex<String>,
+            pr_base: Mutex<String>,
+            parents: Mutex<Vec<String>>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2499,6 +2582,7 @@ mod delivery {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
                     head_sha: self.pr_head.lock().unwrap().clone(),
+                    base_sha: self.pr_base.lock().unwrap().clone(),
                     ..pull(*self.pr_state.lock().unwrap())
                 })
             }
@@ -2568,13 +2652,12 @@ mod delivery {
                     false => Ok(()),
                 }
             }
-            /// Every head is the merge of result head a and main b.
             async fn commit_parents(
                 &self,
                 _: &GitHubRepository,
                 _: &str,
             ) -> GitHubResult<Vec<String>> {
-                Ok(vec![oid('a'), oid('b')])
+                Ok(self.parents.lock().unwrap().clone())
             }
         }
         struct Ops(Arc<Fake>, DeliveryTarget);
@@ -2618,6 +2701,9 @@ mod delivery {
                 branch_head: Mutex::new(oid('b')),
                 refresh_refused: Mutex::new(false),
                 pr_head: Mutex::new(oid('a')),
+                pr_base: Mutex::new(oid('b')),
+                // Every head is the merge of result head a and main b.
+                parents: Mutex::new(vec![oid('a'), oid('b')]),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h
@@ -3219,6 +3305,81 @@ mod delivery {
                     .iter()
                     .any(|l| l.starts_with("publish"))
             );
+        }
+
+        #[tokio::test]
+        async fn a_queued_task_that_is_returned_gives_up_its_place() {
+            let (h, fake) = harness().await;
+            let steps = Steps::new(&h, &fake).await;
+            let (b, pending) = h.stopped(h.scope.project_id, "success");
+            let (a, c) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(steps.wait(a).await, None);
+            h.later(1);
+            assert_eq!(steps.wait(b).await, None);
+            h.later(1);
+            assert_eq!(steps.wait(c).await, None);
+            assert_eq!(
+                steps.run(a, "pull_request.merge", 0).await.as_deref(),
+                Some("merged")
+            );
+            // b, queued ahead of c, goes back to an agent before it looks again.
+            *h.settle.answer.lock().unwrap() = Settled::Returned;
+            let input = json!({"task": b, "result_id": pending.result_id,
+                "reason": "merge_conflict", "update_from_main": true});
+            assert_eq!(
+                h.run("return-b", "work.return", input).await.outcome,
+                "returned"
+            );
+            // c is refreshed on its next look; b's queue row is gone.
+            assert_eq!(steps.wait(c).await, None);
+            assert!(steps.requested(c).await);
+            assert_eq!(updates(&fake), 2);
+            let rows: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM delivery_branch_refreshes WHERE task_id=$1",
+            )
+            .bind(b)
+            .fetch_one(&steps.pool)
+            .await
+            .unwrap();
+            assert_eq!(rows, 0);
+        }
+
+        #[tokio::test]
+        async fn every_move_of_main_under_a_green_pr_is_refreshed_once() {
+            let (h, fake) = harness().await;
+            let steps = Steps::new(&h, &fake).await;
+            let task = Uuid::new_v4();
+            let (heads, bases) = (['a', '1', '2', '3', '4'], ['b', '5', '6', '7', '8']);
+            for i in 0..4 {
+                *fake.pr_head.lock().unwrap() = oid(heads[i]);
+                *fake.pr_base.lock().unwrap() = oid(bases[i]);
+                *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+                *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+                assert_eq!(steps.wait(task).await, None);
+                assert_eq!(steps.wait(task).await, None, "pending");
+                if i == 0 {
+                    // Long after, the same head and base are still not asked for again.
+                    h.later(3_600_001);
+                    assert_eq!(steps.wait(task).await, None);
+                }
+                assert_eq!(updates(&fake), i + 1);
+                // GitHub merges main in; its checks run on the new head.
+                *fake.pr_head.lock().unwrap() = oid(heads[i + 1]);
+                *fake.parents.lock().unwrap() = vec![oid(heads[i]), oid(bases[i])];
+                *fake.mergeability.lock().unwrap() = Mergeability::Clean;
+                *fake.checks.lock().unwrap() = (ChecksState::Pending, vec![]);
+                assert_eq!(steps.wait(task).await, None);
+            }
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            assert_eq!(steps.wait(task).await.as_deref(), Some("passed"));
+            let refreshes: i32 = sqlx::query_scalar(
+                "SELECT refreshes FROM delivery_branch_refreshes WHERE task_id=$1",
+            )
+            .bind(task)
+            .fetch_one(&steps.pool)
+            .await
+            .unwrap();
+            assert_eq!((updates(&fake), refreshes), (4, 4));
         }
 
         #[tokio::test]

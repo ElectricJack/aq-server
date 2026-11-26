@@ -871,6 +871,7 @@ async fn work_read_reports_waiting_then_routed() {
         x.work(id).await["routing"],
         json!({"state":"routed","since_ms":1790000000000_i64,"route":{"class":"standard-high",
             "harnesses":["codex"],"providers":["openai"],"prefer":[],"lane":"backend",
+            "prefer_providers":["openai"],"prefer_harnesses":["codex"],
             "provider_intent":"any","source":"owner","policy_digest":null}})
     );
     swarm_ceiling_holds_a_routed_task_until_it_expires(&x, id).await;
@@ -949,11 +950,22 @@ async fn routes_history_lists_reasons_newest_first() {
     assert_eq!(res.status(), StatusCode::OK);
     let body: Value =
         serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let mut effective = route.clone();
+    effective["provider_intent"] = json!("any");
+    effective["prefer_providers"] = json!([]);
+    effective["prefer_harnesses"] = json!(["codex"]);
     assert_eq!(
         body,
         json!({"items":[{"sequence":2,"at_ms":2000,"route":null},
-            {"sequence":1,"at_ms":1000,"route":route}]})
+            {"sequence":1,"at_ms":1000,"route":effective}]})
     );
+    let stored: Value =
+        sqlx::query_scalar("SELECT route FROM task_routes WHERE task_id=$1 AND sequence=1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, route);
 }
 
 /// Spec 0017 §5.4: every task read shows what the task needs (`aq:needs`,

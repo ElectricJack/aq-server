@@ -163,3 +163,59 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
     assert_eq!(other.model.provider.as_str(), "openai");
     assert_eq!(other.subscription.as_ref().unwrap().control_revision, 1);
 }
+
+#[tokio::test]
+async fn a_stale_unprepared_turn_is_set_aside_and_replanned_from_its_recorded_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = service_config(tmp.path().join("project"));
+    let control = initial_control(Some(Uuid::new_v4()));
+    let pool = PgPool::connect_lazy(&config.database_url).unwrap();
+    let selection = plan::selection(&config, &control.profile).unwrap().unwrap();
+    let session = Uuid::new_v4();
+    let policy = Digest::of(b"reservation policy");
+    let turn = |input: &[u8]| dispatch::Turn {
+        batch: MailBatch {
+            conversation_id: config.conversation_id,
+            through_cursor: 20,
+            messages: vec![MailRef {
+                message_id: Uuid::from_u128(19),
+                cursor: 20,
+                payload_digest: Digest::of(b"recorded"),
+            }],
+        },
+        input: input.to_vec(),
+        dispatch_id: Uuid::from_u128(20),
+        host_operation_id: Uuid::from_u128(21),
+    };
+    let generation = || plan::Generation {
+        policy: &policy,
+        number: 20,
+        session,
+    };
+    let first = plan::assemble(
+        &config,
+        &control,
+        generation(),
+        turn(b"recorded"),
+        &selection,
+    );
+    let first = first.unwrap();
+    plan::install(&config, &first).unwrap();
+    assert!(!super::stale(&first));
+    let mut expired = first.clone();
+    expired.host.deadline_boot_ms = expired.host.admitted_boot_ms;
+    assert!(super::stale(&expired));
+    archive_turn(&config, &first).unwrap();
+    assert!(installed(&config, &pool).unwrap().is_none());
+    // The same recorded dispatch assembles again; other bytes under its name do not.
+    let again = plan::assemble(
+        &config,
+        &control,
+        generation(),
+        turn(b"recorded"),
+        &selection,
+    );
+    assert_eq!(again.unwrap().startup_file, first.startup_file);
+    let other = plan::assemble(&config, &control, generation(), turn(b"other"), &selection);
+    assert!(other.is_err());
+}

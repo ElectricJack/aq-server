@@ -9,7 +9,7 @@ use crate::{
 use aq_delivery::commands::{self as delivery, Accepting, Completion, Delivery, DeliveryTarget};
 use aq_playbook_host::{model::EventEnvelope, runner::Intent};
 use serde_json::{Value, json};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 const RESULT_READY: &str = "aq.work.result_ready";
@@ -82,6 +82,12 @@ pub async fn origin(
     )?))
 }
 
+pub enum MergeReadiness {
+    Proceed,
+    PendingEvidence,
+    AlreadyDelivered,
+}
+
 /// What the delivery commands need of the server besides the recorded results.
 #[async_trait::async_trait]
 pub trait DeliveryOps: Send + Sync {
@@ -89,6 +95,24 @@ pub trait DeliveryOps: Send + Sync {
     async fn target(&self, project: Uuid) -> Result<Option<DeliveryTarget>>;
     /// Operations over the forge and central aq-git, if configured.
     async fn commands(&self) -> Option<Delivery>;
+    /// An already delivered Home revision can reuse its publication even
+    /// when the other repositories in the same task are retried.
+    async fn replay_publication(
+        &self,
+        _tx: &mut Transaction<'_, Postgres>,
+        _origin: &ResultReady,
+        _command: &str,
+    ) -> Result<Option<Completion>> {
+        Ok(None)
+    }
+    /// A multi-repository result may have additional Home delivery fences.
+    async fn merge_readiness(
+        &self,
+        _tx: &mut Transaction<'_, Postgres>,
+        _origin: &ResultReady,
+    ) -> Result<MergeReadiness> {
+        Ok(MergeReadiness::Proceed)
+    }
     /// The title and body of the task's pull request.
     async fn pull_request_text(&self, workspace: Uuid, task: Uuid) -> Result<(String, String)>;
 }
@@ -287,7 +311,7 @@ impl DeliveryRuns<'_> {
     /// The caller holds the transaction open until this quantum's operation returns.
     pub async fn step(
         &self,
-        db: &mut PgConnection,
+        db: &mut Transaction<'_, Postgres>,
         operation: Uuid,
         command: &str,
         request: &Value,
@@ -305,13 +329,36 @@ impl DeliveryRuns<'_> {
             && !(request["task"].is_null()
                 && matches!(command, "pull_request.await_checks" | "pull_request.close"));
         if result_required {
-            let current =
-                match serde_json::from_value::<ResultReady>(request["result_ready"].clone()) {
-                    Ok(origin) => self.results.lock_current(db, &origin).await?,
-                    Err(_) => false,
-                };
-            if !current {
+            let Ok(origin) = serde_json::from_value::<ResultReady>(request["result_ready"].clone())
+            else {
                 return Ok(Some(stale_completion(command)));
+            };
+            // The workspace port loads retained owner facts under the common
+            // node→attempt lock order. Fence below before exposing any answer.
+            let replay = if matches!(command, "branch.publish" | "pull_request.open") {
+                self.operations
+                    .replay_publication(db, &origin, command)
+                    .await?
+            } else {
+                None
+            };
+            let merge = if command == "pull_request.merge" {
+                self.operations.merge_readiness(db, &origin).await?
+            } else {
+                MergeReadiness::Proceed
+            };
+            if !self.results.lock_current(db, &origin).await? {
+                return Ok(Some(stale_completion(command)));
+            }
+            if let Some(receipt) = replay {
+                return Ok(Some(receipt));
+            }
+            match merge {
+                MergeReadiness::Proceed => {}
+                MergeReadiness::PendingEvidence => return Ok(None),
+                MergeReadiness::AlreadyDelivered => {
+                    return Ok(Some(Completion::new("merged", json!({}))));
+                }
             }
         }
 

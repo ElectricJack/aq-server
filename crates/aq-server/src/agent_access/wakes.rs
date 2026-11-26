@@ -323,7 +323,7 @@ async fn lineage_budget(
         .is_ok_and(|v: u32| v >= aq_machine_control::FORMAT)
     {
         format!(
-            "-LEAST({},count(*) FILTER (WHERE EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))))",
+            "-LEAST({},count(*) FILTER (WHERE EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop','workspace_expansion'))))",
             limits.max_uncharged_continuations
         )
     } else {

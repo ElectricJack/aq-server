@@ -211,7 +211,16 @@ pub fn workspace_files(
     put(draft::FACTS_FILE, pretty(facts)?);
     put("GUIDE.md", docs::GUIDE.to_owned());
     put("LANGUAGE.md", docs::LANGUAGE.to_owned());
-    put("CATALOG.md", catalog_notes(record, catalog)?);
+    let mut notes = catalog_notes(record, catalog)?;
+    if record.id == crate::builtin::ROUTING {
+        notes.push_str(concat!(
+            "\n## Queued task placement\n\n",
+            "Use `work.route` to choose the task's level and give ordered provider and harness preferences.\n",
+            "Other eligible candidates can still serve the task within its selected level and placement policy.\n",
+            "Omit `hold` when authoring a new route. AQ accepts the field in older drafts as a preference.\n",
+        ));
+    }
+    put("CATALOG.md", notes);
     for (path, text) in docs::example_files() {
         put(&format!("examples/{path}"), text.to_owned());
     }

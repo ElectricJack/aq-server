@@ -69,7 +69,7 @@ pub async fn record(
     let (pool, attempt) = (&state.store.pool, report.binding.attempt_id);
     #[cfg(feature = "delivery_playbook")]
     let enrolled = super::has_delivery_grant(pool, attempt).await?;
-    let receipt = match record_only(state, node, report).await {
+    let (receipt, checkpoint) = match record_only(state, node, report).await {
         // The attempt was released (its task cancelled): tell the worker, which retried forever.
         Err(AppError::Conflict(_))
             if aq_machine_control::attempt_released(pool, attempt, node.id()).await =>
@@ -78,6 +78,14 @@ pub async fn record(
         }
         recorded => recorded?,
     };
+    if checkpoint {
+        if let Err(error) =
+            super::settlement::record_replacement_facts(state, report.report_id).await
+        {
+            tracing::warn!(report_id = %report.report_id, ?error, "checkpoint facts deferred");
+        }
+        return Ok(receipt);
+    }
     #[cfg(feature = "delivery_playbook")]
     if enrolled {
         if let Err(error) = super::settlement::record_facts(state, report.report_id).await {
@@ -131,7 +139,7 @@ async fn record_only(
     state: &AppState,
     node: &AuthenticatedNode,
     report: &ResultReport,
-) -> Result<Receipt, AppError> {
+) -> Result<(Receipt, bool), AppError> {
     result_record::validate_report(report)
         .map_err(|_| AppError::BadRequest("invalid result report".into()))?;
     let binding = &report.binding;
@@ -195,8 +203,10 @@ async fn record_only(
             &spec.outcome_artifact,
         )
         .await?;
+        let checkpoint =
+            crate::task_workspace_resume::checkpoint_required(&mut tx, binding.attempt_id).await?;
         tx.commit().await.map_err(db)?;
-        return Ok(receipt);
+        return Ok((receipt, checkpoint));
     }
     if !view.holds_task {
         return Err(conflict());
@@ -260,8 +270,11 @@ async fn record_only(
     .execute(&mut *tx)
     .await
     .map_err(db)?;
+    let checkpoint = !view.revoked
+        && view.cancellation_id.is_none()
+        && super::settlement::settle_workspace_checkpoint_locked(&mut tx, &receipt).await?;
     tx.commit().await.map_err(db)?;
-    Ok(receipt)
+    Ok((receipt, checkpoint))
 }
 async fn replay_locked(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,

@@ -119,6 +119,15 @@ impl Claim {
         let mut tx = journal::transaction(r).await?;
         let current = locked(&mut tx, id).await?;
         if current.lease == Some(self.lease) {
+            if completion.status.terminal() && !parse(&current.request)?.workspace.is_empty() {
+                crate::project_bindings::workspace::creation::finish(
+                    &mut tx,
+                    current.project,
+                    id,
+                    matches!(completion.status.state, OperationState::Confirmed),
+                )
+                .await?;
+            }
             sqlx::query("UPDATE human_graph_operations SET status=$2,raw_receipt=$3,lease_id=NULL,lease_expires_at_ms=NULL,stop_reason=$4 WHERE operation_id=$1")
                 .bind(id)
                 .bind(serde_json::to_value(&completion.status).map_err(|_|unavailable())?)

@@ -44,7 +44,23 @@ pub(super) async fn central37_storage_guard(
     version: u32,
 ) -> Result<()> {
     schema::validate(tx, version).await?;
-    data::validate(tx, version).await
+    let prior_join_collapse_limit: String =
+        sqlx::query_scalar("SELECT current_setting('join_collapse_limit')")
+            .fetch_one(&mut **tx)
+            .await?;
+    // Preserve the proof joins' written order so each retained message is found
+    // by ID before the receipt joins examine its body and metadata.
+    sqlx::query("SELECT set_config('join_collapse_limit', '1', true)")
+        .execute(&mut **tx)
+        .await?;
+    let validation = data::validate(tx, version).await;
+    let restored = sqlx::query("SELECT set_config('join_collapse_limit', $1, true)")
+        .bind(prior_join_collapse_limit)
+        .execute(&mut **tx)
+        .await;
+    validation?;
+    restored?;
+    Ok(())
 }
 
 async fn functions(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {

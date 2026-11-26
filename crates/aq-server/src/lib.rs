@@ -8,6 +8,7 @@ pub mod dashboard_api;
 pub mod dashboard_assets;
 pub mod delegated_permits;
 mod scheduling_diagnostics;
+mod task_workspace_resume;
 pub use aq_delivery as delivery;
 pub mod error;
 pub mod execution;
@@ -44,6 +45,8 @@ pub mod source_retention;
 pub mod stall;
 pub mod store;
 mod swarm_settings;
+#[cfg(feature = "delivery_playbook")]
+mod task_workspace_delivery;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -262,30 +265,7 @@ pub fn build_admin_router_with_optional_owners(
             .as_ref()
             .map(|keys| Arc::new(reviews::Service::new(state.clone(), keys.clone())))
     });
-    let mounted = dashboard_api::MountedOwners {
-        graph: true,
-        session_usage: true,
-        session_events: true,
-        results: true,
-        media_read: media.as_ref().is_some_and(|r| r.read_enabled()),
-        media_upload: media.as_ref().is_some_and(|r| r.uploads_enabled()),
-        notifications: true,
-        supervisor_conversation: true,
-        reviews: reviews.is_some(),
-        waits: true,
-        session_operations: true,
-        questions: true,
-        playbook_loaded_definitions: playbooks
-            .as_ref()
-            .is_some_and(|driver| driver.loaded_definitions_available()),
-        playbook_catalog: playbooks.as_ref().map(|driver| driver.catalog_support()),
-        playbook_owner: playbooks
-            .as_ref()
-            .map(|d| d.service.namespace.owner_user_id),
-        playbook_decisions: playbooks
-            .as_ref()
-            .is_some_and(|d| d.service.profile.is_host2()),
-    };
+    let mounted = mounted_owners(&playbooks, &reviews, &media);
     let policy_routes = playbooks
         .clone()
         .map(playbooks::api::routes)
@@ -329,6 +309,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(swarm_settings::routes())
         .merge(role_settings::admin_routes())
         .merge(project_bindings::admin_routes())
+        .merge(task_workspace_delivery_admin_routes())
         .merge(repository_onboarding::admin_routes())
         .merge(intelligence::admin_routes())
         .merge(agent_access::admin_routes(state.clone()))
@@ -364,6 +345,37 @@ pub fn build_admin_router_with_optional_owners(
     )
 }
 
+fn mounted_owners(
+    playbooks: &Option<Arc<playbooks::driver::Driver>>,
+    reviews: &Option<Arc<reviews::Service>>,
+    media: &Option<Arc<result_media::runtime::Runtime>>,
+) -> dashboard_api::MountedOwners {
+    dashboard_api::MountedOwners {
+        graph: true,
+        session_usage: true,
+        session_events: true,
+        results: true,
+        media_read: media.as_ref().is_some_and(|r| r.read_enabled()),
+        media_upload: media.as_ref().is_some_and(|r| r.uploads_enabled()),
+        notifications: true,
+        supervisor_conversation: true,
+        reviews: reviews.is_some(),
+        waits: true,
+        session_operations: true,
+        questions: true,
+        playbook_loaded_definitions: playbooks
+            .as_ref()
+            .is_some_and(|driver| driver.loaded_definitions_available()),
+        playbook_catalog: playbooks.as_ref().map(|driver| driver.catalog_support()),
+        playbook_owner: playbooks
+            .as_ref()
+            .map(|d| d.service.namespace.owner_user_id),
+        playbook_decisions: playbooks
+            .as_ref()
+            .is_some_and(|d| d.service.profile.is_host2()),
+    }
+}
+
 /// Machine routes plus `/healthz`. No human routes are mounted here.
 pub fn build_worker_router(state: AppState) -> Router {
     build_worker_router_inner(state, None, None)
@@ -382,6 +394,13 @@ pub fn build_worker_router_with_closure_policy(
 ) -> Router {
     build_worker_router_inner(state, Some(policy), None)
 }
+fn task_workspace_delivery_admin_routes() -> Router<AppState> {
+    #[cfg(feature = "delivery_playbook")]
+    return task_workspace_delivery::admin_routes();
+    #[cfg(not(feature = "delivery_playbook"))]
+    Router::new()
+}
+
 fn build_worker_router_inner(
     state: AppState,
     policy: Option<Arc<profiled_execution::closure::policy::InstalledPolicy>>,
@@ -392,7 +411,9 @@ fn build_worker_router_inner(
         None => Router::new(),
     };
     #[cfg(feature = "delivery_playbook")]
-    let closure = closure.merge(profiled_execution::git_grant::routes(state.clone()));
+    let closure = closure
+        .merge(profiled_execution::git_grant::routes(state.clone()))
+        .merge(task_workspace_delivery::worker_routes());
     #[cfg(feature = "project_environments")]
     let closure = closure.merge(aq_environments::worker::routes(&state.config.projects));
     let router = Router::new()
