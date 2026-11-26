@@ -45,7 +45,10 @@ const DELIVERY_DOCUMENT: &str = "/delivery-document";
 /// A Settings write to `path` succeeded: authors the delivery document when it
 /// is the one saved.
 pub async fn author_saved<S: Server>(s: &S, path: &str) {
-    if path.ends_with(DELIVERY_DOCUMENT) {
-        author_document(s, &crate::builtin::delivery()).await;
+    // A closed engine: the slow catch-up authors the save once it is open.
+    if path.ends_with(DELIVERY_DOCUMENT)
+        && let Some(record) = s.delivery()
+    {
+        author_document(s, &record).await;
     }
 }

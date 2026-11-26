@@ -72,8 +72,13 @@ pub fn routing() -> SourceRecord {
 /// ([`crate::request::pinned_catalog`]). The document is the only thing it
 /// reads besides the task: Settings offers no fact provider to it, and the
 /// numbers it uses (returns allowed, check wait) are the document's own words.
+///
+/// `environments` is whether the engine's namespace serves the environment
+/// commands (catalog 2.5.0, spec 0017): only then does the record ask them.
+/// A build with `project_environments` may still run a Host10 namespace,
+/// whose grants refuse them.
 #[cfg(feature = "delivery_playbook")]
-pub fn delivery() -> SourceRecord {
+pub fn delivery(environments: bool) -> SourceRecord {
     let names =
         |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
     #[allow(unused_mut)]
@@ -96,7 +101,7 @@ pub fn delivery() -> SourceRecord {
     // Spec 0017 §6.3-6.4: build and admit environments, and rebuild on a new
     // base (`aq.environment.completed` comes with the commands).
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-    {
+    if environments {
         commands.extend(names(&["environment.build", "environment.admit"]));
         events.extend(names(&["aq.environment.base_changed"]));
     }
@@ -114,6 +119,8 @@ pub fn delivery() -> SourceRecord {
         facts: vec![],
         revision: 0,
     };
+    #[cfg(not(feature = "project_environments"))]
+    let _ = environments;
     let registry = crate::request::pinned_catalog(&record).expect("the delivery catalog parses");
     record.capabilities = draft::retain_registry(&registry, &record.commands, &record.events)
         .map(|(_, capabilities)| capabilities)
@@ -148,10 +155,11 @@ mod tests {
         docs::catalog(&record.commands, &record.events).unwrap();
     }
 
-    #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
+    /// Whatever the build: a Host10 namespace refuses the environment commands.
+    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_delivery_record_may_settle_a_result_and_no_more() {
-        let record = delivery();
+        let record = delivery(false);
         assert_eq!(
             (
                 record.id.as_str(),
@@ -231,14 +239,14 @@ mod tests {
     /// The worked delivery example of catalog 2.3.0 seals as a playbook of
     /// this record, against catalog 2.6.0, with the record's scope, binding and
     /// abilities (`project` is the one scope the contracts allow).
-    #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
+    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
         const DIR: &str = "../../vendor/aq-playbooks-c744301/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
         let read = |name: &str| {
             std::fs::read_to_string(format!("{}/{DIR}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
         };
-        let record = delivery();
+        let record = delivery(false);
         let catalog = crate::request::pinned_catalog(&record).unwrap();
         let ws = draft::Workspace {
             markdown: read("source.md"),
@@ -265,7 +273,7 @@ mod tests {
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
     #[test]
     fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
-        let record = delivery();
+        let record = delivery(true);
         let commands: Vec<&str> = record.commands.iter().map(String::as_str).collect();
         assert_eq!(
             commands,
@@ -418,7 +426,7 @@ mod tests {
         let read = |name: &str| {
             std::fs::read_to_string(format!("{}/{DIR}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
         };
-        let record = delivery();
+        let record = delivery(true);
         let catalog = crate::request::pinned_catalog(&record).unwrap();
         let ws = draft::Workspace {
             markdown: read("source.md"),

@@ -56,11 +56,12 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
 
 /// The catalog a source is authored against, whole: catalog 2.6.0 for the
 /// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
-/// every other. With spec 0017, 2.5.0 for both built-in sources (delivery
-/// keeping the 2.6.0 `work.read`).
+/// every other. With spec 0017, 2.5.0 for the routing source and for a
+/// delivery record that asks the environment commands (keeping the 2.6.0
+/// `work.read`).
 pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-    if record.id == crate::builtin::DELIVERY {
+    if environment_delivery(record) {
         return catalog_2_5_delivery();
     }
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
@@ -110,6 +111,13 @@ pub fn catalog_2_5() -> Result<Registry> {
         .map_err(|_| Error::Invalid("catalog 2.5.0 does not parse".into()))
 }
 
+/// The built-in delivery record of a namespace that serves environments
+/// ([`crate::builtin::delivery`]).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+fn environment_delivery(record: &SourceRecord) -> bool {
+    record.id == crate::builtin::DELIVERY && record.commands.contains("environment.build")
+}
+
 /// The delivery source's catalog 2.5.0: the environment commands and events
 /// added, every 2.3.0 contract it uses unchanged and the 2.6.0 `work.read`
 /// (the 2.5.0 one adds the routing facts of spec 0017 §5.4).
@@ -126,7 +134,7 @@ pub fn catalog_2_5_delivery() -> Result<Registry> {
 /// `CATALOG.md` of the catalog the workspace actually uses.
 fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-    if record.id == crate::builtin::DELIVERY {
+    if environment_delivery(record) {
         // 2.5.0's notes, with 2.6.0's on the 2.6.0 work.read.
         let parse = |text: &str| serde_json::from_str::<Value>(text).map_err(|_| Error::Corrupt);
         let mut notes = parse(CATALOG_2_5_NOTES)?;
