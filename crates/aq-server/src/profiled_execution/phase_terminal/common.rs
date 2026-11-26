@@ -91,11 +91,7 @@ pub(super) async fn load_locked(
         .ok_or_else(conflict)?;
     super::super::policies::fence_configuration_locked(tx, config).await?;
     let view = authority::load_locked(state, tx, &binding.session, Policy::IdentityOnly).await?;
-    if view.kind != Kind::ProfiledV1
-        || view.offer_id != binding.offer_id
-        || view.launch_manifest_digest.as_ref() != Some(&binding.launch_manifest_digest)
-        || view.execution_spec_digest != binding.execution_spec_digest.as_str()
-    {
+    if !authority_matches_binding(&view, binding) {
         return Err(conflict());
     }
     let row=sqlx::query("SELECT state,record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE").bind(binding.attempt_id).fetch_optional(&mut **tx).await.map_err(database)?.ok_or_else(conflict)?;
@@ -214,4 +210,11 @@ pub(super) async fn require_start_open_locked(
     }
     loaded.view.active_at(checked)?;
     Ok(())
+}
+
+pub(super) fn authority_matches_binding(view: &AuthorityView, binding: &LaunchBinding) -> bool {
+    view.kind == Kind::ProfiledV1
+        && view.offer_id == binding.offer_id
+        && view.launch_manifest_digest.as_ref() == Some(&binding.launch_manifest_digest)
+        && view.execution_spec_digest == binding.execution_spec_digest.as_str()
 }
