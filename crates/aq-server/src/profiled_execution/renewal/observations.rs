@@ -49,58 +49,51 @@ fn profile(reference: &aq_admission::ArtifactRef, kind: &str) -> Result<String, 
         .map(str::to_owned)
         .ok_or_else(changed)
 }
+fn worker_node(p: &Pinned) -> Result<uuid::Uuid, AppError> {
+    match p.selection.target {
+        aq_selection::ExecutionTarget::Worker { node_id, .. } => Ok(node_id),
+        _ => Err(changed()),
+    }
+}
+/// The allowed project environment the held choice runs in, by id or id@version.
+fn held_environment(p: &Pinned) -> Result<String, AppError> {
+    let environment = &p.selection.choice.environment;
+    let versioned = format!(
+        "{}@{}",
+        environment.id.as_str(),
+        environment.version.as_str()
+    );
+    let allowed = &p.project.binding.allowed_environments;
+    allowed
+        .iter()
+        .find(|e| e.as_str() == environment.id.as_str() || **e == versioned)
+        .cloned()
+        .ok_or_else(changed)
+}
 async fn binding(state: &AppState, p: &Pinned) -> Result<FrozenProjectBinding, AppError> {
     // The attempt stays on the role snapshot it launched with (spec 0014
     // §7.1): a document saved since does not change what it runs as.
-    let environment = p
-        .project
-        .binding
-        .allowed_environments
-        .iter()
-        .find(|e| {
-            e.as_str() == p.selection.choice.environment.id.as_str()
-                || e.as_str()
-                    == format!(
-                        "{}@{}",
-                        p.selection.choice.environment.id.as_str(),
-                        p.selection.choice.environment.version.as_str()
-                    )
-        })
-        .ok_or_else(changed)?
-        .clone();
-    let node = match p.selection.target {
-        aq_selection::ExecutionTarget::Worker { node_id, .. } => node_id,
-        _ => return Err(changed()),
-    };
     let request = EligibilityRequest {
         expected_project_revision: p.spec.project_revision,
-        node_id: node,
-        environment,
+        node_id: worker_node(p)?,
+        environment: held_environment(p)?,
         role: profile(&p.offer.manifest.agent_profile, "role")?,
         intelligence_profile: profile(&p.offer.manifest.intelligence_profile, "intelligence")?,
         execution_profile: profile(&p.offer.manifest.execution_profile, "execution")?,
         snapshot_digest: p.selection.role_snapshot_digest.as_str().to_owned(),
     };
-    let result = crate::project_bindings::check_execution_eligibility(
-        state,
-        p.selection.lineage.project_id,
-        &request,
-    )
-    .await?;
-    if !result.eligible {
-        return Err(
-            if result
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("unavailable"))
-            {
-                unavailable()
-            } else {
-                changed()
-            },
-        );
+    let project = p.selection.lineage.project_id;
+    let result =
+        crate::project_bindings::check_execution_eligibility(state, project, &request).await?;
+    if result.eligible {
+        return result.frozen_binding.ok_or_else(changed);
     }
-    result.frozen_binding.ok_or_else(changed)
+    let unavailable_now = result.reasons.iter().any(|r| r.contains("unavailable"));
+    Err(if unavailable_now {
+        unavailable()
+    } else {
+        changed()
+    })
 }
 async fn task(state: &AppState, p: &Pinned) -> Result<Task, AppError> {
     let graph = state.agent_access.as_ref().ok_or_else(unavailable)?;
@@ -144,42 +137,45 @@ async fn task(state: &AppState, p: &Pinned) -> Result<Task, AppError> {
         expires_at_ms: current.stamp.expires_at_ms,
     })
 }
+async fn private_material(
+    state: &AppState,
+    p: &Pinned,
+) -> Result<(private_read::Fingerprint, u64, u64), AppError> {
+    let started = now(state)?;
+    let registry = state.config.intelligence.clone().ok_or_else(unavailable)?;
+    let node = worker_node(p)?;
+    let source = crate::profiled_execution::login_refresh::lease_source(
+        &state.store.pool,
+        &registry,
+        &p.material,
+    )
+    .await?;
+    let fingerprint = private_read::verify(registry, p.material.clone(), node, source).await?;
+    let received = now(state)?;
+    if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
+        return Err(unavailable());
+    }
+    Ok((fingerprint, started, received))
+}
+async fn retained_source(state: &AppState, p: &Pinned) -> Result<RetentionObservation, AppError> {
+    let identity = source::repository_identity(
+        state,
+        p.spec.source.repository_id,
+        p.spec.source.repository_binding_generation,
+    )
+    .await?;
+    if identity != p.source.token().request().logical_identity {
+        return Err(changed());
+    }
+    profiled_base::inspect_retained_for_execution(state, p.source.token(), p.source.fact()).await
+}
 pub async fn collect(state: &AppState, p: &Pinned) -> Result<Observed, AppError> {
-    let file = async {
-        let started = now(state)?;
-        let registry = state.config.intelligence.clone().ok_or_else(unavailable)?;
-        let node = match p.selection.target {
-            aq_selection::ExecutionTarget::Worker { node_id, .. } => node_id,
-            _ => return Err(changed()),
-        };
-        let source = crate::profiled_execution::login_refresh::lease_source(
-            &state.store.pool,
-            &registry,
-            &p.material,
-        )
-        .await?;
-        let fingerprint = private_read::verify(registry, p.material.clone(), node, source).await?;
-        let received = now(state)?;
-        if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
-            return Err(unavailable());
-        }
-        Ok::<_, AppError>((fingerprint, started, received))
-    };
-    let source = async {
-        let identity = source::repository_identity(
-            state,
-            p.spec.source.repository_id,
-            p.spec.source.repository_binding_generation,
-        )
-        .await?;
-        if identity != p.source.token().request().logical_identity {
-            return Err(changed());
-        }
-        profiled_base::inspect_retained_for_execution(state, p.source.token(), p.source.fact())
-            .await
-    };
-    let (binding, task, source, (file, file_started_at_ms, file_received_at_ms)) =
-        tokio::try_join!(binding(state, p), task(state, p), source, file)?;
+    let (binding, task, source, (file, file_started_at_ms, file_received_at_ms)) = tokio::try_join!(
+        binding(state, p),
+        task(state, p),
+        retained_source(state, p),
+        private_material(state, p)
+    )?;
     Ok(Observed {
         binding,
         task,
@@ -198,16 +194,17 @@ impl Observed {
             .min(self.task.expires_at_ms)
             .min(self.source.expires_at_ms()))
     }
+    /// `time` is after every observation and inside every observed lifetime.
     pub fn fresh_at(&self, time: u64) -> Result<(), AppError> {
-        if time < self.binding.binding_observation.observed_at_ms
-            || time < self.task.received_at_ms
-            || time < self.source.observed_at_ms()
-            || time < self.file_received_at_ms
-            || time
-                >= self
-                    .file_started_at_ms
-                    .checked_add(2000)
-                    .ok_or_else(unavailable)?
+        let observed = [
+            self.binding.binding_observation.observed_at_ms,
+            self.task.received_at_ms,
+            self.source.observed_at_ms(),
+            self.file_received_at_ms,
+        ];
+        let file_deadline = self.file_started_at_ms.checked_add(2000);
+        if observed.iter().any(|at| time < *at)
+            || time >= file_deadline.ok_or_else(unavailable)?
             || time >= self.ceiling()?
         {
             return Err(unavailable());
