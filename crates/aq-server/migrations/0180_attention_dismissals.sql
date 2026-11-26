@@ -10,4 +10,4 @@ CREATE TABLE dashboard_attention_dismissals (
     PRIMARY KEY (principal_id, attention_id)
 );
 
-UPDATE meta SET value='179' WHERE key='state_format_version';
+UPDATE meta SET value='180' WHERE key='state_format_version';
