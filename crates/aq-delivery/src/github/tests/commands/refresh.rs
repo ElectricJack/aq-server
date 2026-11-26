@@ -104,6 +104,7 @@ async fn a_behind_green_pr_is_refreshed_checked_again_and_merged_at_the_new_head
 
     // The merge is pinned to 1; the central ref is still b.
     mock.reply(200, vec![], at('1', 'd', "clean"));
+    no_queue(&mock);
     mock.reply(200, vec![], json!({"sha": sha('f'), "merged": true}));
     assert_eq!(merge(&delivery, Some('1')).await.outcome, "merged");
     let seen = mock.seen();
@@ -296,4 +297,45 @@ async fn a_head_and_base_already_asked_for_are_not_asked_for_again() {
     mock.reply(202, vec![], json!({}));
     wait(&delivery, asked).await;
     assert_eq!(updates(&mock), [json!({"expected_head_sha": sha('b')})]);
+}
+
+#[tokio::test]
+async fn under_a_merge_queue_a_behind_green_pr_passes_without_a_refresh() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    // The same behind, green PR as above, on a base whose rules require a queue.
+    for state in ["behind", "unknown"] {
+        mock.reply(200, vec![], at('b', 'd', state));
+        mock.reply(200, vec![], at('b', 'd', state));
+        mock.reply(
+            200,
+            vec![],
+            json!([{"type": "merge_queue", "parameters": {}}]),
+        );
+        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
+        mock.reply(200, vec![], green());
+        mock.reply(200, vec![], no_statuses());
+        let run = wait(&delivery, json!({"allow": true})).await;
+        assert_eq!(done(run.step.unwrap()).outcome, "passed", "{state}");
+        assert_eq!(run.refreshed, None);
+    }
+    assert!(updates(&mock).is_empty(), "no refresh asked for");
+}
+
+#[tokio::test]
+async fn a_held_behind_green_pr_rejoins_only_under_a_merge_queue() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let required = ["check".to_string(), "deployment".to_string()];
+    for (rules, rejoins) in [(json!([]), false), (json!([{"type": "merge_queue"}]), true)] {
+        mock.reply(200, vec![], at('b', 'd', "behind"));
+        mock.reply(200, vec![], rules);
+        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
+        mock.reply(200, vec![], green());
+        mock.reply(200, vec![], no_statuses());
+        let passed = delivery
+            .held_checks_passed(&target(), 7, &sha('b'), Some(&required[..]))
+            .await;
+        assert_eq!(passed, rejoins);
+    }
 }

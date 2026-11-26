@@ -12,8 +12,10 @@ struct MergeResponse {
 }
 
 pub(super) struct MergeTarget<'a> {
+    pub(super) repo: &'a GitHubRepository,
     pub(super) head: &'a str,
     pub(super) base: &'a str,
+    pub(super) queue: QueueWait,
 }
 impl MergeTarget<'_> {
     fn moved(&self, actual: &str) -> MergeOutcome {
@@ -43,11 +45,10 @@ impl MergeTarget<'_> {
                 message: "pull request is closed".into(),
             },
             _ if pull.head.sha != self.head => self.moved(&pull.head.sha),
-            _ => match pull.mergeability(PullRequestState::Open) {
-                Mergeability::Conflict => MergeOutcome::Conflict,
-                Mergeability::Behind => MergeOutcome::Behind,
-                _ => return Ok(None),
-            },
+            _ if pull.mergeability(PullRequestState::Open) == Mergeability::Conflict => {
+                MergeOutcome::Conflict
+            }
+            _ => return Ok(None),
         };
         Ok(Some(outcome))
     }
@@ -71,6 +72,13 @@ impl MergeTarget<'_> {
         let pull = s.pull(pr).await?;
         if let Some(outcome) = self.inspect(&pull)? {
             return Ok(outcome);
+        }
+        // Behind is no obstacle to a merge queue: it merges onto the base it builds.
+        if let Some(outcome) = self.through_queue(s, &pull).await? {
+            return Ok(outcome);
+        }
+        if pull.mergeability(PullRequestState::Open) == Mergeability::Behind {
+            return Ok(MergeOutcome::Behind);
         }
         let body = json!({"merge_method": method.as_str(), "sha": self.head});
         let merged: GitHubResult<MergeResponse> = s

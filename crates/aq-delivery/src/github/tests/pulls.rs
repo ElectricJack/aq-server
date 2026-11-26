@@ -2,7 +2,7 @@
 use super::*;
 use crate::policy::{
     BranchDeletion, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod, MergeOutcome,
-    MergeRefusal, Mergeability, PullRequestState,
+    MergeRefusal, Mergeability, PullRequestState, QueueWait,
 };
 
 fn head() -> String {
@@ -46,6 +46,9 @@ fn requests(mock: &Mock) -> Vec<(String, String)> {
         .skip(1)
         .map(|s| (s.method.clone(), s.path.clone()))
         .collect()
+}
+fn graphql() -> (String, String) {
+    ("POST".into(), "/api/graphql".into())
 }
 fn req(method: &str, rest: &str) -> (String, String) {
     (method.into(), format!("/api/v3/repos/Acme/widgets{rest}"))

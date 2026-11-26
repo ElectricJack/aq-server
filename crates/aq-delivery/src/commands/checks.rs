@@ -220,7 +220,8 @@ impl Delivery {
                 checked.state == ChecksState::Passed
                     && request.matches(pr, &target.default_branch, head)
                     && pr.state == PullRequestState::Open
-                    && pr.mergeability == Mergeability::Clean
+                    && (pr.mergeability == Mergeability::Clean
+                        || (checked.merge_queue && pr.mergeability == Mergeability::Behind))
             })
     }
 
@@ -366,7 +367,11 @@ impl Delivery {
         }
         let completion = seen.record_checks(&checks);
         let pr = &checks.pull_request;
-        if checks.state == ChecksState::Passed && pr.state == PullRequestState::Open {
+        // A merge queue builds onto the base itself: behind alone asks for no refresh.
+        if checks.state == ChecksState::Passed
+            && pr.state == PullRequestState::Open
+            && !checks.merge_queue
+        {
             match pr.mergeability {
                 Mergeability::Behind => return self.refresh(target, request, pr).await,
                 // GitHub recomputes after main moves: a merge now could find it behind.
