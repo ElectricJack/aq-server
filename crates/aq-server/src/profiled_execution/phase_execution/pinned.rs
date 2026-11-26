@@ -107,13 +107,16 @@ async fn load_for_locked(
     q: &PrepareRequest,
     mode: LoadMode<'_>,
 ) -> Result<Pinned, AppError> {
-    let h = load_accepted_locked(state, tx, auth, q, mode).await?;
+    // Each locked helper is boxed so its state stays off this future's stack
+    // frame; inline awaits overflow the stack of deep database callers.
+    let h = Box::pin(load_accepted_locked(state, tx, auth, q, mode)).await?;
     let runtime =
         registration::current_runtime_locked(state, tx, auth.id(), q.original.identity.boot_id)
             .await?;
     let qualification = policy::current(state, &h, &runtime)?;
-    let (current_registration, registration_id) = load_registration_locked(tx, auth, q).await?;
-    let (view, hot, versions) = load_authority_locked(state, tx, q, &h, mode).await?;
+    let (current_registration, registration_id) =
+        Box::pin(load_registration_locked(tx, auth, q)).await?;
+    let (view, hot, versions) = Box::pin(load_authority_locked(state, tx, q, &h, mode)).await?;
     let offer =
         super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
             .await?;
@@ -126,7 +129,7 @@ async fn load_for_locked(
         spec,
         decision,
         selection,
-    } = load_selection_locked(tx, auth, q, &h, &view).await?;
+    } = Box::pin(load_selection_locked(tx, auth, q, &h, &view)).await?;
     let material = h.receipt.lease.materials[0].clone();
     if material.credential_profile != selection.choice.credential_profile
         || material.credential_revision != selection.credential_revision
@@ -154,8 +157,10 @@ async fn load_for_locked(
             .min(h.receipt.execution_deadline_ms),
         None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
     };
-    let (context, ceiling) =
-        load_artifacts_locked(state, tx, q, &spec, &offer, &source, ceiling).await?;
+    let (context, ceiling) = Box::pin(load_artifacts_locked(
+        state, tx, q, &spec, &offer, &source, ceiling,
+    ))
+    .await?;
     let policy = super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
     require_supported_budget(&offer, &policy, &decision, &h)?;
     let input = observations::Input {
