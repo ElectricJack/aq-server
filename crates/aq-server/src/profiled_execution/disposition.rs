@@ -69,6 +69,27 @@ fn conflict() -> AppError {
     )
 }
 
+fn replay(
+    old: &[sqlx::postgres::PgRow],
+    attempt: Uuid,
+    request: &Request,
+    actor: Uuid,
+) -> Result<Receipt, AppError> {
+    if old.len() != 1 {
+        return Err(conflict());
+    }
+    let receipt: Receipt =
+        serde_json::from_value(old[0].get("receipt")).map_err(|_| AppError::Internal)?;
+    if receipt.attempt_id != attempt
+        || receipt.operation_id != request.operation_id
+        || receipt.reason != request.reason
+        || receipt.actor_id != actor
+    {
+        return Err(conflict());
+    }
+    Ok(receipt)
+}
+
 /// Uses the same node -> attempt/hot locks as results, cancellation and
 /// settlement. Historical receipts replay exactly, including after restart.
 pub async fn abandon(
@@ -127,18 +148,7 @@ pub async fn abandon(
     .await
     .map_err(db)?;
     if !old.is_empty() {
-        if old.len() != 1 {
-            return Err(conflict());
-        }
-        let receipt: Receipt =
-            serde_json::from_value(old[0].get("receipt")).map_err(|_| AppError::Internal)?;
-        if receipt.attempt_id != attempt
-            || receipt.operation_id != request.operation_id
-            || receipt.reason != request.reason
-            || receipt.actor_id != actor.id()
-        {
-            return Err(conflict());
-        }
+        let receipt = replay(&old, attempt, request, actor.id())?;
         tx.commit().await.map_err(db)?;
         return Ok(receipt);
     }
