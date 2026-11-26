@@ -44,6 +44,11 @@ pub struct DeliveryLimits {
     /// How long AQ waits between project supervisor reminders for a still-current hold.
     #[serde(default = "hold_followup_interval_ms")]
     pub hold_followup_interval_ms: u64,
+    /// The longest a merge waits in the base branch's merge queue before AQ
+    /// takes it out and reports it not mergeable.
+    /// Settings stored before this field existed read as the default.
+    #[serde(default = "longest_merge_queue_wait_ms")]
+    pub longest_merge_queue_wait_ms: u64,
 }
 fn require_landed_results() -> bool {
     true
@@ -53,6 +58,9 @@ fn check_log_bytes() -> u64 {
 }
 fn hold_followup_interval_ms() -> u64 {
     DAY_MS
+}
+fn longest_merge_queue_wait_ms() -> u64 {
+    4 * 60 * 60 * SECOND_MS
 }
 impl Default for DeliveryLimits {
     fn default() -> Self {
@@ -66,13 +74,14 @@ impl Default for DeliveryLimits {
             require_landed_results: true,
             check_log_bytes: check_log_bytes(),
             hold_followup_interval_ms: hold_followup_interval_ms(),
+            longest_merge_queue_wait_ms: longest_merge_queue_wait_ms(),
         }
     }
 }
 impl DeliveryLimits {
     /// Every value in its range; the message names the first that is not.
     pub fn validate(&self) -> Result<(), String> {
-        let fields: [(&str, u64, u64, u64); 8] = [
+        let fields: [(&str, u64, u64, u64); 9] = [
             (
                 "main_sync_interval_ms",
                 self.main_sync_interval_ms,
@@ -121,6 +130,12 @@ impl DeliveryLimits {
                 60 * SECOND_MS,
                 WEEK_MS,
             ),
+            (
+                "longest_merge_queue_wait_ms",
+                self.longest_merge_queue_wait_ms,
+                SECOND_MS,
+                WEEK_MS,
+            ),
         ];
         for (name, value, least, most) in fields {
             if !(least..=most).contains(&value) {
@@ -133,32 +148,40 @@ impl DeliveryLimits {
     }
 }
 
+/// Fields added after clients that send the whole limits existed: a request
+/// without one keeps the stored value instead of resetting it.
+const KEPT_WHEN_ABSENT: [&str; 2] = ["hold_followup_interval_ms", "longest_merge_queue_wait_ms"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeliveryLimitsChange {
     limits: DeliveryLimits,
-    keep_followup_interval: bool,
+    /// [`KEPT_WHEN_ABSENT`] by index: whether the request left it out.
+    kept: [bool; 2],
 }
 
 impl DeliveryLimitsChange {
     pub(crate) fn replace(limits: DeliveryLimits) -> Self {
         Self {
             limits,
-            keep_followup_interval: false,
+            kept: [false; 2],
         }
     }
 
     pub(crate) fn from_request(value: Value) -> serde_json::Result<Self> {
-        let keep_followup_interval = value.get("hold_followup_interval_ms").is_none();
+        let kept = KEPT_WHEN_ABSENT.map(|field| value.get(field).is_none());
         Ok(Self {
             limits: serde_json::from_value(value)?,
-            keep_followup_interval,
+            kept,
         })
     }
 
     pub(crate) fn resolve(&self, stored: DeliveryLimits) -> DeliveryLimits {
         let mut limits = self.limits;
-        if self.keep_followup_interval {
+        if self.kept[0] {
             limits.hold_followup_interval_ms = stored.hold_followup_interval_ms;
+        }
+        if self.kept[1] {
+            limits.longest_merge_queue_wait_ms = stored.longest_merge_queue_wait_ms;
         }
         limits
     }
@@ -166,16 +189,17 @@ impl DeliveryLimitsChange {
 
 impl Serialize for DeliveryLimitsChange {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if !self.keep_followup_interval {
-            return self.limits.serialize(serializer);
-        }
         // Keep the earlier request shape for operation-id replay. A later
-        // cadence edit must not alter the identity of a previous request.
+        // edit of a kept field must not alter the identity of a previous request.
         let mut value = serde_json::to_value(self.limits).map_err(serde::ser::Error::custom)?;
-        value
+        let object = value
             .as_object_mut()
-            .ok_or_else(|| serde::ser::Error::custom("delivery limits must be an object"))?
-            .remove("hold_followup_interval_ms");
+            .ok_or_else(|| serde::ser::Error::custom("delivery limits must be an object"))?;
+        for (field, kept) in KEPT_WHEN_ABSENT.iter().zip(self.kept) {
+            if kept {
+                object.remove(*field);
+            }
+        }
         value.serialize(serializer)
     }
 }
@@ -200,12 +224,13 @@ mod tests {
         );
         assert!(d.require_landed_results);
         assert_eq!(d.check_log_bytes, 16_384);
+        assert_eq!(d.longest_merge_queue_wait_ms, 14_400_000);
         assert_eq!(d.validate(), Ok(()));
     }
     #[test]
     fn each_field_is_refused_at_zero_and_over_its_maximum() {
         type Set = fn(&mut DeliveryLimits, u64);
-        let setters: [(&str, Set, u64); 8] = [
+        let setters: [(&str, Set, u64); 9] = [
             (
                 "main_sync_interval_ms",
                 |l, v| l.main_sync_interval_ms = v,
@@ -240,6 +265,11 @@ mod tests {
             (
                 "hold_followup_interval_ms",
                 |l, v| l.hold_followup_interval_ms = v,
+                WEEK_MS,
+            ),
+            (
+                "longest_merge_queue_wait_ms",
+                |l, v| l.longest_merge_queue_wait_ms = v,
                 WEEK_MS,
             ),
         ];
@@ -285,6 +315,24 @@ mod tests {
         stored.as_object_mut().unwrap().remove("check_log_bytes");
         let read: DeliveryLimits = serde_json::from_value(stored).unwrap();
         assert_eq!(read.check_log_bytes, 16_384);
+    }
+    #[test]
+    fn the_merge_queue_wait_defaults_when_not_stored() {
+        let mut stored = serde_json::to_value(DeliveryLimits::default()).unwrap();
+        stored
+            .as_object_mut()
+            .unwrap()
+            .remove("longest_merge_queue_wait_ms");
+        let read: DeliveryLimits = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(read.longest_merge_queue_wait_ms, 14_400_000);
+        // A client that does not know the field keeps the owner's value.
+        let change = DeliveryLimitsChange::from_request(stored.clone()).unwrap();
+        let owner = DeliveryLimits {
+            longest_merge_queue_wait_ms: 60_000,
+            ..Default::default()
+        };
+        assert_eq!(change.resolve(owner).longest_merge_queue_wait_ms, 60_000);
+        assert_eq!(serde_json::to_value(&change).unwrap(), stored);
     }
     #[test]
     fn hold_followup_interval_has_a_minute_floor_and_defaults_for_legacy_settings() {
