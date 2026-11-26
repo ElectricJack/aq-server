@@ -189,6 +189,21 @@
           "maxLength": 128,
           "description": "The role the task expects; it must exist. Absent: the project's default role."
         },
+        "workspace": {
+          "type": "array", "maxItems": 17, "uniqueItems": true,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object", "additionalProperties": false, "required": ["target_project_id", "access"],
+                "properties": { "target_project_id": { "type": "string", "format": "uuid" }, "access": { "enum": ["read", "write"] } }
+              },
+              {
+                "type": "object", "additionalProperties": false, "required": ["service"],
+                "properties": { "service": { "const": "postgres" } }
+              }
+            ]
+          }
+        },
         "needs": {
           "type": ["array", "null"],
           "maxItems": 32,

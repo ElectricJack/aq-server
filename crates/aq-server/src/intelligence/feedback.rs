@@ -27,12 +27,13 @@ impl<'a> Failure<'a> {
         })
     }
     async fn check_boot(&self, tx: &mut Tx<'_>) -> Result<()> {
-        let revoked: Option<bool> =
-            sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1 FOR UPDATE")
-                .bind(self.node)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(db)?;
+        let revoked: Option<bool> = sqlx::query_scalar(
+            "SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1 FOR KEY SHARE",
+        )
+        .bind(self.node)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?;
         if revoked != Some(false) {
             return Err(AppError::CredentialRevoked);
         }

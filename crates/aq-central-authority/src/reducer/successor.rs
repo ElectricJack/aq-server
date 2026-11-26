@@ -73,22 +73,26 @@ impl Run {
         if old != next {
             return Err(Error::Refused(Refusal::Conflict));
         }
-        let retryable = matches!(&self.dispatch, DispatchState::NotAttempted)
-            || matches!(&self.dispatch, DispatchState::Resolved { evidence } if evidence.disposition == HandoffDisposition::NotHandedOff);
-        if !retryable {
-            return Err(Error::Refused(Refusal::BatchHeld));
-        }
-        if let DispatchState::Resolved { evidence } = &self.dispatch {
-            let entry = history
-                .entries
-                .iter()
-                .find(|e| e.message.message_id == next.message_id)
-                .expect("complete coverage");
-            if !matches!(&entry.disposition,HistoryDisposition::Retryable{evidence:found} if found==evidence.as_ref())
+        let entry = history
+            .entries
+            .iter()
+            .find(|e| e.message.message_id == next.message_id)
+            .expect("complete coverage");
+        let retried = |evidence: &HandoffEvidence| matches!(&entry.disposition, HistoryDisposition::Retryable { evidence: found } if found == evidence);
+        match &self.dispatch {
+            DispatchState::NotAttempted => Ok(()),
+            DispatchState::Resolved { evidence }
+                if evidence.disposition == HandoffDisposition::NotHandedOff =>
             {
-                return Err(Error::Refused(Refusal::Conflict));
+                if retried(evidence) {
+                    Ok(())
+                } else {
+                    Err(Error::Refused(Refusal::Conflict))
+                }
             }
+            // Handed-off mail goes again only when the owner released this stopped turn.
+            DispatchState::Resolved { evidence } if retried(evidence) => Ok(()),
+            _ => Err(Error::Refused(Refusal::BatchHeld)),
         }
-        Ok(())
     }
 }

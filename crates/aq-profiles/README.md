@@ -138,7 +138,7 @@ The selection policy has one set of defaults for all profiles
 | Key | Default |
 |---|---|
 | `max_attempts` | `2` |
-| `fallback_on` | `[missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]` |
+| `fallback_on` | `[missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]` (retained for compatibility; queued tasks always consider the other eligible candidates) |
 | `observation_max_age_ms` | `30000` |
 | `allow_unknown_availability` | `false` |
 | `unknown_cost` | `allow_bounded` (or `deny`) |
@@ -173,7 +173,7 @@ list of `- key: value` items:
 ```markdown
 ## Selection
 - max_attempts: 3
-- fallback_on: [unavailable]
+- observation_max_age_ms: 30000
 ```
 
 Every key is optional, and a key the table does not list is refused.

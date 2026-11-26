@@ -579,7 +579,7 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
     let pending =
         tokio::spawn(async move { service::record(&state, &owner, &node, &request).await });
     tokio::time::timeout(std::time::Duration::from_millis(400),async {
-  loop {let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event IS NOT NULL AND query LIKE 'SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR UPDATE%')").fetch_one(&c.case.env.env.pool).await.unwrap();if waiting{break}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
+  loop {let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event IS NOT NULL AND query LIKE 'SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR KEY SHARE%')").fetch_one(&c.case.env.env.pool).await.unwrap();if waiting{break}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
  }).await.expect("observe current credential lock wait inside500ms SQL bound");
     sqlx::query("UPDATE nodes SET credential_hash=$2 WHERE id=$1")
         .bind(auth.id())
@@ -605,6 +605,31 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
         .await
         .unwrap()
     );
+}
+
+async fn disposition(
+    state: &aq_server::AppState,
+    attempt: Uuid,
+    email: &str,
+    body: serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let response = aq_server::build_admin_router(state.clone())
+        .oneshot(
+            axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
+                .header("content-type", "application/json")
+                .header("x-aq-dev-email", email)
+                .header("X-AQ-Request", "1")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+    )
 }
 
 /// The owner's abandon covers a granted launch closed before the agent started. Such an
@@ -639,27 +664,8 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
     };
     assert_eq!(history_live().await, (true, true));
     let state = &c.case.env.env.state;
-    let abandon = |email: &'static str, body: serde_json::Value| async move {
-        let response = aq_server::build_admin_router(state.clone())
-            .oneshot(
-                axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
-                    .header("content-type", "application/json")
-                    .header("x-aq-dev-email", email)
-                    .header("X-AQ-Request", "1")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-        )
-    };
     let body = serde_json::json!({"operation_id": Uuid::new_v4(), "reason": "launch failed before the agent started"});
-    let (status, receipt) = abandon("owner@localhost", body.clone()).await;
+    let (status, receipt) = disposition(state, attempt, "owner@localhost", body.clone()).await;
     assert_eq!(status, 200, "{receipt}");
     assert_eq!(receipt["disposition"], "abandoned");
     let closure: String = sqlx::query_scalar(
@@ -679,7 +685,7 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         (false, false),
         "the same closure discharges live history after verified abandonment"
     );
-    let (status, replay) = abandon("owner@localhost", body).await;
+    let (status, replay) = disposition(state, attempt, "owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
 

@@ -21,11 +21,30 @@ pub async fn existing(
     request: &Poll,
     slot: u32,
 ) -> Result<Option<OfferDelivery>, AppError> {
+<<<<<<< HEAD
     let poll = SlotPoll {
         state,
         auth,
         request,
         slot,
+=======
+    let mut tx = state.store.pool.begin().await.map_err(db)?;
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    // No allocation lock: redelivery claims nothing new, so it neither waits
+    // for a sibling slot's publication nor for an owner fence. An offer
+    // redelivered as a Stop commits is an attempt the Stop already hands off.
+    if !slots::redelivery_allowed(&mut tx, auth.id())
+        .await
+        .map_err(mapped)?
+    {
+        return Ok(None);
+    }
+    let boot = request.identity.boot_id;
+    super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
+    let offered = slots::offered_attempt(&mut tx, auth.id(), request.after_offer, slot);
+    let Some(attempt) = offered.await.map_err(mapped)? else {
+        return Ok(None);
+>>>>>>> refs/remotes/central/main
     };
     let Some((mut tx, attempt)) = poll.exclusively_offered_attempt().await? else {
         return Ok(None);

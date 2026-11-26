@@ -26,7 +26,7 @@ async fn credential_rotation_after_observed_node_wait_cannot_create_transfer_and
         .unwrap()
     });
     tokio::time::timeout(std::time::Duration::from_secs(2),async {loop {
-        let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM nodes WHERE id=%credential_hash=%FOR UPDATE')").fetch_one(&h.pool).await.unwrap();
+        let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM nodes WHERE id=%credential_hash=%FOR KEY SHARE')").fetch_one(&h.pool).await.unwrap();
         if waiting{break;}tokio::task::yield_now().await;
     }}).await.expect("must observe original credential's node lock wait");
     let replacement = new_node_credential();

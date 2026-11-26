@@ -211,7 +211,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         "decision_repeat_ms": 120000, "longest_check_wait_ms": 3600000,
         "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456,
         "require_landed_results": true, "check_log_bytes": 16384,
-        "hold_followup_interval_ms": 86400000});
+        "hold_followup_interval_ms": 86400000, "longest_merge_queue_wait_ms": 14400000});
     let (status, body) = f.owner().get(PATH).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
@@ -315,6 +315,7 @@ fn invalid_delivery_limits(defaults: &Value) -> Vec<Value> {
             "require_landed_results",
             "check_log_bytes",
             "hold_followup_interval_ms",
+            "longest_merge_queue_wait_ms",
         ]
         .contains(&field.as_str())
         {
@@ -444,4 +445,85 @@ async fn model_suggestions_are_read_from_the_discovery_cache_and_never_fail() {
     f.save(Kind::Intelligence, "standard-high", level)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn delivery_reporting_preferences_are_owner_only_revisioned_and_replayable() {
+    let f = started().await;
+    let project = Uuid::new_v4();
+    let repository = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO project_execution_bindings
+         (project_id,revision,binding,validated_at_ms,binding_observation)
+         VALUES($1,1,$2,$3,'{}')",
+    )
+    .bind(project)
+    .bind(json!({"repository_id": repository}))
+    .bind(NOW)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+
+    let path = format!("/api/settings/performance/delivery/{project}");
+    let class = format!("{path}?work_class=maintenance");
+    let initial = f.owner().get(&path).await;
+    assert_eq!(initial.0, StatusCode::OK, "{}", initial.1);
+    assert_eq!(initial.1["revision"], 0);
+    assert_eq!(initial.1["effective_definition"]["kind"], "not_tracked");
+    assert_eq!(f.viewer_read().get(&path).await.0, StatusCode::FORBIDDEN);
+
+    let request = json!({"operation_id": Uuid::new_v4(), "expected_revision": 0,
+        "definition": {"kind": "confirmed_completion"}});
+    assert_eq!(
+        f.owner().send("POST", &path, Some(request.clone())).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.viewer()
+            .send("POST", &path, Some(request.clone()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, saved) = f
+        .owner_write()
+        .send("POST", &path, Some(request.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(
+        f.owner().get(&class).await.1["effective_definition"]["kind"],
+        "confirmed_completion"
+    );
+    assert_eq!(
+        f.owner_write().send("POST", &path, Some(request)).await,
+        (StatusCode::OK, saved)
+    );
+
+    let merge = json!({"operation_id": Uuid::new_v4(), "expected_revision": 0, "work_class": "maintenance",
+        "definition": {"kind": "target_branch_merge", "repository_id": repository, "target_ref": "refs/heads/main"}});
+    let (status, body) = f
+        .owner_write()
+        .send("POST", &path, Some(merge.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["revision"], 1);
+    assert_eq!(
+        f.owner().get(&class).await.1["effective_definition"]["kind"],
+        "target_branch_merge"
+    );
+    let mut stale = merge;
+    stale["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        f.owner_write().send("POST", &path, Some(stale)).await.0,
+        StatusCode::CONFLICT
+    );
+    let restore = json!({"operation_id": Uuid::new_v4(), "expected_revision": 1,
+        "work_class": "maintenance", "definition": null});
+    let (status, body) = f.owner_write().send("POST", &path, Some(restore)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["definition"], Value::Null);
+    assert_eq!(body["revision"], 2);
+    assert_eq!(body["effective_definition"]["kind"], "confirmed_completion");
+    assert_eq!(f.owner().get(&class).await.1, body);
 }

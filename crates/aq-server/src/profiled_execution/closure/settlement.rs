@@ -31,7 +31,7 @@ use aq_admission::{ArtifactRef, Digest, LaunchBinding, Text, granted_closure};
 use aq_machine_control::{closed_launch, lapse};
 use serde::Serialize;
 use serde_json::{Value, json};
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -73,7 +73,8 @@ pub async fn settle(
         sqlx::query(sql).execute(&mut *tx).await.map_err(database)?;
     }
     let closure = sqlx::query(
-        "SELECT binding,operation_id,request_bytes,receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1",
+        "SELECT binding,operation_id,request_bytes,receipt_digest FROM \
+         profiled_launch_closures WHERE attempt_id=$1",
     )
     .bind(attempt)
     .fetch_optional(&mut *tx)
@@ -154,37 +155,9 @@ pub async fn settle(
     if let Some(code) = used.map_err(mapped)? {
         return Ok(ClosureSettlement::Held(code));
     }
-    // Retention: the attempt's own verified central export (its whole input).
-    let linked =
-        crate::profiled_execution::source_exports::load_linked_locked(&mut tx, attempt).await?;
-    let export = linked.token().request().operation_id;
-    let manifest = linked.manifest();
-    let source_receipt = reference(
-        format!("aq.source-export/{export}"),
-        &json!({"operation_id": export, "manifest_digest": manifest.manifest_digest, "bundle_digest": manifest.bundle_digest, "checkpoint": manifest.checkpoint}),
-    )?;
-    let (operation, stop_receipt) = match &closure {
-        Some(closure) => {
-            let operation: Uuid = closure.get("operation_id");
-            let stop = ArtifactRef {
-                id: Text::new(format!("aq.launch-closure/{operation}"))
-                    .map_err(|_| AppError::Internal)?,
-                version: Text::new("1").map_err(|_| AppError::Internal)?,
-                digest: serde_json::from_value(json!(closure.get::<String, _>("receipt_digest")))
-                    .map_err(|_| AppError::Internal)?,
-            };
-            (operation, stop)
-        }
-        None => {
-            tracing::warn!(%attempt, reason = lapse::REASON, "granted attempt never started and its grant expired; closed by the server");
-            crate::profiled_execution::journal::revoke(&mut tx, attempt).await?;
-            hot.revoked = true;
-            let record =
-                json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant});
-            let stop = reference(format!("{}{attempt}", lapse::RECEIPT), &record)?;
-            (attempt, stop)
-        }
-    };
+    let source_receipt = source_receipt_locked(&mut tx, attempt).await?;
+    let (operation, stop_receipt) =
+        stop_receipt_locked(&mut tx, attempt, closure.as_ref(), &mut hot).await?;
     let effects_receipt = reference(
         format!("aq.closure-effects/{operation}"),
         &json!({"attempt_id": attempt, "graph_operations": 0, "mailbox_operations": 0, "closure": stop_receipt}),
@@ -211,6 +184,50 @@ pub async fn settle(
     Ok(ClosureSettlement::Settled)
 }
 
+async fn source_receipt_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+) -> Result<ArtifactRef, AppError> {
+    // Retention: the attempt's own verified central export (its whole input).
+    let linked = crate::profiled_execution::source_exports::load_linked_locked(tx, attempt).await?;
+    let export = linked.token().request().operation_id;
+    let manifest = linked.manifest();
+    reference(
+        format!("aq.source-export/{export}"),
+        &json!({"operation_id": export, "manifest_digest": manifest.manifest_digest, "bundle_digest": manifest.bundle_digest, "checkpoint": manifest.checkpoint}),
+    )
+}
+
+async fn stop_receipt_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    closure: Option<&PgRow>,
+    hot: &mut HotState,
+) -> Result<(Uuid, ArtifactRef), AppError> {
+    match closure {
+        Some(closure) => {
+            let operation: Uuid = closure.get("operation_id");
+            let stop = ArtifactRef {
+                id: Text::new(format!("aq.launch-closure/{operation}"))
+                    .map_err(|_| AppError::Internal)?,
+                version: Text::new("1").map_err(|_| AppError::Internal)?,
+                digest: serde_json::from_value(json!(closure.get::<String, _>("receipt_digest")))
+                    .map_err(|_| AppError::Internal)?,
+            };
+            Ok((operation, stop))
+        }
+        None => {
+            tracing::warn!(%attempt, reason = lapse::REASON, "granted attempt never started and its grant expired; closed by the server");
+            crate::profiled_execution::journal::revoke(tx, attempt).await?;
+            hot.revoked = true;
+            let record =
+                json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant});
+            let stop = reference(format!("{}{attempt}", lapse::RECEIPT), &record)?;
+            Ok((attempt, stop))
+        }
+    }
+}
+
 /// Settles a closed launch, then releases its task claim through B4 when B4
 /// admits a replacement: the claim of a never-started attempt is what keeps
 /// its node from re-registering (the incarnation guard only accepts stopped
@@ -228,7 +245,9 @@ pub async fn settle_and_release(
         return Ok(settled);
     }
     let row: Option<(Uuid, bool, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT a.task_id,a.holds_task,h.state#>>'{stop,kind}',h.state#>>'{stop,receipt,id}' FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1",
+        "SELECT a.task_id,a.holds_task,h.state#>>'{stop,kind}',h.state#>>'{stop,receipt,id}' \
+         FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE \
+         a.attempt_id=$1",
     )
     .bind(attempt)
     .fetch_optional(&state.store.pool)

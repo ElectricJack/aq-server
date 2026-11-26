@@ -20,6 +20,10 @@ const URL_BYTES: usize = 2048;
 const CHECK_NAME_BYTES: usize = 256;
 const CHECK_NAMES: usize = 64;
 const RETURNS_MAX: u32 = 1000;
+/// Catalog 2.6.0's bounds: the graph's on acceptance criteria and the result
+/// report's on its conclusion.
+const ACCEPTANCE_CRITERIA_BYTES: usize = 8192;
+const CONCLUSION_BYTES: usize = 512;
 const PULL_REQUEST_MAX: u64 = 1_000_000_000;
 
 /// The branch of a task's result in the central git (`aq/<task-id>`).
@@ -123,6 +127,16 @@ pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultF
     {
         all.extend(more.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
+    output
+}
+
+/// The `observed` output of `work.read` under catalog 2.6.0: the 2.3.0
+/// `output` with the acceptance criteria of the graph node `node` and the
+/// `conclusion` of the latest result (`""` when there is none).
+pub fn with_judgment_facts(mut output: Value, node: &Value, conclusion: &str) -> Value {
+    let criteria = node["acceptance_criteria"].as_str().unwrap_or("");
+    output["facts"]["acceptance_criteria"] = truncate(criteria, ACCEPTANCE_CRITERIA_BYTES).into();
+    output["facts"]["conclusion"] = truncate(conclusion, CONCLUSION_BYTES).into();
     output
 }
 
@@ -444,5 +458,38 @@ mod tests {
         assert_eq!(some["facts"]["branch"], format!("aq/{task}"));
         // The 2.2.0 facts are unchanged.
         assert_eq!(some["facts"]["title"], "t");
+    }
+
+    #[test]
+    fn work_read_2_6_0_adds_the_acceptance_criteria_and_the_conclusion_within_bounds() {
+        let registry: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.6.0/registry.json"
+        ))
+        .unwrap();
+        let observed = &registry.commands["work.read"].outcomes["observed"];
+        let task = Uuid::from_u128(1);
+        let node =
+            json!({"title": "t", "body": "b", "acceptance_criteria": "It runs.", "metadata": {}});
+        let work = WorkFacts::of(&node, false, 0, 0);
+        let base = read_output(task, 3, &work, &ResultFacts::default());
+        // Without the two facts the 2.3.0 answer does not fit 2.6.0.
+        assert!(observed.validate(&base).is_err());
+        let read = with_judgment_facts(base.clone(), &node, "Outcome: done; Changes: none");
+        observed.validate(&read).unwrap();
+        assert_eq!(read["facts"]["acceptance_criteria"], "It runs.");
+        assert_eq!(read["facts"]["conclusion"], "Outcome: done; Changes: none");
+        // A node without criteria and no result: both empty.
+        let empty = with_judgment_facts(base.clone(), &json!({}), "");
+        observed.validate(&empty).unwrap();
+        assert_eq!(empty["facts"]["acceptance_criteria"], "");
+        // Longer values are cut to the catalog's byte bounds at a character boundary.
+        let long = json!({"acceptance_criteria": "é".repeat(5000)});
+        let cut = with_judgment_facts(base, &long, &"é".repeat(300));
+        observed.validate(&cut).unwrap();
+        assert_eq!(
+            cut["facts"]["acceptance_criteria"].as_str().unwrap().len(),
+            8192
+        );
+        assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 512);
     }
 }

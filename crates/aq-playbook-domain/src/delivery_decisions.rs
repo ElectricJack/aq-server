@@ -299,10 +299,13 @@ pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Res
     .fetch_optional(&mut *db)
     .await?
     .is_some();
-    if recorded && d.decision == "completed" {
-        // The merged branch needs no refresh, and a replay no longer reads it.
-        sqlx::query("DELETE FROM delivery_branch_refreshes WHERE task_id=$1")
+    if recorded {
+        // A completed task needs no refresh, and a replay no longer reads it.
+        // Any other decision ends its place in the queue; a refresh that moved
+        // the forge branch stays, since the next publication leases on it.
+        sqlx::query("DELETE FROM delivery_branch_refreshes WHERE task_id=$1 AND ($2 OR requested_at_ms IS NULL)")
             .bind(d.task)
+            .bind(d.decision == "completed")
             .execute(&mut *db)
             .await?;
     }
@@ -536,6 +539,7 @@ mod tests {
                 changed,
                 head: head.into(),
                 base: String::new(),
+                conclusion: String::new(),
             };
             let expected = format!(
                 "Delivery hold checks_failed for project {}, task {} (revision 5), attempt {}, result {}.\n{expected_evidence}\n\nInspect the failed check.\n\nUse task.work, task.history and the current result or check evidence to find the cause, and check whether other tasks in this project are held for the same one. {}",

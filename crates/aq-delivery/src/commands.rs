@@ -13,8 +13,8 @@
 //! the same operation. Time is a parameter (`now_ms`), never read here.
 mod checks;
 mod run;
+use checks::Refresh;
 pub use checks::{CheckRequest, Refreshed};
-use checks::{REFRESHES, Refresh};
 pub use run::FrozenCommand;
 mod git;
 mod host;
@@ -31,7 +31,7 @@ pub use host::{
 use crate::github::GitHubApiError;
 use crate::policy::{
     ChecksState, GitHubAdapter, GitHubRepository, MergeMethod, MergeOutcome, MergeRefusal,
-    Mergeability, PullRequestState,
+    Mergeability, PullRequestState, QueueWait,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -198,6 +198,12 @@ pub struct MergeGuard<'a> {
     /// The result head, when a recorded refresh moved the pull request past
     /// it: the central branch is still there.
     pub result_head: Option<&'a str>,
+    /// A base branch with a merge queue: when the merge began and whether its
+    /// wait (Settings `delivery-limits.longest_merge_queue_wait_ms`) is over.
+    pub queue: QueueWait,
+    /// Settings `delivery-limits.check_log_bytes`, for the failed checks of a
+    /// merge group the queue took the pull request out for.
+    pub check_log_bytes: u64,
 }
 /// The commands, over a forge adapter and aq-git.
 #[derive(Clone)]
@@ -343,6 +349,33 @@ impl Delivery {
         })
     }
 
+    /// Read the forge PR and verify its exact revision and destination.
+    pub async fn pull_request_at(
+        &self,
+        target: &DeliveryTarget,
+        number: u64,
+        head: &str,
+    ) -> crate::github::GitHubResult<Option<crate::policy::PullRequest>> {
+        let pr = self.github.pull_request(&target.github, number).await?;
+        Ok(
+            (pr.number == number && pr.head_sha == head && pr.base_branch == target.default_branch)
+                .then_some(pr),
+        )
+    }
+
+    /// Read external merge evidence without issuing a merge request.
+    pub async fn verified_external_merge(
+        &self,
+        target: &DeliveryTarget,
+        number: u64,
+        head: &str,
+    ) -> crate::github::GitHubResult<Option<crate::policy::PullRequest>> {
+        Ok(self
+            .pull_request_at(target, number, head)
+            .await?
+            .filter(|pr| pr.state == PullRequestState::Merged))
+    }
+
     /// `pull_request.merge`: merges with `method` if the head is still
     /// `expected_head_sha`, then deletes the task's branch on the remote and in
     /// central aq-git. A merge that is already done is not done twice, so a
@@ -371,6 +404,8 @@ impl Delivery {
         let MergeGuard {
             method,
             expected_head,
+            queue,
+            check_log_bytes,
             ..
         } = guard;
         let done = |completion| MergeAttempt::Unconfirmed(Step::Done(completion));
@@ -382,6 +417,7 @@ impl Delivery {
                 method,
                 expected_head,
                 &target.default_branch,
+                queue,
             )
             .await;
         match merged {
@@ -397,6 +433,23 @@ impl Delivery {
             Ok(MergeOutcome::Conflict) => done(Completion::new("conflict", json!({}))),
             Ok(MergeOutcome::NotMergeable { .. }) => {
                 done(Completion::new("not_mergeable", json!({})))
+            }
+            Ok(MergeOutcome::Queued) => {
+                MergeAttempt::Unconfirmed(Step::Retry("in the merge queue".into()))
+            }
+            // The pull request is fine alone but not on the base the queue
+            // built: the playbook's conflict path sends it back to update.
+            Ok(MergeOutcome::ChecksFailed { names, merge_group }) => {
+                let log = match merge_group {
+                    Some(group) if check_log_bytes > 0 && !names.is_empty() => self
+                        .github
+                        .failed_check_log(&target.github, &group, &names, check_log_bytes)
+                        .await
+                        .ok()
+                        .flatten(),
+                    _ => None,
+                };
+                done(Self::merge_group_failed(pr, expected_head, &names, log))
             }
             Ok(MergeOutcome::Refused { reason, .. }) => done(match reason {
                 MergeRefusal::HeadMoved => Completion::refused("head_changed"),
@@ -417,6 +470,36 @@ impl Delivery {
             ))),
             Err(_) => done(Completion::refused("unreachable")),
         }
+    }
+
+    /// `conflict`, with the failed merge group checks in the pull request fact.
+    /// The log is kept for the head the group tested, the pull request's.
+    fn merge_group_failed(
+        pr: u64,
+        head: &str,
+        names: &[String],
+        log: Option<String>,
+    ) -> Completion {
+        Completion {
+            diagnostic: Some("merge_group_failed"),
+            ..Completion::new("conflict", json!({}))
+        }
+        .with(PullRequestObserved {
+            number: pr,
+            url: None,
+            state: "open",
+            mergeable: "unknown",
+            checks_state: "failed",
+            checks_failed: names
+                .iter()
+                .take(FAILED_NAMES)
+                .map(|n| n.chars().take(NAME_BYTES).collect())
+                .collect(),
+            checks_log: log.map(|tail| CheckLog {
+                head: head.to_owned(),
+                tail,
+            }),
+        })
     }
 
     /// Deletes the task branch, in central aq-git under the lease `central`

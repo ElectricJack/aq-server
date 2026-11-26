@@ -26,6 +26,8 @@ async fn merge(delivery: &Delivery, task: Uuid, pr: u64, head: char) -> Completi
                     method: MergeMethod::Merge,
                     expected_head: &sha(head),
                     result_head: None,
+                    queue: Default::default(),
+                    check_log_bytes: 0,
                 },
             )
             .await,
@@ -46,6 +48,7 @@ pub(super) async fn merge_first(delivery: &Delivery, mock: &Mock) {
     );
 
     mock.reply(200, vec![], first);
+    no_queue(mock);
     mock.reply(200, vec![], json!({"sha": sha('d'), "merged": true}));
     assert_eq!(merge(delivery, TASK, 7, 'a').await.outcome, "merged");
 }
@@ -60,6 +63,7 @@ pub(super) async fn confirm_behind(delivery: &Delivery, mock: &Mock, git: &FakeG
         ("conflict", Some("behind_base"))
     );
     mock.reply(200, vec![], behind);
+    no_queue(mock);
     let blocked = merge(delivery, SECOND_TASK, 8, 'b').await;
     assert_eq!(
         (blocked.outcome, blocked.diagnostic),
@@ -103,6 +107,7 @@ pub(super) async fn publish_repair(delivery: &Delivery, mock: &Mock) {
         "passed"
     );
     mock.reply(200, vec![], repaired);
+    no_queue(mock);
     mock.reply(200, vec![], json!({"sha": sha('f'), "merged": true}));
     assert_eq!(merge(delivery, SECOND_TASK, 8, 'e').await.outcome, "merged");
 }

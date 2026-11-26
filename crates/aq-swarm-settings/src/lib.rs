@@ -1,6 +1,7 @@
 //! Shared, owner-managed provider/class admission ceilings.
 pub mod admission;
 pub mod http;
+pub mod placement;
 pub mod providers;
 mod store;
 use serde::{Deserialize, Serialize};

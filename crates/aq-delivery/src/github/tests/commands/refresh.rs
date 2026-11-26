@@ -104,6 +104,7 @@ async fn a_behind_green_pr_is_refreshed_checked_again_and_merged_at_the_new_head
 
     // The merge is pinned to 1; the central ref is still b.
     mock.reply(200, vec![], at('1', 'd', "clean"));
+    no_queue(&mock);
     mock.reply(200, vec![], json!({"sha": sha('f'), "merged": true}));
     assert_eq!(merge(&delivery, Some('1')).await.outcome, "merged");
     let seen = mock.seen();
@@ -226,7 +227,7 @@ async fn a_refresh_github_refuses_or_the_host_does_not_allow_is_not_a_merge_atte
     mock.reply(503, vec![], json!({"message": "down"}));
     let run = wait(&delivery, json!({"allow": true})).await;
     assert_eq!((run.step, run.refreshed), (None, None));
-    // Out of refreshes: the agent updates it.
+    // A wait frozen without the refresh setting: the agent updates it.
     poll(
         &mock,
         at('b', 'd', "behind"),
@@ -236,4 +237,105 @@ async fn a_refresh_github_refuses_or_the_host_does_not_allow_is_not_a_merge_atte
     let run = wait(&delivery, json!({"allow": null})).await;
     assert_eq!(done(run.step.unwrap()).diagnostic, Some("behind_base"));
     assert_eq!(updates(&mock).len(), 2);
+}
+
+#[tokio::test]
+async fn green_checks_while_github_recomputes_mergeability_keep_the_wait_open() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    // Main just moved: GitHub has not computed whether b is behind yet.
+    let recomputing = || {
+        pull(
+            7,
+            json!({"mergeable": null, "mergeable_state": "unknown",
+        "head": {"ref": format!("aq/{TASK}"), "sha": sha('b')}}),
+        )
+    };
+    poll(&mock, recomputing(), recomputing(), green());
+    let run = wait(&delivery, json!({"allow": true})).await;
+    assert_eq!((run.step, run.refreshed), (None, None));
+    // Then it knows: behind is refreshed, up to date passes.
+    poll(
+        &mock,
+        at('b', 'd', "behind"),
+        at('b', 'd', "behind"),
+        green(),
+    );
+    mock.reply(202, vec![], json!({}));
+    let run = wait(&delivery, json!({"allow": true})).await;
+    assert!(matches!(run.refreshed, Some(Refreshed::Requested { .. })));
+    poll(&mock, at('b', 'c', "clean"), at('b', 'c', "clean"), green());
+    let run = wait(&delivery, json!({"allow": true})).await;
+    assert_eq!(done(run.step.unwrap()).outcome, "passed");
+}
+
+#[tokio::test]
+async fn a_head_and_base_already_asked_for_are_not_asked_for_again() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    // A refresh from b behind d was asked for and GitHub made nothing of it.
+    let asked = json!({"from": sha('b'), "base": sha('d'), "allow": true});
+    poll(
+        &mock,
+        at('b', 'd', "behind"),
+        at('b', 'd', "behind"),
+        green(),
+    );
+    let run = wait(&delivery, asked.clone()).await;
+    assert_eq!(
+        (run.step, run.refreshed),
+        (None, Some(Refreshed::Queued(sha('b'))))
+    );
+    assert!(updates(&mock).is_empty());
+    // Main moved on to e: that is a new pair.
+    poll(
+        &mock,
+        at('b', 'e', "behind"),
+        at('b', 'e', "behind"),
+        green(),
+    );
+    mock.reply(202, vec![], json!({}));
+    wait(&delivery, asked).await;
+    assert_eq!(updates(&mock), [json!({"expected_head_sha": sha('b')})]);
+}
+
+#[tokio::test]
+async fn under_a_merge_queue_a_behind_green_pr_passes_without_a_refresh() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    // The same behind, green PR as above, on a base whose rules require a queue.
+    for state in ["behind", "unknown"] {
+        mock.reply(200, vec![], at('b', 'd', state));
+        mock.reply(200, vec![], at('b', 'd', state));
+        mock.reply(
+            200,
+            vec![],
+            json!([{"type": "merge_queue", "parameters": {}}]),
+        );
+        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
+        mock.reply(200, vec![], green());
+        mock.reply(200, vec![], no_statuses());
+        let run = wait(&delivery, json!({"allow": true})).await;
+        assert_eq!(done(run.step.unwrap()).outcome, "passed", "{state}");
+        assert_eq!(run.refreshed, None);
+    }
+    assert!(updates(&mock).is_empty(), "no refresh asked for");
+}
+
+#[tokio::test]
+async fn a_held_behind_green_pr_rejoins_only_under_a_merge_queue() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let required = ["check".to_string(), "deployment".to_string()];
+    for (rules, rejoins) in [(json!([]), false), (json!([{"type": "merge_queue"}]), true)] {
+        mock.reply(200, vec![], at('b', 'd', "behind"));
+        mock.reply(200, vec![], rules);
+        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
+        mock.reply(200, vec![], green());
+        mock.reply(200, vec![], no_statuses());
+        let passed = delivery
+            .held_checks_passed(&target(), 7, &sha('b'), Some(&required[..]))
+            .await;
+        assert_eq!(passed, rejoins);
+    }
 }

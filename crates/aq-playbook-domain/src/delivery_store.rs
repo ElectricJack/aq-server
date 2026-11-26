@@ -51,6 +51,8 @@ pub struct Latest {
     pub head: String,
     /// The commit the lineage started from, or `""`.
     pub base: String,
+    /// The conclusion the agent reported with the result.
+    pub conclusion: String,
 }
 
 impl Latest {
@@ -110,6 +112,7 @@ impl DeliveryPort for PgDelivery {
              WHERE a.kind='profiled_v1' AND a.holds_task AND ah.state#>>'{stop,kind}'='stopped' \
              AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')::uuid=$1) \
              AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+             AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements s WHERE s.report_id=h.report_id AND s.reason='workspace_expansion_requested') \
              AND NOT ",
              aq_machine_control::platform_interruption_sql!("r.report_bytes"),
              " \
@@ -173,6 +176,7 @@ impl DeliveryPort for PgDelivery {
             changed: source.changed(),
             head: source.head,
             base: source.base.unwrap_or_default(),
+            conclusion: report["conclusion"].as_str().unwrap_or("").to_owned(),
         }))
     }
 
@@ -188,7 +192,13 @@ impl DeliveryPort for PgDelivery {
         .bind(event.project_id.to_string())
         .fetch_optional(&mut *db)
         .await?;
-        if held != Some(true) {
+        if held != Some(true)
+            || aq_machine_control::task_needs::blocks_observation(
+                db,
+                (event.project_id, event.task_id, event.version),
+            )
+            .await?
+        {
             return Ok(false);
         }
         let current: Option<Uuid> = sqlx::query_scalar(concat!(
@@ -196,7 +206,8 @@ impl DeliveryPort for PgDelivery {
             "JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) ",
             "WHERE h.attempt_id=$1 AND NOT ",
             aq_machine_control::platform_interruption_sql!("r.report_bytes"),
-            " FOR UPDATE OF h",
+            " AND NOT EXISTS (SELECT 1 FROM profiled_auto_settlements s WHERE s.report_id=h.report_id ",
+            "AND s.disposition='rework_required' AND s.reason='branch_publication_rejected') FOR UPDATE OF h",
         ))
         .bind(event.attempt_id)
         .fetch_optional(db)
@@ -429,35 +440,31 @@ pub async fn plan(
     project: Option<Uuid>,
     limit: u32,
     now_ms: i64,
-    (repeat_ms, run_bound_ms): (i64, i64),
+    limits: &aq_role_settings::delivery::DeliveryLimits,
 ) -> Result<Vec<Due>> {
+    let repeat_ms = limits.decision_repeat_ms as i64;
+    let timing = Timing {
+        repeat_ms,
+        run_bound_ms: (limits.longest_check_wait_ms as i64).saturating_add(repeat_ms),
+        rejection_repeat_ms: (limits.hold_followup_interval_ms as i64).max(repeat_ms),
+    };
     if !active(db, namespace).await? {
         return Ok(vec![]);
     }
     let resumed = recover_held_delivery(db, operations, project, now_ms, repeat_ms).await?;
     let mut ready = due(
         db,
-        namespace,
+        (namespace, port),
         resumed.into_iter().collect(),
         now_ms,
-        (repeat_ms, run_bound_ms),
+        timing,
         true,
     )
     .await?;
     let pending = port
         .pending(project, limit.saturating_sub(ready.len() as u32))
         .await?;
-    ready.extend(
-        due(
-            db,
-            namespace,
-            pending,
-            now_ms,
-            (repeat_ms, run_bound_ms),
-            false,
-        )
-        .await?,
-    );
+    ready.extend(due(db, (namespace, port), pending, now_ms, timing, false).await?);
     Ok(ready)
 }
 
@@ -788,7 +795,8 @@ pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Opt
 
 /// The redacted log tail of the failed required check on this result's
 /// published head (spec 0021 section 5.3), as the host read it through the
-/// GitHub App when the check failed (`check_log_bytes`). Only the failure AQ
+/// GitHub App when the check failed (`check_log_bytes`): on the head itself,
+/// or on the merge group the merge queue built of it. Only the failure AQ
 /// recorded for this exact head counts; `None` without a log.
 pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
     Ok(failed_check(db, result).await?.map(|(_, log)| log))
@@ -807,10 +815,13 @@ pub(crate) async fn failed_check(
          WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL
            AND l.checks_log_head IN (p.head,COALESCE(r.merged_head,r.from_head)) AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
-             AND o.command_name='pull_request.await_checks' AND o.status='failed'
+             AND ((o.command_name='pull_request.await_checks' AND o.status='failed'
+                   AND o.request->>'result_head'=p.head)
+               OR (o.command_name='pull_request.merge' AND o.status='conflict'
+                   AND o.request->>'answer_note'='merge_group_failed'
+                   AND o.request->>'expected_head_sha'=p.head))
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text
-             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
-             AND o.request->>'result_head'=p.head)",
+             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text)",
     )
     .bind(result)
     .fetch_optional(db)
@@ -942,16 +953,23 @@ async fn event_outstanding(
     Ok(status.flatten())
 }
 
+#[derive(Clone, Copy)]
+struct Timing {
+    repeat_ms: i64,
+    run_bound_ms: i64,
+    rejection_repeat_ms: i64,
+}
+
 /// The pending results to send now ([`result_ready_due`]); the others are
 /// marked as looked at, so that they go behind those not looked at yet.
 /// `run_bound_ms` bounds the work.read fallback for legacy emissions without
 /// an exact event receipt.
 async fn due(
     db: &mut PgConnection,
-    namespace: (Uuid, i64),
+    (namespace, port): ((Uuid, i64), &dyn DeliveryPort),
     pending: Vec<Pending>,
     now_ms: i64,
-    (repeat_ms, run_bound_ms): (i64, i64),
+    timing: Timing,
     recovering_hold: bool,
 ) -> Result<Vec<Due>> {
     if pending.is_empty() {
@@ -969,10 +987,21 @@ async fn due(
         .into_iter()
         .filter(|p| !decided.contains(&p.result_id))
     {
-        let emission = emission(db, namespace, &p, (now_ms, run_bound_ms)).await?;
+        let emission = emission(db, namespace, &p, (now_ms, timing.run_bound_ms)).await?;
         let moving = result_facts(db, p.task_id, p.project_id, None).await?;
         let facts = facts_digest(&moving.main_head, moving.pull_request.as_ref());
-        if result_ready_due(&emission, p.result_id, &facts, now_ms, repeat_ms) {
+        let due = result_ready_due(&emission, p.result_id, &facts, now_ms, timing.repeat_ms);
+        let timer_repeat = emission.emitted_result == Some(p.result_id)
+            && emission.emitted_facts.as_deref() == Some(facts.as_str());
+        if due
+            && (!timer_repeat
+                || publication_rejected_at(db, namespace, port, &p)
+                    .await?
+                    .is_none_or(|at| {
+                        now_ms.saturating_sub(at.max(emission.emitted_at_ms))
+                            >= timing.rejection_repeat_ms
+                    }))
+        {
             out.push(Due { pending: p, facts });
         } else {
             sqlx::query("UPDATE delivery_tasks SET checked_at_ms=$2 WHERE task_id=$1")
@@ -983,6 +1012,49 @@ async fn due(
         }
     }
     Ok(out)
+}
+
+/// A finished result run whose latest publication of the same head and lease
+/// was definitively rejected by the remote retries at the follow-up cadence.
+/// That also lets it recover from authority changes that have no receipt.
+async fn publication_rejected_at(
+    db: &mut PgConnection,
+    (namespace, generation): (Uuid, i64),
+    port: &dyn DeliveryPort,
+    pending: &Pending,
+) -> Result<Option<i64>> {
+    let Some(latest) = port.latest_in(db, pending.task_id).await?.filter(|latest| {
+        latest.result_id == pending.result_id
+            && latest.attempt_id == pending.attempt_id
+            && latest.project_id == pending.project_id
+    }) else {
+        return Ok(None);
+    };
+    let lease = aq_delivery::commands::published_head(&mut *db, pending.task_id).await?;
+    let rejected: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT CASE WHEN status='refused' AND output->>'reason'='unreachable'
+           AND request->>'answer_note'='remote_rejected'
+           AND request->>'expected_old' IS NOT DISTINCT FROM $8
+           THEN completed_at_ms END
+         FROM playbook_host_operations
+         WHERE namespace_id=$1 AND generation=$2 AND subject_id=$3
+           AND command_name='branch.publish' AND request->>'result_head'=$4
+           AND request#>>'{result_ready,attempt_id}'=$5
+           AND request#>>'{result_ready,result_id}'=$6
+           AND request#>>'{result_ready,project_id}'=$7
+         ORDER BY created_at_ms DESC,operation_id DESC LIMIT 1",
+    )
+    .bind(namespace)
+    .bind(generation)
+    .bind(pending.task_id.to_string())
+    .bind(latest.head)
+    .bind(pending.attempt_id.to_string())
+    .bind(pending.result_id.to_string())
+    .bind(pending.project_id.to_string())
+    .bind(lease)
+    .fetch_optional(db)
+    .await?;
+    Ok(rejected.flatten())
 }
 
 /// Read the task's emission under its row lock, then check whether its run

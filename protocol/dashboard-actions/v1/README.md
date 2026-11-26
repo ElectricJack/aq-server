@@ -205,8 +205,10 @@ subject revision and the single `expected_versions` entry (`task` or
   `schema.json`, which is the feature-off build's) sets what the task needs
   from its environment (Graph metadata `aq:needs`, a list of at most 32
   distinct capability labels) or clears it when `needs` is null, absent or
-  empty. It preserves other metadata keys. Once any attempt of the task has
-  been granted the operation is `rejected`, as for `task.role.set`. The same
+  empty. It preserves other metadata keys. After a grant, only a direct owner
+  can change the needs of a successor. AQ requires current stopped-result
+  evidence and reconciled effects before the edit. The previous grant and
+  result keep their original environment. The same
   build accepts `needs` on `task.create` and on each task of
   `task.graph.create`; a malformed list is `422`.
 - `task.route.set` puts an owner route on the task: `class` is

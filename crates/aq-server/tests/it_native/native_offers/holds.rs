@@ -565,6 +565,18 @@ async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_
             .unwrap();
         assert_eq!(evidence(predecessor).await.is_some(), matches);
     }
+    // A merge the queue took out for failed merge-group checks carries the
+    // log as well; another merge conflict does not.
+    for (note, matches) in [(None, false), (Some("merge_group_failed"), true)] {
+        sqlx::query("UPDATE playbook_host_operations SET command_name='pull_request.merge',status='conflict',request=(request-'result_head'-'answer_note')||jsonb_build_object('expected_head_sha',$2::text,'answer_note',$3::text) WHERE subject_id=$1::uuid::text")
+            .bind(scope.2)
+            .bind(&grant.base)
+            .bind(note)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(evidence(predecessor).await.is_some(), matches, "{note:?}");
+    }
 
     let (successor, _) = super::git_grant::granted_offer(&mut c, &git).await;
     assert_ne!(successor.offered.lifecycle_binding.attempt_id, predecessor);
@@ -1023,7 +1035,7 @@ async fn binding_changed() -> (Case, Uuid, i64) {
     native_offer::fail(&c, predecessor).await;
     // The fixture's binding is not at revision 1, so the change is relative.
     let revision: i64 = sqlx::query_scalar(
-        "UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1 RETURNING revision",
+        "UPDATE project_execution_bindings SET revision=revision+1,binding=jsonb_set(binding,'{ceilings,wall_time_ms}',to_jsonb((binding#>>'{ceilings,wall_time_ms}')::bigint+1)) WHERE project_id=$1 RETURNING revision",
     )
     .bind(c.env.lineage.project_id)
     .fetch_one(&c.env.env.pool)
@@ -1213,7 +1225,7 @@ async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_is_used_
     let (status, same) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
     assert_eq!(status, 422, "{same}");
     assert_eq!(same["code"], "lineage_retry_budget_exhausted");
-    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
+    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1,binding=jsonb_set(binding,'{ceilings,wall_time_ms}',to_jsonb((binding#>>'{ceilings,wall_time_ms}')::bigint+1)) WHERE project_id=$1")
         .bind(c.env.lineage.project_id)
         .execute(&c.env.env.pool)
         .await
@@ -1356,6 +1368,60 @@ async fn resume_held_waits_on_the_blocker_and_the_poll_replaces_the_task_once_it
     assert!(super::node_slots::poll_slot(&c, 1).await.is_empty());
     native_offer::assembled(&c).await;
     assert_eq!(attempts(&c).await, 2, "exactly one successor");
+}
+
+/// A command as a supervisor sends it, on the machine listener's command surface.
+async fn supervisor_command(c: &Case, token: &str, name: &str, request: &Value) -> Value {
+    let res = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post(format!("/api/v1/commands/{name}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body: Value =
+        serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(status, 200, "{name}: {body}");
+    body
+}
+
+/// Live 2026-11-24: every supervisor `task.dependency.add` and `task.edit` (all task actions on
+/// the supervisor's machine route) was refused 503 `unavailable` before the Graph write: the
+/// journal's principal check admitted only the create kinds for a supervisor session. A project
+/// supervisor now makes the held task wait on the active blocker, a replay records nothing new,
+/// and its edit is journaled too.
+#[tokio::test]
+async fn a_project_supervisor_resumes_a_held_task_and_edits_it_through_the_command_surface() {
+    let (mut c, predecessor) = budget_held("lineage_retry_budget_exhausted").await;
+    let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
+    owner_actions(&mut c).await;
+    let (state, pool) = (&c.env.env.state, &c.env.env.pool);
+    let token = crate::common::supervisor::supervisor_token(state, pool, Some(project)).await;
+    let operation = Uuid::new_v4();
+    let request = serde_json::json!({"operation_id":operation,"params":{"project_id":project,
+        "task_id":task,"expected_version":"1","blocker_id":c.second_task,"resume_held":true}});
+    for _ in 0..2 {
+        let body = supervisor_command(&c, &token, "task.dependency.add", &request).await;
+        assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    }
+    assert_eq!(c.edges.lock().unwrap().len(), 1);
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        (recorded[0].operation_id, recorded[0].attempt_id),
+        (operation, predecessor)
+    );
+    drop(conn);
+    assert_eq!(held_reason(&work(&c, task).await), None, "no longer held");
+    let edit = serde_json::json!({"operation_id":Uuid::new_v4(),"params":{"project_id":project,
+        "task_id":task,"expected_version":"1","story_points":5}});
+    let body = supervisor_command(&c, &token, "task.edit", &edit).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
 }
 
 /// A hold no retry overrides is not turned into a wait, and a task that is not held has nothing

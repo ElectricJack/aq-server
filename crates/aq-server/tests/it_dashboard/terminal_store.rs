@@ -19,6 +19,7 @@ mod capacity;
 mod dispatch;
 mod epochs;
 mod persistence;
+mod pilot;
 
 async fn running() -> (Fixture, tempfile::TempDir, Register) {
     running_with_policy(None).await

@@ -29,8 +29,31 @@ pub async fn run(args: &[String]) -> Result<()> {
     let name = args.first().context(
         "usage: aq-supervisor-host tool commands [NAME] | attachment-text ID | NAME < request.json",
     )?;
+    let argument = args.get(1).map(String::as_str);
+    let mut bytes = Vec::new();
+    if !matches!(name.as_str(), "commands" | "attachment-text") {
+        std::io::stdin()
+            .take(MAX_REQUEST_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+    }
+    let (output, succeeded) = execute(name, argument, &bytes).await?;
+    serde_json::to_writer(std::io::stdout(), &output)?;
+    println!();
+    ensure!(succeeded, "AQ refused the supervisor command");
+    Ok(())
+}
+
+pub(crate) const MAX_REQUEST_BYTES: usize = 131_072;
+
+/// Returns AQ's bounded JSON result and whether AQ accepted the request.
+pub(crate) async fn execute(
+    name: &str,
+    argument: Option<&str>,
+    bytes: &[u8],
+) -> Result<(Value, bool)> {
     ensure!(
-        name.len() <= 128
+        !matches!(name, "" | "." | "..")
+            && name.len() <= 128
             && name
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b"._-".contains(&b)),
@@ -50,33 +73,41 @@ pub async fn run(args: &[String]) -> Result<()> {
         request,
         bound,
         operation,
-    } = prepare(&client, &url, name, args)?;
+    } = prepare(&client, &url, name, argument, bytes)?;
     let response = request
         .header(reqwest::header::AUTHORIZATION, bearer)
         .send()
         .await
         .context("supervisor tool transport failed")?;
-    let status = response.status();
+    let succeeded = response.status().is_success();
+    let value = bounded_json(response, bound).await?;
+    if succeeded && matches!(name, "task.create" | "task.graph.create") {
+        record_action(&value, operation)?;
+    }
+    let output = if let ("commands", Some(name), true) = (name, argument, succeeded) {
+        describe(find_command(&value, name).context("command is not available")?)?
+    } else {
+        value
+    };
+    Ok((output, succeeded))
+}
+
+pub(crate) async fn bounded_json(mut response: reqwest::Response, bound: u64) -> Result<Value> {
     ensure!(
         response.content_length().is_none_or(|n| n <= bound),
         "tool response byte bound"
     );
-    let bytes = response.bytes().await?;
-    ensure!(bytes.len() as u64 <= bound, "tool response byte bound");
-    let value: Value = serde_json::from_slice(&bytes)?;
-    if status.is_success() && matches!(name.as_str(), "task.create" | "task.graph.create") {
-        record_action(&value, operation)?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        ensure!(
+            bytes.len() as u64 + chunk.len() as u64 <= bound,
+            "tool response byte bound"
+        );
+        bytes.extend_from_slice(&chunk);
     }
-    let output = if name == "commands" && args.len() == 2 {
-        describe(find_command(&value, &args[1]).context("command is not available")?)?
-    } else {
-        value
-    };
-    serde_json::to_writer(std::io::stdout(), &output)?;
-    println!();
-    ensure!(status.is_success(), "AQ refused the supervisor command");
-    Ok(())
+    Ok(serde_json::from_slice(&bytes)?)
 }
+
 struct ToolRequest {
     request: reqwest::RequestBuilder,
     bound: u64,
@@ -87,7 +118,8 @@ fn prepare(
     client: &reqwest::Client,
     url: &reqwest::Url,
     name: &str,
-    args: &[String],
+    argument: Option<&str>,
+    bytes: &[u8],
 ) -> Result<ToolRequest> {
     let mut operation = None;
     // Owner attachment contents are larger than command responses.
@@ -95,21 +127,18 @@ fn prepare(
     let request = if name == "commands" {
         client.get(url.join("api/v1/commands")?)
     } else if name == "attachment-text" {
-        let id: uuid::Uuid = args
-            .get(1)
+        let id: uuid::Uuid = argument
             .context("usage: aq-supervisor-host tool attachment-text ID")?
             .parse()
             .context("attachment ID is not a UUID")?;
         bound = aq_supervisor_control::delivery::MAX_DELIVERY_BYTES as u64;
         client.get(url.join(&format!("v1/supervisor/conversation/attachments/{id}/text"))?)
     } else {
-        let mut bytes = Vec::new();
-        std::io::stdin().take(131073).read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= 131072, "tool request byte bound");
+        ensure!(bytes.len() <= MAX_REQUEST_BYTES, "tool request byte bound");
         let body: aq_command_registry::CommandRequest = if bytes.is_empty() {
             Default::default()
         } else {
-            serde_json::from_slice(&bytes)?
+            serde_json::from_slice(bytes)?
         };
         operation = body.operation_id;
         client

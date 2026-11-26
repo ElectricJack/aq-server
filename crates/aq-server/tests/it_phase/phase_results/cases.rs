@@ -480,7 +480,7 @@ async fn held_node_lock_rechecks_revoked_credential_before_any_report_commit() {
     let task = tokio::spawn(async move { results::record(&state, &auth, &pending_report).await });
     tokio::time::timeout(std::time::Duration::from_secs(1),async {
         loop {
-            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM nodes WHERE id=%FOR UPDATE')").fetch_one(pool).await.unwrap();
+            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM nodes WHERE id=%FOR KEY SHARE')").fetch_one(pool).await.unwrap();
             if waiting {break;}
             tokio::task::yield_now().await;
         }

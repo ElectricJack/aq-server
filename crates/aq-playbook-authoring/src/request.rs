@@ -54,12 +54,14 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
     }
 }
 
-/// The catalog a source is authored against, whole: catalog 2.3.0 for the
+/// The catalog a source is authored against, whole: catalog 2.6.0 for the
 /// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
-/// every other. With spec 0017, 2.5.0 for both built-in sources.
+/// every other. With spec 0017, 2.5.0 for the routing source and for a
+/// delivery record that asks the environment commands (keeping the 2.6.0
+/// `work.read`).
 pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-    if record.id == crate::builtin::DELIVERY {
+    if environment_delivery(record) {
         return catalog_2_5_delivery();
     }
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
@@ -68,7 +70,7 @@ pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
     }
     #[cfg(feature = "delivery_playbook")]
     if record.id == crate::builtin::DELIVERY {
-        return catalog_2_3();
+        return catalog_2_6();
     }
     let _ = record;
     Ok(docs::catalog_registry())
@@ -78,6 +80,20 @@ pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
 pub fn catalog_2_3() -> Result<Registry> {
     serde_json::from_str(docs::CATALOG_2_3_REGISTRY)
         .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()))
+}
+
+/// Catalog 2.6.0: 2.3.0 with the `work.read` whose facts add the task's
+/// acceptance criteria and its latest result's conclusion.
+#[cfg(feature = "delivery_playbook")]
+pub const CATALOG_2_6_REGISTRY: &str =
+    include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
+#[cfg(feature = "delivery_playbook")]
+const CATALOG_2_6_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.6.0/notes.json");
+
+#[cfg(feature = "delivery_playbook")]
+pub fn catalog_2_6() -> Result<Registry> {
+    serde_json::from_str(CATALOG_2_6_REGISTRY)
+        .map_err(|_| Error::Invalid("catalog 2.6.0 does not parse".into()))
 }
 
 /// Catalog 2.5.0 (spec 0017).
@@ -95,13 +111,20 @@ pub fn catalog_2_5() -> Result<Registry> {
         .map_err(|_| Error::Invalid("catalog 2.5.0 does not parse".into()))
 }
 
+/// The built-in delivery record of a namespace that serves environments
+/// ([`crate::builtin::delivery`]).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+fn environment_delivery(record: &SourceRecord) -> bool {
+    record.id == crate::builtin::DELIVERY && record.commands.contains("environment.build")
+}
+
 /// The delivery source's catalog 2.5.0: the environment commands and events
-/// added, every 2.3.0 contract it uses unchanged (its `work.read` is 2.3.0's;
-/// the 2.5.0 one adds the routing facts of spec 0017 §5.4).
+/// added, every 2.3.0 contract it uses unchanged and the 2.6.0 `work.read`
+/// (the 2.5.0 one adds the routing facts of spec 0017 §5.4).
 #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
 pub fn catalog_2_5_delivery() -> Result<Registry> {
     let mut catalog = catalog_2_5()?;
-    let read = catalog_2_3()?.commands.remove("work.read");
+    let read = catalog_2_6()?.commands.remove("work.read");
     catalog
         .commands
         .extend(read.map(|c| ("work.read".to_owned(), c)));
@@ -111,12 +134,11 @@ pub fn catalog_2_5_delivery() -> Result<Registry> {
 /// `CATALOG.md` of the catalog the workspace actually uses.
 fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-    if record.id == crate::builtin::DELIVERY {
-        // 2.5.0's notes, with 2.3.0's on the 2.3.0 work.read.
+    if environment_delivery(record) {
+        // 2.5.0's notes, with 2.6.0's on the 2.6.0 work.read.
         let parse = |text: &str| serde_json::from_str::<Value>(text).map_err(|_| Error::Corrupt);
         let mut notes = parse(CATALOG_2_5_NOTES)?;
-        notes["commands"]["work.read"] =
-            parse(docs::CATALOG_2_3_NOTES)?["commands"]["work.read"].take();
+        notes["commands"]["work.read"] = parse(CATALOG_2_6_NOTES)?["commands"]["work.read"].take();
         let mut text = docs::catalog_with_extensions(
             _catalog,
             &notes.to_string(),
@@ -135,17 +157,26 @@ fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
             .map_err(Error::Invalid);
     }
     #[cfg(feature = "delivery_playbook")]
+    if record.id == crate::builtin::DELIVERY {
+        let mut text = docs::catalog_with_extensions(
+            _catalog,
+            CATALOG_2_6_NOTES,
+            &record.commands,
+            &record.events,
+            &[],
+        )
+        .map_err(Error::Invalid)?;
+        text.push_str(include_str!("delivery_review_contract.md"));
+        return Ok(text);
+    }
+    // Routing on a Host10 server: catalog 2.3.0.
+    #[cfg(feature = "delivery_playbook")]
     if _catalog
         .commands
         .get("work.read")
         .is_some_and(|c| c.version == "2.3.0")
     {
-        let mut notes =
-            docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid)?;
-        if record.id == crate::builtin::DELIVERY {
-            notes.push_str(include_str!("delivery_review_contract.md"));
-        }
-        return Ok(notes);
+        return docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid);
     }
     docs::catalog(&record.commands, &record.events).map_err(Error::Invalid)
 }
@@ -211,7 +242,16 @@ pub fn workspace_files(
     put(draft::FACTS_FILE, pretty(facts)?);
     put("GUIDE.md", docs::GUIDE.to_owned());
     put("LANGUAGE.md", docs::LANGUAGE.to_owned());
-    put("CATALOG.md", catalog_notes(record, catalog)?);
+    let mut notes = catalog_notes(record, catalog)?;
+    if record.id == crate::builtin::ROUTING {
+        notes.push_str(concat!(
+            "\n## Queued task placement\n\n",
+            "Use `work.route` to choose the task's level and give ordered provider and harness preferences.\n",
+            "Other eligible candidates can still serve the task within its selected level and placement policy.\n",
+            "Omit `hold` when authoring a new route. AQ accepts the field in older drafts as a preference.\n",
+        ));
+    }
+    put("CATALOG.md", notes);
     for (path, text) in docs::example_files() {
         put(&format!("examples/{path}"), text.to_owned());
     }

@@ -8,7 +8,7 @@ use crate::{
     source_retention::profiled_base::{RetentionObservation, VerifiedExport},
     worker_api::AuthenticatedNode,
 };
-use aq_profiled_state::git_author::{GitAuthor, OfferDelivery};
+use aq_profiled_state::{git_author::*, replacement_sql::repins_retained};
 use aq_selection::ExecutionTarget;
 
 use crate::error::db;
@@ -18,6 +18,7 @@ pub(super) enum Outcome {
     Published(Box<OfferDelivery>),
     Unavailable,
     NeedsGitAuthor,
+    WorkspaceBlocked(&'static str),
 }
 
 pub(super) async fn publish(
@@ -113,14 +114,12 @@ pub(super) async fn publish(
         .await?;
         let shared = retained.token().request_digest() == export.request_digest()
             && retained.fact().canonical_bytes()? == fact.canonical_bytes()?;
-        // Spec 0007: a handoff successor's own export of the saved commit.
+        // Spec 0007: a handoff successor's own export of the saved commit, or a re-pin.
+        let predecessor = replacement.predecessor_attempt_id;
         if !shared
-            && !super::super::handoff::export_is_handoff(
-                &mut tx,
-                replacement.predecessor_attempt_id,
-                export.request(),
-            )
-            .await?
+            && !super::super::handoff::export_is_handoff(&mut tx, predecessor, export.request())
+                .await?
+            && !repins_retained(&mut tx, predecessor, export.request()).await?
         {
             return Err(refused());
         }
@@ -136,6 +135,26 @@ pub(super) async fn publish(
         m.bindings.graph_id,
         m.bindings.task_id,
     );
+    #[cfg(feature = "project_environments")]
+    {
+        use crate::agent_access::human::graph_actions::needs;
+        let version = i64::try_from(built.spec.task.version).map_err(|_| refused())?;
+        if aq_machine_control::task_needs::blocks_observation(&mut tx, (project, task, version))
+            .await
+            .map_err(db)?
+        {
+            return Ok(Outcome::WorkspaceBlocked(needs::PENDING));
+        }
+    }
+    let scope = crate::task_workspace_resume::scope(&mut tx, project, task).await?;
+    if let Some(reason) = scope.blocker(true) {
+        return Ok(Outcome::WorkspaceBlocked(reason));
+    }
+    if scope.evidence != built.workspace.evidence {
+        return Ok(Outcome::WorkspaceBlocked(
+            crate::task_workspace_resume::CHANGED,
+        ));
+    }
     // Confirmation can land during assembly. Fence it inside publication
     // before recording a task or slot claim.
     let git_author = super::task_git_author(state, &mut *tx, project, workspace, task)
@@ -165,7 +184,11 @@ pub(super) async fn publish(
     let mut native = built.native.clone();
     native.offered.clock =
         aq_admission::transport::DeliveryClock::new(time, built.deadline).map_err(|_| refused())?;
-    let delivery = OfferDelivery { native, git_author };
+    let delivery = OfferDelivery {
+        native,
+        git_author,
+        workspace_required: scope.requires_workspace(),
+    };
     let original = StoredOffer {
         schema_version: 1,
         read_provenance: built.read_provenance.clone(),
@@ -178,6 +201,7 @@ pub(super) async fn publish(
         _ => return Err(refused()),
     };
     sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)").bind(binding.attempt_id).bind(built.spec.task.task_id).bind(node).bind(binding.offer_id).bind(session_id).bind(serde_json::to_value(&built.state).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
+    crate::task_workspace_resume::freeze(&mut tx, binding.attempt_id, scope).await?;
     #[cfg(feature = "delivery_playbook")]
     if let Some(git) = &built.git {
         let record = aq_delivery::git_grant::record_locked(&mut tx, binding.attempt_id, git);
@@ -273,7 +297,30 @@ pub(super) async fn publish(
     aq_machine_control::slots::assign(&mut tx, binding.attempt_id, node, slot)
         .await
         .map_err(crate::machine_api::mapped)?;
+    // At this point the task and compatible slot passed publication's gates.
+    // Keep the episode local to the transaction so a rollback cannot qualify.
+    let capture = state.store.scheduling_diagnostics.as_ref();
+    let eligible = capture.map(|_| (state.clock)().timestamp_millis());
     tx.commit().await.map_err(db)?;
+    if let Some((capture, eligible)) = capture.zip(eligible) {
+        let claimed = (state.clock)().timestamp_millis();
+        let expires = built
+            .deadline
+            .min(inspection.expires_at_ms())
+            .min(built.source.admission.expires_at_ms)
+            .min(built.decision.inputs.node.expires_at_ms)
+            .min(built.read_provenance.ready_expires_at_ms)
+            .min(built.read_provenance.context_expires_at_ms);
+        if eligible >= time as i64 && (claimed as u64) < expires {
+            capture.claim(
+                binding.attempt_id,
+                task,
+                binding.assignment_generation,
+                eligible,
+                claimed,
+            );
+        }
+    }
     Ok(Outcome::Published(Box::new(delivery)))
 }
 

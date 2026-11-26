@@ -138,6 +138,21 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     let db = TestDb::create().await;
     let pool = db.pool().await;
     migrate_profile(&pool, 161).await.unwrap();
+    let fixture = seed_legacy_authors(&pool).await;
+    let other_workspace = assert_direct_child_inherits(&pool, &fixture).await;
+    assert_service_descendants_inherit(&pool, &fixture).await;
+    assert_workspace_reuse_is_independent(&pool, &fixture, other_workspace).await;
+}
+
+struct AuthorFixture {
+    project: Uuid,
+    workspace: Uuid,
+    legacy: Uuid,
+    requester: Uuid,
+    snapshot: Option<TaskGitAuthor>,
+}
+
+async fn seed_legacy_authors(pool: &PgPool) -> AuthorFixture {
     let (project, workspace, legacy, unrelated) = (
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -145,7 +160,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         Uuid::new_v4(),
     );
     let email = "First.Last+Git@Example.Test";
-    let requester = owner(&pool, email).await;
+    let requester = owner(pool, email).await;
 
     Intent {
         principal: requester,
@@ -154,20 +169,20 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         operations: &[task(legacy), task(unrelated)],
         affected: &[legacy],
     }
-    .admit(&pool, "confirmed")
+    .admit(pool, "confirmed")
     .await;
     let malformed = Uuid::new_v4();
     let malformed_email = "Old<Account@@example.test";
     Intent {
-        principal: owner(&pool, malformed_email).await,
+        principal: owner(pool, malformed_email).await,
         project,
         workspace,
         operations: &[task(malformed)],
         affected: &[malformed],
     }
-    .admit(&pool, "confirmed")
+    .admit(pool, "confirmed")
     .await;
-    migrate_profile(&pool, aq_server::STATE_FORMAT_VERSION)
+    migrate_profile(pool, aq_server::STATE_FORMAT_VERSION)
         .await
         .unwrap();
     let snapshot = Some(TaskGitAuthor {
@@ -175,16 +190,16 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         email: email.into(),
     });
     assert_eq!(
-        lookup(&pool, project, workspace, legacy).await.unwrap(),
+        lookup(pool, project, workspace, legacy).await.unwrap(),
         snapshot
     );
     assert_eq!(
-        lookup(&pool, project, workspace, unrelated).await.unwrap(),
+        lookup(pool, project, workspace, unrelated).await.unwrap(),
         None
     );
 
     assert_eq!(
-        lookup(&pool, project, workspace, malformed).await.unwrap(),
+        lookup(pool, project, workspace, malformed).await.unwrap(),
         None
     );
     let retained: String = sqlx::query_scalar(
@@ -194,11 +209,29 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     .bind(project)
     .bind(workspace)
     .bind(malformed)
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     .unwrap();
     assert_eq!(retained, malformed_email);
 
+    AuthorFixture {
+        project,
+        workspace,
+        legacy,
+        requester,
+        snapshot,
+    }
+}
+
+async fn assert_direct_child_inherits(pool: &PgPool, fixture: &AuthorFixture) -> Uuid {
+    let AuthorFixture {
+        project,
+        workspace,
+        legacy,
+        requester,
+        ref snapshot,
+    } = *fixture;
+    let snapshot = snapshot.clone();
     let other_workspace = Uuid::new_v4();
     let direct_child = Uuid::new_v4();
     let intent = Intent {
@@ -211,9 +244,9 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         ],
         affected: &[direct_child],
     };
-    let operation = intent.admit(&pool, "pending").await;
+    let operation = intent.admit(pool, "pending").await;
     assert_eq!(
-        lookup(&pool, project, workspace, direct_child)
+        lookup(pool, project, workspace, direct_child)
             .await
             .unwrap(),
         None
@@ -221,29 +254,41 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
 
     sqlx::query("UPDATE users SET email='Later@Example.Test' WHERE id=$1")
         .bind(requester)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-    intent.confirm(&pool, operation).await;
+    intent.confirm(pool, operation).await;
     assert_eq!(
-        lookup(&pool, project, workspace, direct_child)
+        lookup(pool, project, workspace, direct_child)
             .await
             .unwrap(),
         snapshot
     );
     assert_eq!(
-        lookup(&pool, project, other_workspace, legacy)
+        lookup(pool, project, other_workspace, legacy)
             .await
             .unwrap(),
         None
     );
     assert_eq!(
-        lookup(&pool, Uuid::new_v4(), workspace, legacy)
+        lookup(pool, Uuid::new_v4(), workspace, legacy)
             .await
             .unwrap(),
         None
     );
 
+    other_workspace
+}
+
+async fn assert_service_descendants_inherit(pool: &PgPool, fixture: &AuthorFixture) {
+    let AuthorFixture {
+        project,
+        workspace,
+        legacy,
+        requester,
+        ref snapshot,
+    } = *fixture;
+    let snapshot = snapshot.clone();
     let (child, grandchild, related_only, unlinked) = (
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -251,7 +296,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         Uuid::new_v4(),
     );
     let service = Intent {
-        principal: supervisor_session(&pool).await,
+        principal: supervisor_session(pool).await,
         project,
         workspace,
         operations: &[
@@ -266,31 +311,45 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         ],
         affected: &[child, grandchild, related_only, unlinked],
     };
-    let operation = service.admit(&pool, "pending").await;
+    let operation = service.admit(pool, "pending").await;
     assert_eq!(
-        lookup(&pool, project, workspace, grandchild).await.unwrap(),
+        lookup(pool, project, workspace, grandchild).await.unwrap(),
         None
     );
-    service.confirm(&pool, operation).await;
+    service.confirm(pool, operation).await;
     assert_eq!(
-        lookup(&pool, project, workspace, child).await.unwrap(),
+        lookup(pool, project, workspace, child).await.unwrap(),
         snapshot
     );
     assert_eq!(
-        lookup(&pool, project, workspace, grandchild).await.unwrap(),
+        lookup(pool, project, workspace, grandchild).await.unwrap(),
         snapshot
     );
     assert_eq!(
-        lookup(&pool, project, workspace, related_only)
+        lookup(pool, project, workspace, related_only)
             .await
             .unwrap(),
         None
     );
     assert_eq!(
-        lookup(&pool, project, workspace, unlinked).await.unwrap(),
+        lookup(pool, project, workspace, unlinked).await.unwrap(),
         None
     );
+}
 
+async fn assert_workspace_reuse_is_independent(
+    pool: &PgPool,
+    fixture: &AuthorFixture,
+    other_workspace: Uuid,
+) {
+    let AuthorFixture {
+        project,
+        workspace,
+        legacy,
+        requester,
+        ref snapshot,
+    } = *fixture;
+    let snapshot = snapshot.clone();
     let reused = Intent {
         principal: requester,
         project,
@@ -299,7 +358,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         affected: &[legacy],
     };
     reused
-        .confirm(&pool, reused.admit(&pool, "pending").await)
+        .confirm(pool, reused.admit(pool, "pending").await)
         .await;
     let mut tx = pool.begin().await.unwrap();
     let new = lookup(&mut *tx, project, other_workspace, legacy)
@@ -310,7 +369,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     assert_eq!(new.name, "Later");
     tx.rollback().await.unwrap();
     assert_eq!(
-        lookup(&pool, project, workspace, legacy).await.unwrap(),
+        lookup(pool, project, workspace, legacy).await.unwrap(),
         snapshot
     );
 }

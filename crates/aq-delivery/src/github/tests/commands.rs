@@ -17,6 +17,7 @@ mod checks;
 mod frozen;
 mod logs;
 mod merges;
+mod queue;
 mod recovery;
 mod refresh;
 mod repair;

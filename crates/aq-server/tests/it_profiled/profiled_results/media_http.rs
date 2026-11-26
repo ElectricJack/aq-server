@@ -50,13 +50,7 @@ fn app(state: &AppState, runtime: &Arc<Runtime>) -> Router {
     build_admin_router_with_optional_owners(state.clone(), None, None, None, Some(runtime.clone()))
 }
 async fn caps(api: &Router) -> serde_json::Value {
-    value(
-        api.clone()
-            .oneshot(req("GET", "/api/v1/bootstrap", "application/json", vec![]))
-            .await
-            .unwrap(),
-    )
-    .await
+    value(send(api, "GET", "/api/v1/bootstrap", "application/json", vec![]).await).await
 }
 fn cap(value: &serde_json::Value, name: &str) -> bool {
     value["data"]["capabilities"]
@@ -77,6 +71,12 @@ fn req(method: &str, path: &str, mime: &str, body: Vec<u8>) -> Request<Body> {
         .body(Body::from(body))
         .unwrap()
 }
+async fn send(api: &Router, method: &str, path: &str, mime: &str, body: Vec<u8>) -> Response {
+    api.clone()
+        .oneshot(req(method, path, mime, body))
+        .await
+        .unwrap()
+}
 async fn value(response: Response) -> serde_json::Value {
     serde_json::from_slice(
         &to_bytes(response.into_body(), media::MAX_PAGE_BYTES)
@@ -85,25 +85,35 @@ async fn value(response: Response) -> serde_json::Value {
     )
     .unwrap()
 }
-fn large_png() -> Vec<u8> {
-    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        let start = out.len();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(data);
-        let mut crc = !0u32;
-        for n in &out[start..] {
-            crc ^= u32::from(*n);
-            for _ in 0..8 {
-                crc = if crc & 1 != 0 {
-                    0xedb88320 ^ (crc >> 1)
-                } else {
-                    crc >> 1
-                };
-            }
+fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let start = out.len();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    let mut crc = !0u32;
+    for n in &out[start..] {
+        crc ^= u32::from(*n);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                0xedb88320 ^ (crc >> 1)
+            } else {
+                crc >> 1
+            };
         }
-        out.extend_from_slice(&(!crc).to_be_bytes());
     }
+    out.extend_from_slice(&(!crc).to_be_bytes());
+}
+
+fn adler32(raw: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for n in raw {
+        a = (a + u32::from(*n)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+fn large_png() -> Vec<u8> {
     let (width, height) = (1024u32, 8u32);
     let mut raw = Vec::new();
     let mut seed = 91u32;
@@ -121,12 +131,7 @@ fn large_png() -> Vec<u8> {
     deflate.extend_from_slice(&len.to_le_bytes());
     deflate.extend_from_slice(&(!len).to_le_bytes());
     deflate.extend_from_slice(&raw);
-    let (mut a, mut b) = (1u32, 0u32);
-    for n in &raw {
-        a = (a + u32::from(*n)) % 65521;
-        b = (b + a) % 65521;
-    }
-    deflate.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    deflate.extend_from_slice(&adler32(&raw).to_be_bytes());
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut header = width.to_be_bytes().to_vec();
     header.extend_from_slice(&height.to_be_bytes());
@@ -160,64 +165,44 @@ async fn actual_http_reserves_replays_retains_lists_and_stream_frames_hold_all_g
         report.report_id
     );
     let uploads = format!("{base}/media-uploads");
-    let response = api
-        .clone()
-        .oneshot(req("POST", &uploads, "application/json", raw.clone()))
-        .await
-        .unwrap();
+    let response = send(&api, "POST", &uploads, "application/json", raw.clone()).await;
     assert_eq!(response.status(), StatusCode::CREATED);
     let admitted = value(response).await;
     assert_eq!(admitted["operation_id"], id.to_string());
-    let response = api
-        .clone()
-        .oneshot(req("POST", &uploads, "application/json", raw))
-        .await
-        .unwrap();
+    let response = send(&api, "POST", &uploads, "application/json", raw).await;
     assert_eq!(response.status(), StatusCode::OK);
     let content_path = format!("/api/human/result-media-uploads/{id}/content");
     for _ in 0..2 {
-        let response = api
-            .clone()
-            .oneshot(req("PUT", &content_path, "image/png", input.clone()))
-            .await
-            .unwrap();
+        let response = send(&api, "PUT", &content_path, "image/png", input.clone()).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(value(response).await["state"], "received");
     }
-    let response = api
-        .clone()
-        .oneshot(req(
-            "POST",
-            &format!("/api/human/result-media-uploads/{id}/finalize"),
-            "application/json",
-            b"{}".to_vec(),
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "POST",
+        &format!("/api/human/result-media-uploads/{id}/finalize"),
+        "application/json",
+        b"{}".to_vec(),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let retained = value(response).await;
     assert_eq!(retained["state"], "retained");
     let receipt = retained["artifact"]["receipt"].clone();
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{base}/media"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{base}/media"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let page = value(response).await;
     media::MediaPage::decode(&serde_json::to_vec(&page).unwrap()).unwrap();
     assert_eq!(page["items"][0]["receipt"], receipt);
     let path = format!("{base}/media/{id}/content?variant=render");
-    let response = api
-        .clone()
-        .oneshot(req("GET", &path, "application/json", vec![]))
-        .await
-        .unwrap();
+    let response = send(&api, "GET", &path, "application/json", vec![]).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["cache-control"], "private, no-store");
     assert_eq!(response.headers()["content-type"], "image/png");
@@ -248,26 +233,14 @@ async fn actual_http_reserves_replays_retains_lists_and_stream_frames_hold_all_g
         receipt["variants"]["render"]["digest"].as_str().unwrap()
     );
     drop(full);
-    let response = api
-        .clone()
-        .oneshot(req("GET", &path, "application/json", vec![]))
-        .await
-        .unwrap();
+    let response = send(&api, "GET", &path, "application/json", vec![]).await;
     assert_eq!(response.status(), StatusCode::OK);
     let mut body = response.into_body();
     let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
     assert_eq!(frame.len(), 16_384);
-    let second = api
-        .clone()
-        .oneshot(req("GET", &path, "application/json", vec![]))
-        .await
-        .unwrap();
+    let second = send(&api, "GET", &path, "application/json", vec![]).await;
     assert_eq!(second.status(), StatusCode::OK);
-    let refused = api
-        .clone()
-        .oneshot(req("GET", &path, "application/json", vec![]))
-        .await
-        .unwrap();
+    let refused = send(&api, "GET", &path, "application/json", vec![]).await;
     assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
     drop(second);
     drop(body);
@@ -301,16 +274,14 @@ async fn actual_http_closed_requests_shared_csrf_and_read_only_upload_optin() {
         "/api/human/results/{}/revisions/{revision}",
         report.report_id
     );
-    let response = api
-        .clone()
-        .oneshot(req(
-            "POST",
-            &format!("{base}/media-uploads"),
-            "application/json",
-            request(id),
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "POST",
+        &format!("{base}/media-uploads"),
+        "application/json",
+        request(id),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(value(response).await["code"], "media_upload_disabled");
     runtime
@@ -318,27 +289,23 @@ async fn actual_http_closed_requests_shared_csrf_and_read_only_upload_optin() {
         .reserve(&actor, report.report_id, &revision, &request(id))
         .await
         .unwrap();
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("/api/human/result-media-uploads/{id}"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("/api/human/result-media-uploads/{id}"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{base}/media?unknown=1"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{base}/media?unknown=1"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(value(response).await["error"], "bad_request");
     runtime.shutdown().await.unwrap();
@@ -379,24 +346,21 @@ async fn actual_http_closed_requests_shared_csrf_and_read_only_upload_optin() {
     assert_eq!(count, 0);
     let malformed = b"{\"operation_id\":\"bad\",\"extra\":true}".to_vec();
     assert_eq!(
-        api.clone()
-            .oneshot(req("POST", &base, "application/json", malformed))
+        send(&api, "POST", &base, "application/json", malformed)
             .await
-            .unwrap()
             .status(),
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        api.clone()
-            .oneshot(req(
-                "POST",
-                &base,
-                "application/json",
-                vec![b' '; media::MAX_JSON_BYTES + 1]
-            ))
-            .await
-            .unwrap()
-            .status(),
+        send(
+            &api,
+            "POST",
+            &base,
+            "application/json",
+            vec![b' '; media::MAX_JSON_BYTES + 1]
+        )
+        .await
+        .status(),
         StatusCode::PAYLOAD_TOO_LARGE
     );
     runtime.shutdown().await.unwrap();
@@ -416,16 +380,14 @@ async fn actual_http_known_missing_corrupt_withheld_expired_and_unknown_scope_ar
         "?variant=render&variant=preview",
         "?variant=download",
     ] {
-        let response = api
-            .clone()
-            .oneshot(req(
-                "GET",
-                &format!("{base}{suffix}"),
-                "application/json",
-                vec![],
-            ))
-            .await
-            .unwrap();
+        let response = send(
+            &api,
+            "GET",
+            &format!("{base}{suffix}"),
+            "application/json",
+            vec![],
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(value(response).await["error"], "bad_request");
     }
@@ -433,11 +395,7 @@ async fn actual_http_known_missing_corrupt_withheld_expired_and_unknown_scope_ar
         "/api/human/results/{}/revisions/{revision}/media/{id}/content?variant=render",
         Uuid::new_v4()
     );
-    let response = api
-        .clone()
-        .oneshot(req("GET", &unknown, "application/json", vec![]))
-        .await
-        .unwrap();
+    let response = send(&api, "GET", &unknown, "application/json", vec![]).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(value(response).await.get("contract").is_none());
     sqlx::query("UPDATE result_media_intents SET withheld_at_ms=$2 WHERE operation_id=$1")
@@ -446,16 +404,14 @@ async fn actual_http_known_missing_corrupt_withheld_expired_and_unknown_scope_ar
         .execute(&pool)
         .await
         .unwrap();
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{base}?variant=render"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{base}?variant=render"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::GONE);
     assert_eq!(value(response).await["error"], "media_withheld");
     sqlx::query("UPDATE result_media_intents SET withheld_at_ms=NULL WHERE operation_id=$1")
@@ -465,46 +421,40 @@ async fn actual_http_known_missing_corrupt_withheld_expired_and_unknown_scope_ar
         .unwrap();
     let dir = root.path().join("objects").join(id.to_string());
     std::fs::remove_file(dir.join("preview.png")).unwrap();
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{base}?variant=preview"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{base}?variant=preview"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(value(response).await["error"], "media_missing");
     let path = dir.join("render.png");
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[20] ^= 1;
     std::fs::write(&path, bytes).unwrap();
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{base}?variant=render"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{base}?variant=render"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(value(response).await["error"], "media_failed");
     f.time
         .store((NOW + media::MAX_RETENTION_MS) as i64, Ordering::SeqCst);
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{base}?variant=render"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{base}?variant=render"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::GONE);
     assert_eq!(value(response).await["error"], "media_expired");
     runtime.shutdown().await.unwrap();
@@ -602,23 +552,17 @@ async fn actual_http_retained_disposable_report_fixture_has_exact_metadata_and_n
         "/api/human/results/{}/revisions/{revision}",
         report.report_id
     );
-    let response = api
-        .clone()
-        .oneshot(req("GET", &detail, "application/json", vec![]))
-        .await
-        .unwrap();
+    let response = send(&api, "GET", &detail, "application/json", vec![]).await;
     assert_eq!(response.status(), StatusCode::OK);
     let metadata = value(response).await;
-    let response = api
-        .clone()
-        .oneshot(req(
-            "GET",
-            &format!("{detail}/media"),
-            "application/json",
-            vec![],
-        ))
-        .await
-        .unwrap();
+    let response = send(
+        &api,
+        "GET",
+        &format!("{detail}/media"),
+        "application/json",
+        vec![],
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let page = value(response).await;
     assert_eq!(page["items"], json!([]));

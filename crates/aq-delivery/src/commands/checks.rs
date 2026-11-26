@@ -2,13 +2,10 @@ use super::*;
 use crate::policy::{Checks, PullRequest};
 use std::ops::ControlFlow::{self, Break, Continue};
 
-/// The most refreshes AQ requests for one result before an agent updates it.
-pub(super) const REFRESHES: i32 = 3;
-
 /// The branch refresh the host recorded for a wait's result head
 /// (`request.refresh`): the head the last refresh was asked from, the base
 /// commit it was behind, the merge commit GitHub made of them once seen, and
-/// whether this wait may ask for one now (`None`: no more, a behind head is a
+/// whether this wait may ask for one now (`None`: a behind head is a
 /// conflict, as it is without a refresh).
 #[derive(Clone, Copy)]
 pub struct Refresh<'a> {
@@ -223,7 +220,8 @@ impl Delivery {
                 checked.state == ChecksState::Passed
                     && request.matches(pr, &target.default_branch, head)
                     && pr.state == PullRequestState::Open
-                    && pr.mergeability == Mergeability::Clean
+                    && (pr.mergeability == Mergeability::Clean
+                        || (checked.merge_queue && pr.mergeability == Mergeability::Behind))
             })
     }
 
@@ -319,6 +317,14 @@ impl Delivery {
             }
             Some(true) => {}
         }
+        // Each (head, base) is asked for once: a refresh needs a new head or a base that moved.
+        let refresh = request.refresh.filter(|r| r.from.is_some());
+        if refresh.is_some_and(|r| {
+            r.from == Some(pr.head_sha.as_str()) && r.base == Some(pr.base_sha.as_str())
+        }) {
+            request.refreshed = Some(Refreshed::Queued(pr.head_sha.clone()));
+            return None;
+        }
         match self
             .github
             .update_branch(&target.github, pr.number, &pr.head_sha)
@@ -361,8 +367,17 @@ impl Delivery {
         }
         let completion = seen.record_checks(&checks);
         let pr = &checks.pull_request;
-        if checks.state == ChecksState::Passed && pr.mergeability == Mergeability::Behind {
-            return self.refresh(target, request, pr).await;
+        // A merge queue builds onto the base itself: behind alone asks for no refresh.
+        if checks.state == ChecksState::Passed
+            && pr.state == PullRequestState::Open
+            && !checks.merge_queue
+        {
+            match pr.mergeability {
+                Mergeability::Behind => return self.refresh(target, request, pr).await,
+                // GitHub recomputes after main moves: a merge now could find it behind.
+                Mergeability::Unknown if request.repair_behind => return None,
+                _ => {}
+            }
         }
         // A failed courtesy log read leaves the failed check recorded without a tail.
         if checks.state == ChecksState::Failed && request.log_bytes > 0 {

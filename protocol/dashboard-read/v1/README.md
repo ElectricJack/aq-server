@@ -12,7 +12,9 @@ synthetic owned SQL projection responses, never evidence of a native process.
 Session identities are historical immutable bindings. Overview counts come from
 bounded owner observations; missing owners produce unknown counts and explicit
 partial coverage. `needs_you` counts the returned attention items (decisions,
-failed results, offline workers, uncertain operations,
+failed results, offline workers, workers that have deferred sandbox admission for
+longer than the Settings value `node-limits` `admission_deferral_attention_ms`
+(kind `sandbox_admission_deferred`), uncertain operations,
 and failed internal work a supervisor could not fix: its subject is the affected
 item, or `{type: "internal_run", id: <run>}` with `impact` naming the affected
 item when the dashboard cannot open that item by id); it is unknown while the
@@ -124,7 +126,12 @@ inventory exceeds 256 workers; `occupied` is the exact count of task-holding
 attempts. Each node's `eligibility.reasons` are the worker state, capability
 report freshness and the placement owner's own ceiling refusal
 (`node_concurrency_ceiling_reached`, `node_spend_ceiling_reached`,
-`node_spend_unaccounted`, `node_disk_pressure`). Provider availability comes from
+`node_spend_unaccounted`, `node_disk_pressure`), plus `sandbox_admission_deferred`
+while a fresh worker-machine/v1 report of the node's machine carries
+`sandbox_admission`: the node then has no idle slots and `sandbox_admission` names
+the worker's code, since when, and the bytes available and required for a disk
+shortfall (the swarm read shows the same as hold code `sandbox_admission_deferred`).
+Provider availability comes from
 unexpired node credential bindings for the account's profiles: `unknown` with
 `no_fresh_node_report` when no live node reports one. Nothing here grants placement.
 `/api/workers` rows carry the latest storage report flattened (`disk_*_bytes`,

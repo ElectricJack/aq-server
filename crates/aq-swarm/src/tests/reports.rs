@@ -38,6 +38,18 @@ fn machine_validate_rejects_each_rule() {
             |r| r.disk_free_bytes = Some(r.disk_total_bytes.unwrap() + 1),
             "disk",
         ),
+        (
+            |r| r.sandbox_admission.as_mut().unwrap().code = "Disk full".into(),
+            "sandbox_admission",
+        ),
+        (
+            |r| r.sandbox_admission.as_mut().unwrap().required_bytes = None,
+            "sandbox_admission",
+        ),
+        (
+            |r| r.sandbox_admission.as_mut().unwrap().since_ms = r.observed_at_ms + 1,
+            "sandbox_admission",
+        ),
     ];
     for &(edit, field) in invalid {
         assert_eq!(case(&edit), Err(field));

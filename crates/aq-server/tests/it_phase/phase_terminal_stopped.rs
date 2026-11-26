@@ -24,6 +24,30 @@ async fn snapshot(f: &terminal::Prepared) -> Value {
     let counts:(i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_started_receipts),(SELECT count(*) FROM profiled_stopped_receipts),(SELECT count(*) FROM profiled_launch_closures)").fetch_one(pool).await.unwrap();
     json!({"hot":hot,"versions":versions,"head":head,"counts":counts})
 }
+
+async fn retire_runtime(state: &mut aq_server::AppState) {
+    let mut config = (*state.config).clone();
+    let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
+    p.revision += 1;
+    p.qualified_runtimes.clear();
+    p.definition_bodies.retain(|d| {
+        !d.artifact()
+            .id
+            .as_str()
+            .starts_with("aq.accepted-preparation-policy/")
+            && !d
+                .artifact()
+                .id
+                .as_str()
+                .starts_with("aq.phase-execution-qualification/")
+    });
+    config.profiled_execution = Some(Arc::new(p));
+    state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(state)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn expired_cancelled_paired_stop_retains_claim_and_exact_ack_after_runtime_retirement() {
     let f = Box::pin(terminal::prepared_terminal()).await;
@@ -51,26 +75,7 @@ async fn expired_cancelled_paired_stop_retains_claim_and_exact_ack_after_runtime
     let mut state = f.c.env.env.state.clone();
     let at = execution.grant.expires_at_ms + 100;
     state.clock = Arc::new(move || chrono::DateTime::from_timestamp_millis(at as i64).unwrap());
-    let mut config = (*state.config).clone();
-    let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
-    p.revision += 1;
-    p.qualified_runtimes.clear();
-    p.definition_bodies.retain(|d| {
-        !d.artifact()
-            .id
-            .as_str()
-            .starts_with("aq.accepted-preparation-policy/")
-            && !d
-                .artifact()
-                .id
-                .as_str()
-                .starts_with("aq.phase-execution-qualification/")
-    });
-    config.profiled_execution = Some(Arc::new(p));
-    state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&state)
-        .await
-        .unwrap();
+    retire_runtime(&mut state).await;
     let ack = stopped::record(&state, &auth, &stop).await.unwrap();
     ack.validate_for(&stop).unwrap();
     assert_eq!(ack.original.recorded_at_ms, at);

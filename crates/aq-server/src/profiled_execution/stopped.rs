@@ -25,6 +25,24 @@ fn canonical(value: &impl serde::Serialize) -> Result<Vec<u8>, AppError> {
     value.sort_all_objects();
     serde_json::to_vec(&value).map_err(|_| AppError::Internal)
 }
+fn replay(
+    existing: &[sqlx::postgres::PgRow],
+    request: &Request,
+    digest: &aq_admission::Digest,
+) -> Result<Receipt, AppError> {
+    if existing.len() != 1 {
+        return Err(conflict());
+    }
+    let old = &existing[0];
+    if old.get::<uuid::Uuid, _>("attempt_id") != request.evidence.binding.attempt_id
+        || old.get::<uuid::Uuid, _>("operation_id") != request.evidence.stop_operation_id
+        || old.get::<String, _>("request_digest") != digest.as_str()
+    {
+        return Err(conflict());
+    }
+    aq_admission::stopped::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), request)
+        .map_err(|_| AppError::Internal)
+}
 pub async fn record(
     state: &AppState,
     node: &AuthenticatedNode,
@@ -110,19 +128,7 @@ pub async fn record(
     let existing=sqlx::query("SELECT attempt_id,operation_id,request_digest,receipt_bytes FROM profiled_stopped_receipts WHERE attempt_id=$1 OR(node_id=$2 AND operation_id=$3) FOR SHARE")
         .bind(binding.attempt_id).bind(node_id).bind(operation).fetch_all(&mut *tx).await.map_err(db)?;
     if !existing.is_empty() {
-        if existing.len() != 1 {
-            return Err(conflict());
-        }
-        let old = &existing[0];
-        if old.get::<uuid::Uuid, _>("attempt_id") != binding.attempt_id
-            || old.get::<uuid::Uuid, _>("operation_id") != operation
-            || old.get::<String, _>("request_digest") != digest.as_str()
-        {
-            return Err(conflict());
-        }
-        let receipt =
-            aq_admission::stopped::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), request)
-                .map_err(|_| AppError::Internal)?;
+        let receipt = replay(&existing, request, &digest)?;
         // An exact historical acknowledgement grants no new execution or release.
         tx.commit().await.map_err(db)?;
         return Ok(receipt);

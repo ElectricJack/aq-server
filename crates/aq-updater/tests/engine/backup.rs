@@ -20,11 +20,12 @@ async fn backup_failure_aborts_and_leaves_maintenance() {
 async fn existing_backup_file_is_never_overwritten_or_deleted() {
     let (h, mut e, _a) = with_a().await;
     h.publish(&manifest(B, 1, &[1]));
-    // Occupy the backup name for this second and the next two.
+    // Dumps already named for this second and the next two, as a clock that
+    // went back or a copied-in backup leaves them.
     let now = Utc::now();
     let taken: Vec<PathBuf> = (0..3)
         .map(|s| {
-            let t = now + chrono::Duration::seconds(s);
+            let t = now + chrono::TimeDelta::seconds(s);
             let p = h
                 .backup_dir
                 .join(format!("{}-{A}-{B}.dump", t.format("%Y%m%dT%H%M%SZ")));
@@ -33,13 +34,14 @@ async fn existing_backup_file_is_never_overwritten_or_deleted() {
         })
         .collect();
     let r = e.install(req(B)).await.unwrap();
-    assert_eq!(r.outcome, Outcome::Aborted, "{}", r.detail);
-    assert!(r.detail.contains("already exists"), "{}", r.detail);
-    assert_eq!(h.fake.count("backup"), 0);
+    assert_eq!(r.outcome, Outcome::Succeeded, "{}", r.detail);
+    // The new backup is named after the newest one, so it sorts last.
+    let backup = e.journal_state().active_backup.clone().unwrap();
+    assert_eq!(h.dumps().last(), Some(&backup));
+    assert!(!taken.contains(&backup));
     for p in &taken {
         assert_eq!(std::fs::read(p).unwrap(), b"someone else's");
     }
-    assert!(!h.fake.maintenance_on());
 }
 
 #[tokio::test]

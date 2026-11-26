@@ -226,6 +226,8 @@ impl Service {
             tx.commit().await.map_err(db)?;
             return Ok(r);
         }
+        crate::task_workspace_resume::fence_completion(&mut tx, result.report.binding.attempt_id)
+            .await?;
         let source =
             source_retention::load_confirmed_locked(&mut tx, request.source_operation_id, &result)
                 .await?;
@@ -265,24 +267,15 @@ impl Service {
             },
         )?;
         let eligible = plan.disposition == Disposition::Eligible;
-        let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM profiled_settlement_evaluations WHERE attempt_id=$1",
-        )
-        .bind(result.report.binding.attempt_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        let used: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(sum(reserved_bytes),0)::BIGINT FROM profiled_settlement_evaluations",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        if count >= 16 || used > 67108864 - 196608 {
-            return Err(AppError::PayloadTooLarge(
-                "settlement retained quota exhausted".into(),
+        #[cfg(feature = "delivery_playbook")]
+        if eligible
+            && !crate::task_workspace_delivery::gate(&self.state, &mut tx, &result, true).await?
+        {
+            return Err(AppError::Conflict(
+                "workspace delivery evidence is incomplete".into(),
             ));
         }
+        Self::require_retained_capacity(&mut tx, result.report.binding.attempt_id).await?;
         let receipt = EvaluationReceipt {
             schema_version: 1,
             operation_id: request.operation_id,
@@ -325,6 +318,30 @@ impl Service {
         observation.validate_fresh(&self.state)?;
         tx.commit().await.map_err(db)?;
         Ok(receipt)
+    }
+    async fn require_retained_capacity(
+        tx: &mut Transaction<'_, Postgres>,
+        attempt: Uuid,
+    ) -> Result<()> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM profiled_settlement_evaluations WHERE attempt_id=$1",
+        )
+        .bind(attempt)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db)?;
+        let used: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(sum(reserved_bytes),0)::BIGINT FROM profiled_settlement_evaluations",
+        )
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db)?;
+        if count >= 16 || used > 67108864 - 196608 {
+            return Err(AppError::PayloadTooLarge(
+                "settlement retained quota exhausted".into(),
+            ));
+        }
+        Ok(())
     }
     async fn accept_locked(
         &self,

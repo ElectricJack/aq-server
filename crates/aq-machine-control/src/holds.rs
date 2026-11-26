@@ -47,7 +47,7 @@ pub fn phrase(code: &str) -> String {
         }
         "never_granted_retry_bound_exhausted" => "too many of its offers were never granted",
         "replacement_project_revision_changed" => {
-            "the project binding changed since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
+            "the project binding changed beyond which nodes may run it since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
         }
         "replacement_after_unpublished_delivery_needs_new_source" => {
             "its delivery was not published, so a retry needs a new source"
@@ -73,7 +73,7 @@ pub fn phrase(code: &str) -> String {
             "its route names a class with no assigned profile, so it is routed again"
         }
         "returns_exhausted" => "delivery reached its repair-return limit for its result",
-        "delivery_policy_held" => "the delivery playbook held its failed result",
+        "delivery_policy_held" => "the delivery playbook's policy held its result",
         "delivery_result_held" => "the delivery playbook held its result",
         "replacement_delivery_effects_pending" => {
             "a delivery operation for its held result is still running"
@@ -100,7 +100,7 @@ pub fn retry_refusal(code: &str) -> String {
 /// A hold that is only a limit: attempts, cost or never-granted offers used up (the
 /// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner retry overrides it and
 /// every budget starts again (owner decision 2026-11-18). So does the delivery playbook's hold of
-/// a result an owner retry reconciles: its return limit, or its policy hold of a failed result.
+/// a result an owner retry reconciles: its return limit, or its policy hold.
 /// Every other hold is about what happened to the task and is never overridden.
 pub fn is_budget_hold(code: &str) -> bool {
     budget_code(code).is_some()

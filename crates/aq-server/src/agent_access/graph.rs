@@ -251,242 +251,277 @@ pub(super) async fn read(state: &AppState, p: &Principal, q: &Value) -> Result<V
     let kind = q["kind"].as_str().ok_or(Error("invalid_request"))?;
     match kind {
         "get" => Ok(json!({"kind":"get","node":rt.get_node(p,&q["node_id"]).await?})),
-        "revision" => {
-            let raw = rt
-                .get(
-                    &format!(
-                        "{base}/nodes/{}/revisions/{}",
-                        q["node_id"].as_str().unwrap(),
-                        q["revision"].as_str().unwrap()
-                    ),
-                    &[],
-                )
-                .await?;
-            if raw["node"]["id"] != q["node_id"]
-                || raw["node"]["content_revision"]
-                    .as_i64()
-                    .map(|i| i.to_string())
-                    .as_deref()
-                    != q["revision"].as_str()
-            {
-                return Err(Error("overloaded"));
-            }
-            let n = node(p, &raw["node"])?;
-            let available = raw["relationships_available"]
-                .as_bool()
-                .ok_or(Error("overloaded"))?;
-            let (links, partial) = if available {
-                let (e, partial) = rt
-                    .checked_edges(p, list(&raw, "links")?, Some(&q["node_id"]))
-                    .await?;
-                (json!(e), partial)
-            } else {
-                if !raw["links"].is_null() {
-                    return Err(Error("overloaded"));
-                }
-                (Value::Null, false)
-            };
-            Ok(
-                json!({"kind":"revision","node":n,"links":links,"relationships_available":available,"coverage":coverage(partial.then_some("scan_budget"))}),
-            )
-        }
-        "context" | "relationships" => {
-            if kind == "relationships"
-                && !list(q, "edge_types")?
-                    .iter()
-                    .all(|t| p.edge_readable(t, None))
-            {
-                return Err(Error("scope_denied"));
-            }
-            let depth = if kind == "relationships" {
-                1
-            } else {
-                q["depth"].as_u64().unwrap()
-            };
-            let raw = rt
-                .get(
-                    &format!("{base}/nodes/{}/context", q["node_id"].as_str().unwrap()),
-                    &[
-                        ("depth".into(), depth.to_string()),
-                        ("direction".into(), q["direction"].as_str().unwrap().into()),
-                        ("limit".into(), "200".into()),
-                        ("max_bytes".into(), "1048576".into()),
-                    ],
-                )
-                .await?;
-            if raw["node"]["id"] != q["node_id"] {
-                return Err(Error("overloaded"));
-            }
-            let root = node(p, &raw["node"])?;
-            for k in ["nodes", "pinned_revisions"] {
-                for n in list(&raw, k)? {
-                    if n["workspace_id"] != p.binding["workspace_id"] {
-                        return Err(Error("overloaded"));
-                    }
-                }
-            }
-            let mut partial = raw["truncated"].as_bool().ok_or(Error("overloaded"))?;
-            let mut nodes = Vec::new();
-            let max = q["max_nodes"].as_u64().unwrap_or(65).saturating_sub(1) as usize;
-            for n in list(&raw, "nodes")? {
-                if p.readable(&n["id"]) {
-                    if nodes.len() == max {
-                        partial = true;
-                        break;
-                    }
-                    nodes.push(node(p, n)?);
-                }
-            }
-            let returned: Vec<Value> = std::iter::once(root["id"].clone())
-                .chain(nodes.iter().map(|n| n["id"].clone()))
-                .collect();
-            let (all_edges, scan_partial) = rt.checked_edges(p, list(&raw, "edges")?, None).await?;
-            partial |= scan_partial;
-            let mut edges = Vec::new();
-            let edge_max = q["max_edges"].as_u64().or(q["limit"].as_u64()).unwrap() as usize;
-            for e in all_edges {
-                let allowed = if kind == "context" {
-                    returned.contains(&e["source"]) && returned.contains(&e["target"])
-                } else {
-                    list(q, "edge_types")?.contains(&e["edge_type"])
-                        && match q["direction"].as_str().unwrap() {
-                            "incoming" => e["target"] == q["node_id"],
-                            "outgoing" => e["source"] == q["node_id"],
-                            _ => e["source"] == q["node_id"] || e["target"] == q["node_id"],
-                        }
-                };
-                if allowed {
-                    if edges.len() == edge_max {
-                        partial = true;
-                        break;
-                    }
-                    edges.push(e);
-                }
-            }
-            if kind == "relationships" {
-                if !q["cursor"].is_null() {
-                    return Err(Error("cursor_invalid"));
-                }
-                return Ok(
-                    json!({"kind":"relationships","edges":edges,"next_cursor":null,"coverage":coverage(partial.then_some("scan_budget"))}),
-                );
-            }
-            let mut pins = Vec::new();
-            for n in list(&raw, "pinned_revisions")? {
-                if p.readable(&n["id"])
-                    && edges.iter().any(|e| {
-                        ["source", "target"].iter().any(|k| {
-                            e[*k] == n["id"]
-                                && e[format!("{k}_revision")].as_str()
-                                    == n["content_revision"]
-                                        .as_i64()
-                                        .map(|i| i.to_string())
-                                        .as_deref()
-                        })
-                    })
-                {
-                    pins.push(node(p, n)?);
-                }
-            }
-            Ok(
-                json!({"kind":"context","node":root,"nodes":nodes,"edges":edges,"pinned_revisions":pins,"coverage":coverage(partial.then_some("scan_budget"))}),
-            )
-        }
-        "history" | "search" => {
-            if kind == "history" {
-                rt.get_node(p, &q["node_id"]).await?;
-            }
-            let mut upstream = cursor_load(state, p, q).await?;
-            let mut values = Vec::new();
-            let limit = q["limit"].as_u64().unwrap() as usize;
-            let mut exhausted = false;
-            for _ in 0..8 {
-                let mut params = vec![("limit".into(), (limit - values.len()).to_string())];
-                if let Some(c) = upstream.as_ref() {
-                    params.push(("cursor".into(), c.clone()));
-                }
-                let path = if kind == "search" {
-                    params.push(("q".into(), q["text"].as_str().unwrap().into()));
-                    if let Some(k) = q["kind_filter"].as_str() {
-                        params.push(("kind".into(), k.into()));
-                    }
-                    format!("{base}/search")
-                } else {
-                    format!("{base}/nodes/{}/history", q["node_id"].as_str().unwrap())
-                };
-                let raw = rt.get(&path, &params).await?;
-                let items = list(&raw, "items")?;
-                if items.len() > limit - values.len() {
-                    return Err(Error("overloaded"));
-                }
-                for item in items {
-                    if kind == "search" {
-                        if item["workspace_id"] != p.binding["workspace_id"] {
-                            return Err(Error("overloaded"));
-                        }
-                        if p.readable(&item["id"]) {
-                            if !q["kind_filter"].is_null() && q["kind_filter"] != item["kind"] {
-                                return Err(Error("overloaded"));
-                            }
-                            values.push(node(p, item)?);
-                        }
-                    } else {
-                        let category = item["category"].as_str().ok_or(Error("overloaded"))?;
-                        let mut n = Value::Null;
-                        let mut e = Value::Null;
-                        if category == "revision" {
-                            if item["data"]["id"] != q["node_id"] {
-                                return Err(Error("overloaded"));
-                            }
-                            n = node(p, &item["data"])?;
-                        } else if category == "edge" {
-                            let (edges, _) = rt
-                                .checked_edges(
-                                    p,
-                                    std::slice::from_ref(&item["data"]),
-                                    Some(&q["node_id"]),
-                                )
-                                .await?;
-                            let Some(value) = edges.into_iter().next() else {
-                                continue;
-                            };
-                            e = value;
-                        } else if category != "lifecycle" {
-                            return Err(Error("overloaded"));
-                        }
-                        let v = json!({"entry_id":item["entry_id"],"sequence":item["sequence"].as_i64().filter(|s|*s>0).ok_or(Error("overloaded"))?.to_string(),"category":category,"subject_id":q["node_id"],"occurred_at":item["created_at"],"node":n,"edge":e});
-                        if !contract::valid("HistoryItem", &v) {
-                            return Err(Error("overloaded"));
-                        }
-                        values.push(v);
-                    }
-                }
-                upstream = match raw.get("next_cursor") {
-                    Some(Value::Null) => None,
-                    Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-                    _ => return Err(Error("overloaded")),
-                };
-                if upstream.is_none() {
-                    exhausted = true;
-                    break;
-                }
-                if values.len() == limit {
-                    break;
-                }
-            }
-            let next = cursor_save(state, p, q, upstream).await?;
-            if kind == "history" {
-                Ok(
-                    json!({"kind":"history","items":values,"next_cursor":next,"coverage":coverage((!exhausted).then_some("scan_budget"))}),
-                )
-            } else {
-                Ok(
-                    json!({"kind":"search","nodes":values,"next_cursor":next,"coverage":coverage((!exhausted).then_some("scan_budget"))}),
-                )
-            }
-        }
+        "revision" => read_revision(rt, p, q, &base).await,
+        "context" | "relationships" => read_context(rt, p, q, &base, kind).await,
+        "history" | "search" => read_page(state, rt, p, q, &base, kind).await,
         _ => Err(Error("invalid_request")),
     }
+}
+
+async fn read_revision(rt: &Runtime, p: &Principal, q: &Value, base: &str) -> Result<Value> {
+    let raw = rt
+        .get(
+            &format!(
+                "{base}/nodes/{}/revisions/{}",
+                q["node_id"].as_str().unwrap(),
+                q["revision"].as_str().unwrap()
+            ),
+            &[],
+        )
+        .await?;
+    if raw["node"]["id"] != q["node_id"]
+        || raw["node"]["content_revision"]
+            .as_i64()
+            .map(|i| i.to_string())
+            .as_deref()
+            != q["revision"].as_str()
+    {
+        return Err(Error("overloaded"));
+    }
+    let n = node(p, &raw["node"])?;
+    let available = raw["relationships_available"]
+        .as_bool()
+        .ok_or(Error("overloaded"))?;
+    let (links, partial) = if available {
+        let (e, partial) = rt
+            .checked_edges(p, list(&raw, "links")?, Some(&q["node_id"]))
+            .await?;
+        (json!(e), partial)
+    } else {
+        if !raw["links"].is_null() {
+            return Err(Error("overloaded"));
+        }
+        (Value::Null, false)
+    };
+    Ok(
+        json!({"kind":"revision","node":n,"links":links,"relationships_available":available,"coverage":coverage(partial.then_some("scan_budget"))}),
+    )
+}
+
+async fn read_context(
+    rt: &Runtime,
+    p: &Principal,
+    q: &Value,
+    base: &str,
+    kind: &str,
+) -> Result<Value> {
+    if kind == "relationships"
+        && !list(q, "edge_types")?
+            .iter()
+            .all(|t| p.edge_readable(t, None))
+    {
+        return Err(Error("scope_denied"));
+    }
+    let depth = if kind == "relationships" {
+        1
+    } else {
+        q["depth"].as_u64().unwrap()
+    };
+    let raw = rt
+        .get(
+            &format!("{base}/nodes/{}/context", q["node_id"].as_str().unwrap()),
+            &[
+                ("depth".into(), depth.to_string()),
+                ("direction".into(), q["direction"].as_str().unwrap().into()),
+                ("limit".into(), "200".into()),
+                ("max_bytes".into(), "1048576".into()),
+            ],
+        )
+        .await?;
+    if raw["node"]["id"] != q["node_id"] {
+        return Err(Error("overloaded"));
+    }
+    let root = node(p, &raw["node"])?;
+    for k in ["nodes", "pinned_revisions"] {
+        for n in list(&raw, k)? {
+            if n["workspace_id"] != p.binding["workspace_id"] {
+                return Err(Error("overloaded"));
+            }
+        }
+    }
+    let mut partial = raw["truncated"].as_bool().ok_or(Error("overloaded"))?;
+    let mut nodes = Vec::new();
+    let max = q["max_nodes"].as_u64().unwrap_or(65).saturating_sub(1) as usize;
+    for n in list(&raw, "nodes")? {
+        if p.readable(&n["id"]) {
+            if nodes.len() == max {
+                partial = true;
+                break;
+            }
+            nodes.push(node(p, n)?);
+        }
+    }
+    let returned: Vec<Value> = std::iter::once(root["id"].clone())
+        .chain(nodes.iter().map(|n| n["id"].clone()))
+        .collect();
+    let (all_edges, scan_partial) = rt.checked_edges(p, list(&raw, "edges")?, None).await?;
+    partial |= scan_partial;
+    let edges = select_context_edges(q, kind, &returned, all_edges, &mut partial)?;
+    if kind == "relationships" {
+        if !q["cursor"].is_null() {
+            return Err(Error("cursor_invalid"));
+        }
+        return Ok(
+            json!({"kind":"relationships","edges":edges,"next_cursor":null,"coverage":coverage(partial.then_some("scan_budget"))}),
+        );
+    }
+    let mut pins = Vec::new();
+    for n in list(&raw, "pinned_revisions")? {
+        if p.readable(&n["id"])
+            && edges.iter().any(|e| {
+                ["source", "target"].iter().any(|k| {
+                    e[*k] == n["id"]
+                        && e[format!("{k}_revision")].as_str()
+                            == n["content_revision"]
+                                .as_i64()
+                                .map(|i| i.to_string())
+                                .as_deref()
+                })
+            })
+        {
+            pins.push(node(p, n)?);
+        }
+    }
+    Ok(
+        json!({"kind":"context","node":root,"nodes":nodes,"edges":edges,"pinned_revisions":pins,"coverage":coverage(partial.then_some("scan_budget"))}),
+    )
+}
+
+fn select_context_edges(
+    q: &Value,
+    kind: &str,
+    returned: &[Value],
+    all_edges: Vec<Value>,
+    partial: &mut bool,
+) -> Result<Vec<Value>> {
+    let mut edges = Vec::new();
+    let edge_max = q["max_edges"].as_u64().or(q["limit"].as_u64()).unwrap() as usize;
+    for e in all_edges {
+        let allowed = if kind == "context" {
+            returned.contains(&e["source"]) && returned.contains(&e["target"])
+        } else {
+            list(q, "edge_types")?.contains(&e["edge_type"])
+                && match q["direction"].as_str().unwrap() {
+                    "incoming" => e["target"] == q["node_id"],
+                    "outgoing" => e["source"] == q["node_id"],
+                    _ => e["source"] == q["node_id"] || e["target"] == q["node_id"],
+                }
+        };
+        if allowed {
+            if edges.len() == edge_max {
+                *partial = true;
+                break;
+            }
+            edges.push(e);
+        }
+    }
+    Ok(edges)
+}
+
+async fn read_page(
+    state: &AppState,
+    rt: &Runtime,
+    p: &Principal,
+    q: &Value,
+    base: &str,
+    kind: &str,
+) -> Result<Value> {
+    if kind == "history" {
+        rt.get_node(p, &q["node_id"]).await?;
+    }
+    let mut upstream = cursor_load(state, p, q).await?;
+    let mut values = Vec::new();
+    let limit = q["limit"].as_u64().unwrap() as usize;
+    let mut exhausted = false;
+    for _ in 0..8 {
+        let mut params = vec![("limit".into(), (limit - values.len()).to_string())];
+        if let Some(c) = upstream.as_ref() {
+            params.push(("cursor".into(), c.clone()));
+        }
+        let path = if kind == "search" {
+            params.push(("q".into(), q["text"].as_str().unwrap().into()));
+            if let Some(k) = q["kind_filter"].as_str() {
+                params.push(("kind".into(), k.into()));
+            }
+            format!("{base}/search")
+        } else {
+            format!("{base}/nodes/{}/history", q["node_id"].as_str().unwrap())
+        };
+        let raw = rt.get(&path, &params).await?;
+        let items = list(&raw, "items")?;
+        if items.len() > limit - values.len() {
+            return Err(Error("overloaded"));
+        }
+        for item in items {
+            if kind == "search" {
+                if item["workspace_id"] != p.binding["workspace_id"] {
+                    return Err(Error("overloaded"));
+                }
+                if p.readable(&item["id"]) {
+                    if !q["kind_filter"].is_null() && q["kind_filter"] != item["kind"] {
+                        return Err(Error("overloaded"));
+                    }
+                    values.push(node(p, item)?);
+                }
+            } else if let Some(value) = history_item(rt, p, q, item).await? {
+                values.push(value);
+            }
+        }
+        upstream = match raw.get("next_cursor") {
+            Some(Value::Null) => None,
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => return Err(Error("overloaded")),
+        };
+        if upstream.is_none() {
+            exhausted = true;
+            break;
+        }
+        if values.len() == limit {
+            break;
+        }
+    }
+    let next = cursor_save(state, p, q, upstream).await?;
+    if kind == "history" {
+        Ok(
+            json!({"kind":"history","items":values,"next_cursor":next,"coverage":coverage((!exhausted).then_some("scan_budget"))}),
+        )
+    } else {
+        Ok(
+            json!({"kind":"search","nodes":values,"next_cursor":next,"coverage":coverage((!exhausted).then_some("scan_budget"))}),
+        )
+    }
+}
+
+async fn history_item(
+    rt: &Runtime,
+    p: &Principal,
+    q: &Value,
+    item: &Value,
+) -> Result<Option<Value>> {
+    let category = item["category"].as_str().ok_or(Error("overloaded"))?;
+    let mut n = Value::Null;
+    let mut e = Value::Null;
+    if category == "revision" {
+        if item["data"]["id"] != q["node_id"] {
+            return Err(Error("overloaded"));
+        }
+        n = node(p, &item["data"])?;
+    } else if category == "edge" {
+        let (edges, _) = rt
+            .checked_edges(p, std::slice::from_ref(&item["data"]), Some(&q["node_id"]))
+            .await?;
+        let Some(value) = edges.into_iter().next() else {
+            return Ok(None);
+        };
+        e = value;
+    } else if category != "lifecycle" {
+        return Err(Error("overloaded"));
+    }
+    let v = json!({"entry_id":item["entry_id"],"sequence":item["sequence"].as_i64().filter(|s|*s>0).ok_or(Error("overloaded"))?.to_string(),"category":category,"subject_id":q["node_id"],"occurred_at":item["created_at"],"node":n,"edge":e});
+    if !contract::valid("HistoryItem", &v) {
+        return Err(Error("overloaded"));
+    }
+    Ok(Some(v))
 }
 
 #[async_trait::async_trait]
@@ -561,6 +596,56 @@ mod tests {
         mismatch["workspace_id"] = json!(Uuid::new_v4());
         assert!(edge(&p, &mismatch).is_err());
     }
+    #[test]
+    fn context_edge_budget_counts_only_returned_endpoints() {
+        let edges = vec![
+            json!({"source":"root","target":"hidden"}),
+            json!({"source":"root","target":"visible"}),
+            json!({"source":"visible","target":"root"}),
+        ];
+        let returned = vec![json!("root"), json!("visible")];
+        for (limit, expected, truncated) in [(0, 0, true), (1, 1, true), (2, 2, false)] {
+            let mut partial = false;
+            let selected = select_context_edges(
+                &json!({"max_edges":limit}),
+                "context",
+                &returned,
+                edges.clone(),
+                &mut partial,
+            )
+            .unwrap();
+            assert_eq!(selected, edges[1..1 + expected]);
+            assert_eq!(partial, truncated);
+        }
+    }
+
+    #[test]
+    fn relationship_filter_preserves_direction_and_upstream_partial_coverage() {
+        let edges = vec![
+            json!({"source":"root","target":"other","edge_type":"blocks"}),
+            json!({"source":"other","target":"root","edge_type":"blocks"}),
+            json!({"source":"root","target":"other","edge_type":"hidden"}),
+            json!({"source":"other","target":"elsewhere","edge_type":"blocks"}),
+        ];
+        for (direction, expected) in [
+            ("incoming", vec![edges[1].clone()]),
+            ("outgoing", vec![edges[0].clone()]),
+            ("both", edges[..2].to_vec()),
+        ] {
+            let mut partial = true;
+            let selected = select_context_edges(
+                &json!({"node_id":"root","edge_types":["blocks"],"direction":direction,"limit":2}),
+                "relationships",
+                &[],
+                edges.clone(),
+                &mut partial,
+            )
+            .unwrap();
+            assert_eq!(selected, expected);
+            assert!(partial);
+        }
+    }
+
     #[tokio::test]
     async fn http_adapter_refuses_missing_or_changed_response_version() {
         for version in [None, Some("2")] {

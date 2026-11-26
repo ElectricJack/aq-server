@@ -22,6 +22,7 @@ use aq_server::{
     store::{Role, User},
 };
 use aq_session_host::{LocalEnvironment, ResourcePolicy};
+use aq_session_protocol::Digest;
 use reconcile::Installed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -44,14 +45,27 @@ pub struct ServiceConfig {
     pub helper: PathBuf,
     pub tmux: PathBuf,
     pub tmux_version: String,
-    pub native: PathBuf,
-    pub native_digest: aq_session_protocol::Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_digest: Option<Digest>,
     pub image_digest: String,
-    pub secret_file: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<NativeInstallation>,
     pub server_origin: String,
     /// Retries for each retained message after a provably unstarted turn.
     #[serde(default = "default_turn_retries")]
     pub automatic_turn_retries: u8,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInstallation {
+    pub native: PathBuf,
+    pub native_digest: Digest,
+    pub secret_file: PathBuf,
 }
 
 fn default_turn_retries() -> u8 {
@@ -68,8 +82,11 @@ struct Control {
     label: String,
     /// The owner's saved role text for a project supervisor, read at the start of its turn.
     role: Option<String>,
+    /// A note for a turn after one that ended without a reply, set at its start.
+    recheck: Option<String>,
 }
 type Host = Supervisor<InstalledAuthority, NativeAdapter>;
+type NativePaths<'a> = (&'a Path, &'a Digest, &'a Path);
 impl ServiceConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let c: Self = serde_json::from_slice(&protected_read(path, 65536)?)?;
@@ -79,29 +96,60 @@ impl ServiceConfig {
         );
         crate::tool::origin(&c.server_origin)?;
         ensure!(
-            [
-                &c.root,
-                &c.workspace,
-                &c.homes,
-                &c.helper,
-                &c.tmux,
-                &c.native,
-                &c.secret_file
-            ]
-            .iter()
-            .all(|p| p.is_absolute()),
+            [&c.root, &c.workspace, &c.homes, &c.helper, &c.tmux]
+                .iter()
+                .all(|p| p.is_absolute()),
             "absolute supervisor service paths"
         );
+        let codex = c.codex()?;
+        ensure!(
+            codex.is_some() || c.claude.is_some(),
+            "at least one supervisor harness must be installed"
+        );
+        if let Some((native, _, secret)) = codex {
+            validate_native_paths(native, secret, &c.workspace)?;
+        }
+        if let Some(claude) = &c.claude {
+            validate_native_paths(&claude.native, &claude.secret_file, &c.workspace)?;
+            ensure!(
+                c.secret_file.as_ref() != Some(&claude.secret_file),
+                "Codex and Claude require separate credential files"
+            );
+        }
         ensure!(
             c.image_digest.starts_with("sha256:") && c.image_digest.len() == 71,
             "pinned supervisor environment"
         );
         Ok(c)
     }
+    fn codex(&self) -> Result<Option<NativePaths<'_>>> {
+        match (
+            self.native.as_deref(),
+            self.native_digest.as_ref(),
+            self.secret_file.as_deref(),
+        ) {
+            (Some(native), Some(digest), Some(secret)) => Ok(Some((native, digest, secret))),
+            (None, None, None) => Ok(None),
+            _ => anyhow::bail!("Codex installation requires native, native_digest and secret_file"),
+        }
+    }
+
     fn turn_file(&self) -> PathBuf {
         self.root.join("current-turn.json")
     }
 }
+fn validate_native_paths(native: &Path, secret: &Path, workspace: &Path) -> Result<()> {
+    ensure!(
+        native.is_absolute() && secret.is_absolute(),
+        "absolute supervisor native and credential paths"
+    );
+    ensure!(
+        !secret.starts_with(workspace),
+        "supervisor credential file overlaps workspace"
+    );
+    Ok(())
+}
+
 async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
     let r=sqlx::query("SELECT c.*,i.project_id,COALESCE(p.label,'Global supervisor')AS label FROM supervisor_controls c JOIN supervisor_conversation_ids i USING(conversation_id) LEFT JOIN project_supervisor_conversations p USING(conversation_id) WHERE c.conversation_id=$1").bind(id).fetch_one(pool).await?;
     Ok(Control {
@@ -113,6 +161,7 @@ async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
         project: r.get("project_id"),
         label: r.get("label"),
         role: None,
+        recheck: None,
     })
 }
 async fn user(pool: &PgPool, control: &Control) -> Result<User> {
@@ -162,8 +211,17 @@ fn pool_exhaustion_can_repoll_but_an_unconfirmed_turn_stays_failed() {
     )));
 }
 
-fn api_error(_: aq_server::error::AppError) -> anyhow::Error {
-    anyhow::anyhow!("Supervisor reservation or dispatch was refused")
+fn api_error(error: aq_server::error::AppError) -> anyhow::Error {
+    // Supervisor logs need the refusal status. AppError also carries request details.
+    anyhow::anyhow!(
+        "Supervisor reservation or dispatch was refused ({})",
+        error.status().as_u16()
+    )
+}
+/// The re-check note the turn after `prior` starts with (`None` when it replied or never started).
+#[cfg(feature = "test-support")]
+pub async fn recheck_note_for_testing(pool: &PgPool, prior: &Snapshot) -> Result<Option<String>> {
+    retry::recheck_note(pool, Some(prior), default_turn_retries()).await
 }
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -224,6 +282,17 @@ fn clean_homes(config: &ServiceConfig) -> Result<()> {
         }
         for name in ["auth.json", "supervisor.credential"] {
             let _ = std::fs::remove_file(path.join(name));
+        }
+        #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+        {
+            // The caller has stopped proof. Remove repositories even when
+            // Claude killed the broker before its own cleanup could run.
+            let repos = path.join(crate::repo::SESSION_REPOS_DIR);
+            match std::fs::remove_dir_all(&repos) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
         }
     }
     Ok(())

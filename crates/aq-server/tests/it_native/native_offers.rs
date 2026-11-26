@@ -31,6 +31,8 @@ mod holds;
 mod launches;
 #[path = "native_offers/lost.rs"]
 mod lost;
+#[path = "native_offers/placement.rs"]
+mod placement;
 #[path = "native_offers/routed.rs"]
 mod routed;
 
@@ -108,6 +110,10 @@ async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without
     assert_eq!(
         original["native_offer"],
         serde_json::to_value(native).unwrap()
+    );
+    assert_eq!(
+        original["native_offer"]["offered"]["clock"]["server_time_ms"],
+        native.offered.clock.server_time_ms
     );
     let (status, replayed) = poll_offered(&c).await;
     assert_eq!(status, 200, "{replayed}");
@@ -617,8 +623,8 @@ async fn startup_warns_for_bindings_whose_lists_enrolled_nodes_override() {
     );
 }
 
-/// Fix round 2 (I2): a Stop that is still open while the poll runs (the poll
-/// waits on the node row it holds) and commits then: the poll answers the early
+/// Fix round 2 (I2): a Stop that is still open while the poll runs (the poll's
+/// publication waits on the allocation row it fenced) and commits then: the poll answers the early
 /// gate's empty 200. The serialization-failure branch of the same race is
 /// `machine_store::publishing_node_lock_after_a_committed_stop_is_a_hold`.
 #[tokio::test]
@@ -658,7 +664,7 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
         .await
         .unwrap();
         c.observation_resume.add_permits(1);
-        let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes WHERE id=$1%')";
+        let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM node_allocation a%')";
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while !sqlx::query_scalar::<_, bool>(waiting)
                 .fetch_one(pool)
@@ -669,7 +675,7 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
             }
         })
         .await
-        .expect("the poll waits on the node row the Stop holds");
+        .expect("the poll's publication waits on the allocation row the Stop holds");
         stop.commit().await.unwrap();
     };
     let ((status, body), ()) = tokio::join!(poll(&c), race);
@@ -788,3 +794,37 @@ async fn swarm_zero_limit_waits_without_claiming_task_then_same_ready_task_is_ad
 
 #[path = "native_offers/node_slots.rs"]
 mod node_slots;
+
+#[tokio::test]
+async fn performance_first_route_uses_published_offer_clock() {
+    let (case, offer) = common::native_offer::published().await;
+    let attempt = offer.offered.offer.binding.attempt_id;
+    let pool = &case.env.env.pool;
+    let (task, project, original): (Uuid, Uuid, Value) = sqlx::query_as(
+        "SELECT a.task_id, so.project_id, l.graph_task_observation FROM execution_attempts a
+         JOIN profiled_launches l USING(attempt_id)
+         JOIN admission_source_observations so ON so.observation_id=l.source_observation_id
+         WHERE a.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let published_at = original["native_offer"]["offered"]["clock"]["server_time_ms"]
+        .as_i64()
+        .unwrap();
+    let read = |cutoff: i64| {
+        sqlx::query_scalar::<_, Value>(include_str!(
+            "../../src/dashboard_api/performance/usage_route.sql"
+        ))
+        .bind(task)
+        .bind(project)
+        .bind(cutoff)
+        .fetch_optional(pool)
+    };
+    assert_eq!(read(published_at - 1).await.unwrap(), None);
+    let route = read(published_at).await.unwrap().unwrap();
+    assert_eq!(route["attempt_id"], serde_json::json!(attempt));
+    assert_eq!(route["recorded_at_ms"], published_at);
+    assert_eq!(route["clock_basis"], "offer_publication");
+}

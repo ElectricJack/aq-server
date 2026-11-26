@@ -144,6 +144,7 @@
         "failed",
         "uncertain_operation",
         "worker_offline",
+        "sandbox_admission_deferred",
         "internal_work"
       ],
       "type": "string"
@@ -971,6 +972,7 @@
         "node_spend_ceiling_reached",
         "node_spend_unaccounted",
         "node_disk_pressure",
+        "sandbox_admission_deferred",
         "cpu_above_threshold",
         "memory_above_threshold",
         "agent_maximum_reached",
@@ -1052,17 +1054,26 @@
     },
     "IneligibleReason": {
       "description": "Why placement would refuse new work on a node. Ceiling reasons are the\nplacement refusal codes.",
-      "enum": [
-        "worker_offline",
-        "worker_revoked",
-        "capability_unreported",
-        "capability_expired",
-        "node_concurrency_ceiling_reached",
-        "node_spend_ceiling_reached",
-        "node_spend_unaccounted",
-        "node_disk_pressure"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "worker_offline",
+            "worker_revoked",
+            "capability_unreported",
+            "capability_expired",
+            "node_concurrency_ceiling_reached",
+            "node_spend_ceiling_reached",
+            "node_spend_unaccounted",
+            "node_disk_pressure"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "sandbox_admission_deferred",
+          "description": "The node's machine cannot admit a sandbox now (`NodeCapacity.sandbox_admission`).",
+          "type": "string"
+        }
+      ]
     },
     "InstructionProvenance": {
       "additionalProperties": false,
@@ -1461,6 +1472,17 @@
         },
         "node": {
           "$ref": "#/$defs/EntityRef"
+        },
+        "sandbox_admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SandboxAdmission"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present while the node's machine defers sandbox admission; its slots are not idle."
         },
         "slots": {
           "$ref": "#/$defs/NodeSlots"
@@ -2622,6 +2644,39 @@
       "required": [
         "id",
         "display_name"
+      ],
+      "type": "object"
+    },
+    "SandboxAdmission": {
+      "additionalProperties": false,
+      "description": "Why a machine cannot admit a sandbox now (it rechecks automatically): the worker's code\n(`sandbox_disk_headroom_unavailable`, ...), since when, and for a disk shortfall the bytes\navailable and required.",
+      "properties": {
+        "available_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "required_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "code",
+        "since"
       ],
       "type": "object"
     },

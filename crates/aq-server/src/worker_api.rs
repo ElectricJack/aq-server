@@ -134,6 +134,11 @@ pub async fn authenticate_context(
 /// service/owner locks precede this node lock; attempt/session locks follow it.
 /// A rotated/deleted/revoked credential is refused even if the initial lookup
 /// succeeded. No authority is extended, renewed or installed by this check.
+///
+/// FOR KEY SHARE: worker transactions and heartbeats of one node do not wait
+/// for each other here, and only a revocation (FOR UPDATE) waits for them.
+/// Work that must exclude other work on the node locks a narrower row: the
+/// attempt, or `node_allocation` (`aq_machine_control::allocation`).
 pub async fn lock_current_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &AuthenticatedNode,
@@ -141,16 +146,14 @@ pub async fn lock_current_node(
     if let Some(delegate) = &context.delegated {
         return crate::delegated_permits::runtime::lock_authenticated(tx, delegate).await;
     }
-    node_locked(tx, context, "UPDATE").await
+    node_locked(tx, context, "FOR KEY SHARE").await
 }
-/// The same recheck for a transaction that only reads the node's facts. The
-/// slots of one node hold this together; registration, slot allocation and an
-/// inventory swap take `lock_current_node`, which waits for and excludes them.
-pub async fn read_current_node(
+/// The same recheck in a read-only snapshot (M1), which takes no row lock.
+pub async fn snapshot_current_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &AuthenticatedNode,
 ) -> Result<uuid::Uuid, AppError> {
-    node_locked(tx, context, "SHARE").await
+    node_locked(tx, context, "").await
 }
 async fn node_locked(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -158,7 +161,7 @@ async fn node_locked(
     mode: &str,
 ) -> Result<uuid::Uuid, AppError> {
     let sql = format!(
-        "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR {mode}"
+        "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 {mode}"
     );
     let current = sqlx::query_scalar(&sql).bind(context.node.id);
     let current = current.bind(context.verifier.as_str());

@@ -61,6 +61,7 @@ fn node(
         capability_observed_at: None,
         capability_fresh_until: None,
         storage: None,
+        sandbox_admission: None,
     }
 }
 fn facts(key: &str, cpu: u16, received_at_ms: u64) -> MachineFacts {

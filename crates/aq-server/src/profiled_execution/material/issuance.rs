@@ -47,6 +47,35 @@ pub fn issue_for_selection_from(
     {
         return Err(MaterialError::Scope);
     }
+    let (index, credential) = credential_for_selection(registry, selection, node_id, backend_kind)?;
+    let material = source_or_configured(registry, index, head)?;
+    let lease = MaterialLease {
+        schema_version: 1,
+        lease_id,
+        binding: binding.clone(),
+        credential_profile: credential.profile.clone(),
+        credential_revision: credential.revision,
+        provider: Label::new(&credential.provider).map_err(|_| MaterialError::Scope)?,
+        account_reference: Label::new(&credential.account_reference)
+            .map_err(|_| MaterialError::Scope)?,
+        endpoint_reference: Label::new(&credential.endpoint_reference)
+            .map_err(|_| MaterialError::Scope)?,
+        purpose: Label::new("model-authentication").map_err(|_| MaterialError::Scope)?,
+        material_digest: Digest::of(material.bytes()),
+        material_bytes: material.bytes().len() as u64,
+        issued_at_ms,
+        expires_at_ms,
+    };
+    lease.validate().map_err(|_| MaterialError::Scope)?;
+    Ok(lease)
+}
+
+fn credential_for_selection<'a>(
+    registry: &'a LoadedRegistry,
+    selection: &ResolvedSelection,
+    node_id: Uuid,
+    backend_kind: Option<aq_selection::BackendKind>,
+) -> Result<(usize, &'a aq_selection::AuthorizedCredential), MaterialError> {
     let (index, credential) = registry
         .credentials
         .iter()
@@ -74,24 +103,5 @@ pub fn issue_for_selection_from(
     {
         return Err(MaterialError::Scope);
     }
-    let material = source_or_configured(registry, index, head)?;
-    let lease = MaterialLease {
-        schema_version: 1,
-        lease_id,
-        binding: binding.clone(),
-        credential_profile: credential.profile.clone(),
-        credential_revision: credential.revision,
-        provider: Label::new(&credential.provider).map_err(|_| MaterialError::Scope)?,
-        account_reference: Label::new(&credential.account_reference)
-            .map_err(|_| MaterialError::Scope)?,
-        endpoint_reference: Label::new(&credential.endpoint_reference)
-            .map_err(|_| MaterialError::Scope)?,
-        purpose: Label::new("model-authentication").map_err(|_| MaterialError::Scope)?,
-        material_digest: Digest::of(material.bytes()),
-        material_bytes: material.bytes().len() as u64,
-        issued_at_ms,
-        expires_at_ms,
-    };
-    lease.validate().map_err(|_| MaterialError::Scope)?;
-    Ok(lease)
+    Ok((index, credential))
 }

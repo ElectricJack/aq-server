@@ -46,9 +46,10 @@ async fn material(
     let (materials, versions) =
         read_materials(&state.store.pool, loaded, auth.id(), providers).await?;
     let mut tx = state.store.pool.begin().await.map_err(crate::error::db)?;
-    aq_machine_control::management::lock(&mut tx)
+    // Every allocation row of the machine: it must stay idle while logins install.
+    aq_machine_control::allocation::lock_machine(&mut tx, auth.id())
         .await
-        .map_err(|_| AppError::Internal)?;
+        .map_err(crate::machine_api::mapped)?;
     lock_current_node(&mut tx, &auth).await?;
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
     if !aq_machine_control::enrolled(&mut tx, auth.id())

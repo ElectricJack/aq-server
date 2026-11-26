@@ -35,6 +35,36 @@ fn scope(driver: &Driver, capabilities: &BTreeSet<String>) -> GrantScope {
     }
 }
 
+async fn reactivate_binding(
+    state: &AppState,
+    driver: &Driver,
+    source: &str,
+    grant: Uuid,
+) -> Result<()> {
+    let binding: Option<String> =
+        sqlx::query_scalar("SELECT binding FROM playbook_sources WHERE id=$1")
+            .bind(source)
+            .fetch_optional(&state.store.pool)
+            .await?;
+    let Some(binding) = binding else {
+        return Ok(());
+    };
+    let current = driver
+        .binding_activation(binding.clone())
+        .await
+        .map_err(engine)?;
+    if let Some(current) = current
+        && let Err(error) = driver.activate(binding, current.artifact, grant, 1).await
+    {
+        tracing::warn!(
+            source,
+            ?error,
+            "the playbook in effect is not allowed by the new grant"
+        );
+    }
+    Ok(())
+}
+
 impl authoring::Host for AppState {
     async fn markdown(&self, source: &SourceRecord) -> Result<(String, u64)> {
         let stored = match source.kind {
@@ -88,7 +118,13 @@ impl authoring::Deployer for AppState {
             replaced = live.then_some(id);
         }
         let id = Uuid::new_v4();
-        (service.source_grant(id, scope(&driver, capabilities)).await).map_err(engine)?;
+        // The engine's error names no request: say which grant, on which profile.
+        (service.source_grant(id, scope(&driver, capabilities)).await).map_err(|e| {
+            let profile = service.profile.config_name();
+            Error::Conflict(format!(
+                "The playbook engine refused: {e} (a grant of {capabilities:?} for {source} on {profile})"
+            ))
+        })?;
         sqlx::query("INSERT INTO playbook_source_grants(source_id,grant_id,revision,capabilities,created_at_ms) VALUES($1,$2,1,$3,$4) ON CONFLICT(source_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,revision=1,capabilities=EXCLUDED.capabilities,created_at_ms=EXCLUDED.created_at_ms,revoked_at_ms=NULL")
             .bind(source).bind(id).bind(Json(capabilities)).bind(authoring::Server::now_ms(self))
             .execute(pool).await?;
@@ -96,27 +132,7 @@ impl authoring::Deployer for AppState {
             // What runs now moves to the new grant before the old one goes, so
             // a playbook in effect keeps working while its successor is
             // written. When the new abilities no longer cover it, it stops.
-            let binding: Option<String> =
-                sqlx::query_scalar("SELECT binding FROM playbook_sources WHERE id=$1")
-                    .bind(source)
-                    .fetch_optional(pool)
-                    .await?;
-            let current = match &binding {
-                Some(binding) => driver
-                    .binding_activation(binding.clone())
-                    .await
-                    .map_err(engine)?,
-                None => None,
-            };
-            if let (Some(binding), Some(current)) = (binding, current)
-                && let Err(error) = driver.activate(binding, current.artifact, id, 1).await
-            {
-                tracing::warn!(
-                    source,
-                    ?error,
-                    "the playbook in effect is not allowed by the new grant"
-                );
-            }
+            reactivate_binding(self, &driver, source, id).await?;
             service.revoke(owner, old).await.map_err(engine)?;
         }
         Ok((id, 1))
@@ -176,6 +192,12 @@ impl authoring::Server for AppState {
                 aq_playbook_domain::host10::ResultFacts::default().output(),
             )
         })
+    }
+    #[cfg(feature = "delivery_playbook")]
+    fn delivery(&self) -> Option<SourceRecord> {
+        let driver = self.internal_work.authoring().driver().ok()?;
+        let environments = driver.service.profile.has_environments();
+        Some(authoring::builtin::delivery(environments))
     }
     fn now_ms(&self) -> i64 {
         (self.clock)().timestamp_millis()

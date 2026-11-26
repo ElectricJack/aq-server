@@ -64,7 +64,10 @@ impl ReworkSweep {
             match super::settlement::record_replacement_facts(state, report).await {
                 Ok(facts) if facts.changed => progress.closed += 1,
                 Ok(_) => {}
-                Err(_) => progress.refused += 1,
+                Err(error) => {
+                    tracing::warn!(%report, ?error, "replacement facts not recorded");
+                    progress.refused += 1
+                }
             }
         }
         Ok(progress)
@@ -108,6 +111,26 @@ impl ClosureSweep {
     }
 }
 const REWORK_SWEEP_EVERY: u32 = 15;
+
+enum SweepOutcome {
+    Stopped,
+    Incomplete,
+    Complete(Progress),
+}
+
+async fn run_sweep(
+    stop: &mut watch::Receiver<bool>,
+    sweep: impl std::future::Future<Output = Result<Progress, AppError>>,
+) -> SweepOutcome {
+    tokio::select! {
+        biased;
+        _ = stop.wait_for(|value| *value) => SweepOutcome::Stopped,
+        outcome = tokio::time::timeout(Duration::from_secs(4), sweep) => match outcome {
+            Ok(Ok(progress)) => SweepOutcome::Complete(progress),
+            _ => SweepOutcome::Incomplete,
+        }
+    }
+}
 
 /// Playbook completions are replayed through their grant and intent owner.
 /// Only default-policy Graph effects belong in this independent sweep.
@@ -178,41 +201,114 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
                     }
                 }
             }
-            tokio::select! {
-                biased;
-                _ = stop.wait_for(|value| *value) => return,
-                outcome = tokio::time::timeout(Duration::from_secs(4), rework.tick(&state)) => {
-                    if let Ok(Ok(progress)) = outcome {
-                        tracing::debug!(inspected=progress.inspected, recorded=progress.closed, refused=progress.refused, "rework replacement-facts sweep");
-                    }
+            match run_sweep(&mut stop, rework.tick(&state)).await {
+                SweepOutcome::Stopped => return,
+                SweepOutcome::Complete(progress) => {
+                    tracing::debug!(
+                        inspected = progress.inspected,
+                        recorded = progress.closed,
+                        refused = progress.refused,
+                        "rework replacement-facts sweep"
+                    );
                 }
+                SweepOutcome::Incomplete => {}
             }
-            tokio::select! {
-                biased;
-                _ = stop.wait_for(|value| *value) => return,
-                outcome = tokio::time::timeout(Duration::from_secs(4), closures.tick(&state)) => {
-                    if let Ok(Ok(progress)) = outcome {
-                        tracing::debug!(inspected=progress.inspected, settled=progress.closed, refused=progress.refused, "launch closure settlement sweep");
-                    }
+            match run_sweep(&mut stop, closures.tick(&state)).await {
+                SweepOutcome::Stopped => return,
+                SweepOutcome::Complete(progress) => {
+                    tracing::debug!(
+                        inspected = progress.inspected,
+                        settled = progress.closed,
+                        refused = progress.refused,
+                        "launch closure settlement sweep"
+                    );
                 }
-            }
-        }
-        tokio::select! {
-            biased;
-            _ = stop.wait_for(|value| *value) => return,
-            outcome = tokio::time::timeout(Duration::from_secs(4), sweep.tick(&state)) => {
-                let incomplete = match outcome {
-                    Ok(Ok(progress)) => {
-                        tracing::debug!(inspected=progress.inspected, closed=progress.closed, refused=progress.refused, "native ungranted expiry sweep");
-                        progress.refused > 0
-                    }
-                    _ => true,
-                };
-                if incomplete && tokio::time::Instant::now() >= warn_after {
-                    tracing::warn!("native expiry sweep incomplete; unclosed attempts remain held");
-                    warn_after = tokio::time::Instant::now() + Duration::from_secs(30);
-                }
+                SweepOutcome::Incomplete => {}
             }
         }
+        let incomplete = match run_sweep(&mut stop, sweep.tick(&state)).await {
+            SweepOutcome::Stopped => return,
+            SweepOutcome::Complete(progress) => {
+                tracing::debug!(
+                    inspected = progress.inspected,
+                    closed = progress.closed,
+                    refused = progress.refused,
+                    "native ungranted expiry sweep"
+                );
+                progress.refused > 0
+            }
+            SweepOutcome::Incomplete => true,
+        };
+        if incomplete && tokio::time::Instant::now() >= warn_after {
+            tracing::warn!("native expiry sweep incomplete; unclosed attempts remain held");
+            warn_after = tokio::time::Instant::now() + Duration::from_secs(30);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_precedes_ready_work_and_sender_loss_also_stops() {
+        let (sender, mut stop) = watch::channel(true);
+        assert!(matches!(
+            run_sweep(&mut stop, async { panic!("shutdown must win") }).await,
+            SweepOutcome::Stopped
+        ));
+        sender.send(false).unwrap();
+        drop(sender);
+        assert!(matches!(
+            run_sweep(&mut stop, async { panic!("closed channel must stop") }).await,
+            SweepOutcome::Stopped
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deadline_and_shutdown_drop_in_flight_work() {
+        for shutdown in [false, true] {
+            let (sender, mut stop) = watch::channel(false);
+            let (dropped, observed) = tokio::sync::oneshot::channel::<()>();
+            let start = tokio::time::Instant::now();
+            let outcome = run_sweep(&mut stop, async move {
+                let _guard = dropped;
+                if shutdown {
+                    sender.send(true).unwrap();
+                }
+                std::future::pending().await
+            })
+            .await;
+            assert!(observed.await.is_err());
+            if shutdown {
+                assert!(matches!(outcome, SweepOutcome::Stopped));
+                assert_eq!(start.elapsed(), Duration::ZERO);
+            } else {
+                assert!(matches!(outcome, SweepOutcome::Incomplete));
+                assert_eq!(start.elapsed(), Duration::from_secs(4));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_sweeps_retain_progress_and_refusals_are_incomplete() {
+        let (_sender, mut stop) = watch::channel(false);
+        let progress = Progress {
+            inspected: 3,
+            closed: 1,
+            refused: 2,
+        };
+        assert!(matches!(
+            run_sweep(&mut stop, async { Ok(progress) }).await,
+            SweepOutcome::Complete(Progress {
+                inspected: 3,
+                closed: 1,
+                refused: 2
+            })
+        ));
+        assert!(matches!(
+            run_sweep(&mut stop, async { Err(AppError::Internal) }).await,
+            SweepOutcome::Incomplete
+        ));
     }
 }
