@@ -21,6 +21,7 @@ impl GraphPeer {
             lookup_status: AtomicU16::new(200),
             has_receipt: AtomicBool::new(false),
             lookups: Mutex::default(),
+            active: Mutex::new(graph["node"].clone()),
         });
         let mut node = graph["node"].clone();
         node["task_state"] = json!("completed");
@@ -35,12 +36,13 @@ impl GraphPeer {
             receipt.clone(),
         );
         let reader = recovery.clone();
-        let active = graph["node"].clone();
+        let active = recovery.clone();
         let app = Router::new()
             .route(
                 "/v1/workspaces/{workspace}/nodes/{id}",
                 axum::routing::get(move || {
-                    std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(active.clone())))
+                    let node = active.active.lock().unwrap().clone();
+                    std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(node)))
                 }),
             )
             .route(
@@ -53,14 +55,21 @@ impl GraphPeer {
                 "/v1/workspaces/{workspace}/mutations",
                 post(move |Json(body): Json<Value>| {
                     wc.fetch_add(1, Ordering::SeqCst);
-                    bc.lock().unwrap().push(body);
+                    bc.lock().unwrap().push(body.clone());
                     let code = axum::http::StatusCode::from_u16(
                         writer.write_status.load(Ordering::SeqCst),
                     )
                     .unwrap();
                     let reply = if code.is_success() {
                         writer.has_receipt.store(true, Ordering::SeqCst);
-                        committed.clone()
+                        if let Some(metadata) = body["operations"][0]["patch"]["metadata"].as_object().filter(|metadata| metadata.contains_key("aq:needs")) {
+                            let mut active = writer.active.lock().unwrap();
+                            active["metadata"] = json!(metadata);
+                            active["version"] = json!(active["version"].as_u64().unwrap() + 1);
+                            json!({"change_set_id":committed["change_set_id"],"results":[active.clone()]})
+                        } else {
+                            committed.clone()
+                        }
                     } else {
                         json!({"error":"write unavailable"})
                     };

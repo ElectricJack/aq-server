@@ -89,6 +89,29 @@ impl RetryHistory {
             namespace: ns,
         }
     }
+    async fn seed_pinned_export(&self, project: Uuid) {
+        // The normal offer fence also requires a source export linked to the
+        // predecessor's pinned binding. This fixture otherwise seeds result custody only.
+        let export = Uuid::new_v4();
+        let mut tx = self.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL session_replication_role=replica")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state)
+         SELECT $1,project_id,v,encode(sha256(v),'hex'),1048577,1048577,'pending'
+         FROM project_execution_bindings, LATERAL (SELECT convert_to(jsonb_build_object('project_revision',revision)::text,'UTF8') v) pinned
+         WHERE project_id=$2").bind(export).bind(project).execute(&mut *tx).await.unwrap();
+        sqlx::query(
+            "INSERT INTO profiled_launch_source_exports(attempt_id,operation_id) VALUES($1,$2)",
+        )
+        .bind(self.attempt)
+        .bind(export)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
     async fn record(&self, command: &str, status: &str, report: Uuid) -> Uuid {
         let id = Uuid::new_v4();
         sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms) VALUES($1,$2,1,$3,$4,$5,0,$6,$7,CASE WHEN $7='running' THEN NULL ELSE '{}'::jsonb END,$8)")
@@ -542,27 +565,7 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     let attempt = h.attempt;
     super::super::replacement::seed_native_offer_clock(&h.pool, attempt).await;
     let project = env.f.selection.lineage.project_id;
-    // The normal offer fence also requires a source export linked to the
-    // predecessor's pinned binding. This fixture otherwise seeds result custody only.
-    let export = Uuid::new_v4();
-    let mut tx = h.pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL session_replication_role=replica")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state)
-         SELECT $1,project_id,v,encode(sha256(v),'hex'),1048577,1048577,'pending'
-         FROM project_execution_bindings, LATERAL (SELECT convert_to(jsonb_build_object('project_revision',revision)::text,'UTF8') v) pinned
-         WHERE project_id=$2").bind(export).bind(project).execute(&mut *tx).await.unwrap();
-    sqlx::query(
-        "INSERT INTO profiled_launch_source_exports(attempt_id,operation_id) VALUES($1,$2)",
-    )
-    .bind(attempt)
-    .bind(export)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
+    h.seed_pinned_export(project).await;
     let version = env.expected_version.to_string();
     let original = Uuid::new_v4();
     let publication = Uuid::new_v4();
@@ -689,4 +692,111 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     assert_eq!(evidence["publication_operation_id"], json!(publication));
     assert_eq!(evidence["head"], json!(head));
     assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+}
+
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn successor_needs_requires_an_exact_quiescent_predecessor() {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let h = RetryHistory::new().await;
+    let env = &h.env;
+    let project = env.f.selection.lineage.project_id;
+    let version = env.expected_version.to_string();
+    let publication = Uuid::new_v4();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused','{\"reason\":\"unreachable\"}',$6,$6)")
+        .bind(publication).bind(h.namespace).bind(publication.to_string())
+        .bind(h.task.to_string()).bind(json!({"result_ready":{"task_id":h.task,"project_id":project,"attempt_id":h.attempt,"result_id":h.result},"result_head":"4".repeat(40)}))
+        .bind(NOW as i64).execute(&h.pool).await.unwrap();
+
+    let act = |kind: &str, version: String, needs: Option<Value>| {
+        let id = Uuid::new_v4();
+        let mut action = json!({"operation_id":id,"kind":kind,
+            "subject":{"type":"task","id":h.task,"revision":version},"expected_versions":{"task":version},
+            "payload":{"operation_id":id,"project_id":project,"expected_version":version}});
+        if let Some(needs) = needs {
+            action["payload"]["needs"] = needs;
+        }
+        async move {
+            let response = aq_server::build_admin_router(env.f.state.clone())
+                .oneshot(
+                    axum::http::Request::post("/api/v1/actions")
+                        .header("x-aq-dev-email", "owner@localhost")
+                        .header("x-aq-request", "1")
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(action.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            serde_json::from_slice::<Value>(
+                &response.into_body().collect().await.unwrap().to_bytes(),
+            )
+            .unwrap()
+        }
+    };
+    let set_needs = || {
+        act(
+            "task.needs.set",
+            version.clone(),
+            Some(json!(["terminal-test"])),
+        )
+    };
+
+    let uncertain = set_needs().await;
+    assert_eq!(uncertain["data"]["disposition"], "rejected", "{uncertain}");
+    sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"remote_rejected\"}'::jsonb WHERE operation_id=$1")
+        .bind(publication).execute(&h.pool).await.unwrap();
+
+    let running = h.record("branch.publish", "running", h.result).await;
+    let blocked = set_needs().await;
+    assert_eq!(blocked["data"]["disposition"], "rejected", "{blocked}");
+    sqlx::query("DELETE FROM playbook_host_operations WHERE operation_id=$1")
+        .bind(running)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    let accepted = set_needs().await;
+    assert_eq!(accepted["data"]["disposition"], "confirmed", "{accepted}");
+    let raw: Vec<u8> = sqlx::query_scalar(
+        "SELECT i.body FROM dashboard_graph_intents i JOIN dashboard_operations d USING(operation_id)
+         WHERE d.kind='task.needs.set' AND d.disposition='confirmed'",
+    )
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    let patch: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(
+        patch["operations"][0]["expected_version"],
+        env.expected_version
+    );
+    assert_eq!(
+        patch["operations"][0]["patch"]["metadata"]["aq:needs"],
+        json!(["terminal-test"])
+    );
+    assert!(env.holds_task().await);
+    let mut db = h.pool.acquire().await.unwrap();
+    let observed = env.expected_version as i64;
+    for (revision, blocks) in [(observed, true), (observed + 1, false)] {
+        assert_eq!(
+            aq_machine_control::task_needs::blocks_observation(
+                &mut db,
+                (project, h.task, revision)
+            )
+            .await
+            .unwrap(),
+            blocks
+        );
+    }
+    drop(db);
+
+    super::super::replacement::seed_native_offer_clock(&h.pool, h.attempt).await;
+    h.seed_pinned_export(project).await;
+    let stale = act("task.retry", version, None).await;
+    assert_eq!(stale["data"]["disposition"], "conflict", "{stale}");
+    let retry = act("task.retry", (observed + 1).to_string(), None).await;
+    assert_eq!(retry["data"]["disposition"], "confirmed", "{retry}");
+    assert!(!env.holds_task().await);
 }

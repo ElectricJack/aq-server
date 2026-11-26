@@ -5,7 +5,23 @@ SELECT EXISTS (
     JOIN delivery_pushed_results p USING (attempt_id, report_id)
     JOIN delivery_git_grants g USING (attempt_id)
     JOIN profiled_launches l USING (attempt_id)
-    WHERE i.task_id = $1 AND i.project_id = $4 AND i.project_revision = $5
+    JOIN project_execution_bindings b ON b.project_id = i.project_id AND b.revision = $5
+    LEFT JOIN project_execution_binding_history approved
+      ON approved.project_id = i.project_id AND approved.revision = i.project_revision
+    WHERE i.task_id = $1 AND i.project_id = $4
+      -- Use the same placement and additive-environment allowance as predecessor
+      -- re-pinning, but compare against the binding the owner actually approved.
+      AND (i.project_revision = b.revision OR (
+        i.project_revision < b.revision
+        AND (approved.record->'binding') - ARRAY['allowed_node_ids', 'allow_enrolled_nodes',
+          'allowed_worker_groups', 'allowed_environments']
+          = b.binding - ARRAY['allowed_node_ids', 'allow_enrolled_nodes',
+          'allowed_worker_groups', 'allowed_environments']
+        AND (approved.record#>'{binding,allowed_environments}' IS NOT DISTINCT FROM b.binding->'allowed_environments'
+          OR (jsonb_typeof(approved.record#>'{binding,allowed_environments}') = 'array'
+            AND jsonb_typeof(b.binding->'allowed_environments') = 'array'
+            AND (b.binding->'allowed_environments') @> (approved.record#>'{binding,allowed_environments}')))
+      ))
       AND i.released_at IS NOT NULL
       AND p.head = $2 AND g.repository_id = ($3::jsonb->>'repository_id')::uuid AND p.task_ref = $6 AND g.task_ref = $6
       AND l.execution_spec#>>'{source,repository_binding_generation}' = $3::jsonb->>'binding_generation'

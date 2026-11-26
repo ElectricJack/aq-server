@@ -125,14 +125,22 @@ impl<P: GraphPayload> Dispatch<'_, P> {
             let id = self.payload.operation_id();
             let bytes = self.body(id, &operations)?;
             let service = settlement_service_identity(graph, subject.workspace)?;
-            journal::Admission {
+            if !(journal::Admission {
                 id,
                 record: &record,
                 service: &service,
                 body: &bytes,
-            }
+                #[cfg(feature = "project_environments")]
+                needs_task: (P::KIND == needs::ACTION).then_some((
+                    subject.id,
+                    self.action.supervisor.is_none() && self.action.agent.is_none(),
+                )),
+            })
             .retain(self.state, self.user)
-            .await?;
+            .await?
+            {
+                return Ok(existing::disposition(Disposition::Rejected));
+            }
             // After retaining the intent, a transport failure leaves the effect unknown.
             let posted = tokio::time::timeout(
                 Duration::from_secs(3),

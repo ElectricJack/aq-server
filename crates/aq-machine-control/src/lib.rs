@@ -721,3 +721,5 @@ pub async fn attempt_released(pool: &sqlx::PgPool, attempt: uuid::Uuid, node: uu
         .await;
     released.ok().flatten().unwrap_or(false)
 }
+
+pub mod task_needs;

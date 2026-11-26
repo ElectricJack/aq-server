@@ -19,7 +19,7 @@ use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 #[cfg(feature = "delivery_playbook")]
-mod publication_retry;
+pub(super) mod publication_retry;
 
 const OWNER: &str = "aq.settlement-owner.auto.1";
 const ACTOR: &str = "aq.settlement.default-policy@1";
