@@ -105,7 +105,7 @@ pub async fn release(pool: &PgPool, attempt: Uuid, now_ms: i64) -> Result<bool, 
     sqlx::query("SET LOCAL lock_timeout='2s'")
         .execute(&mut *tx)
         .await?;
-    sqlx::query("SELECT n.id FROM nodes n JOIN execution_attempts a ON a.node_id=n.id WHERE a.attempt_id=$1 FOR UPDATE OF n")
+    sqlx::query("SELECT n.id FROM nodes n JOIN execution_attempts a ON a.node_id=n.id WHERE a.attempt_id=$1 FOR KEY SHARE OF n")
         .bind(attempt)
         .fetch_optional(&mut *tx)
         .await?;

@@ -369,7 +369,7 @@ pub async fn lock_release(
     ] {
         sqlx::query(setting).execute(&mut *conn).await?;
     }
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_one(&mut *conn)
         .await?;

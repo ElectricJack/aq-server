@@ -101,7 +101,7 @@ async fn media_actual_list_probes_outside_sql_and_body_hash_is_checked_only_on_c
 async fn wait_for_node_waiters(pool: &sqlx::PgPool, minimum: i64) {
     tokio::time::timeout(std::time::Duration::from_millis(700),async{
         loop{
-            let count:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT revoked_at IS NOT NULL FROM nodes%FOR UPDATE'")
+            let count:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT revoked_at IS NOT NULL FROM nodes%FOR KEY SHARE'")
                 .fetch_one(pool).await.unwrap();
             if count>=minimum{return;}
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;

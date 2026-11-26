@@ -66,7 +66,7 @@ async fn runtime(
     AppError,
 > {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::read_current_node(&mut tx, auth).await?;
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if auth.id() != request.identity.node_id {
         return Err(refused());
     }
@@ -527,7 +527,7 @@ async fn offers(
     }
     drop(gate);
     let mut occupancy = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::read_current_node(&mut occupancy, auth).await?;
+    crate::worker_api::lock_current_node(&mut occupancy, auth).await?;
     let free = aq_machine_control::recent::poll_free(&mut occupancy, auth.id(), slot);
     let free = free.await.map_err(crate::machine_api::mapped)?;
     occupancy.commit().await.map_err(db)?;

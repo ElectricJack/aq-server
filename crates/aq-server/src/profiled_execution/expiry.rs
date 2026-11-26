@@ -64,7 +64,10 @@ impl ReworkSweep {
             match super::settlement::record_replacement_facts(state, report).await {
                 Ok(facts) if facts.changed => progress.closed += 1,
                 Ok(_) => {}
-                Err(_) => progress.refused += 1,
+                Err(error) => {
+                    tracing::warn!(%report, ?error, "replacement facts not recorded");
+                    progress.refused += 1
+                }
             }
         }
         Ok(progress)

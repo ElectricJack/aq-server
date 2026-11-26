@@ -553,6 +553,68 @@ async fn the_sweep_reconciles_a_held_result_and_only_an_override_lets_it_be_repl
     assert_eq!(env.writes.load(Ordering::SeqCst), 0);
 }
 
+/// A successful result the delivery policy held (here: no changes) is reconciled like a failed
+/// one: the sweep proves its pushed source and quiescent effects, so an owner override can
+/// replace it. Before, `held_report` ignored it and an approved retry waited forever on
+/// `replacement_effects_unreconciled`. A merge that may have landed still excludes it.
+#[tokio::test]
+async fn the_sweep_reconciles_a_successful_result_held_by_policy() {
+    use aq_server::profiled_execution::{
+        expiry::ReworkSweep,
+        replacement::{self, Assessment},
+    };
+    let history = RetryHistory::new().await;
+    let (pool, task, attempt, result) =
+        (&history.pool, history.task, history.attempt, history.result);
+    super::super::replacement::seed_native_offer_clock(pool, attempt).await;
+    let facts = || async {
+        sqlx::query_as::<_,(String,String)>("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(pool).await.unwrap()
+    };
+    let assess = || replacement::assess_task(&history.env.f.state, task, NOW + 1);
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','policy',$3)")
+        .bind(result).bind(task).bind(NOW as i64).execute(pool).await.unwrap();
+    let merge = history
+        .record("pull_request.merge", "running", result)
+        .await;
+    ReworkSweep::default()
+        .tick(&history.env.f.state)
+        .await
+        .unwrap();
+    assert_eq!(facts().await, ("pending".into(), "unknown".into()));
+    sqlx::query("UPDATE playbook_host_operations SET status='refused',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
+        .bind(merge).bind(NOW as i64).execute(pool).await.unwrap();
+    ReworkSweep::default()
+        .tick(&history.env.f.state)
+        .await
+        .unwrap();
+    assert_eq!(facts().await, ("retained".into(), "quiescent".into()));
+    assert_eq!(
+        assess().await.unwrap(),
+        Assessment::Blocked("delivery_policy_held")
+    );
+    let o = aq_machine_control::holds::Override {
+        operation_id: Uuid::new_v4(),
+        attempt_id: attempt,
+        hold_code: "delivery_policy_held".into(),
+        reason: "The probe passed; run it again".into(),
+        actor: "owner@localhost".into(),
+        recorded_at_ms: NOW as i64 + 1,
+        spent_microunits: None,
+    };
+    let mut conn = pool.acquire().await.unwrap();
+    aq_machine_control::holds::record_override(&mut conn, task, &o, chrono::Utc::now())
+        .await
+        .unwrap();
+    drop(conn);
+    let Assessment::Replace(r) = assess().await.unwrap() else {
+        panic!("an overridden, reconciled policy hold is replaceable");
+    };
+    assert_eq!((r.predecessor, r.needs_release), (attempt, true));
+    assert!(history.env.holds_task().await);
+    assert_eq!(history.env.writes.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     use http_body_util::BodyExt;

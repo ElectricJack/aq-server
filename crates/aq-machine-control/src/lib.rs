@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub use aq_intelligence_config::AttestationTime;
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
+pub mod allocation;
 pub mod attempts;
 pub mod closed_launch;
 pub mod fresh;
@@ -243,30 +244,25 @@ pub async fn machine_of(conn: &mut PgConnection, node: Uuid) -> Result<MachineNo
     })
 }
 
-/// Review I3: the per-machine-key transaction lock that serializes claiming,
-/// minting and revocation. A caller that also locks node rows takes it first.
-/// N1/N2: an owner action that locks node rows waits at most this long for each.
-/// It bounds how long the action can hold the rows it already has.
-pub const OWNER_LOCK_TIMEOUT: &str = "1s";
+/// N1/N2: an owner action that locks node rows waits at most
+/// `owner_lock_timeout_ms` (Settings) for each. It bounds how long the action
+/// can hold the rows it already has.
 async fn bound(tx: &mut PgConnection) -> Result<(), Error> {
+    let wait = limits::pg_ms(limits::current().owner_lock_timeout_ms);
     sqlx::query("SELECT set_config('lock_timeout',$1,true)")
-        .bind(OWNER_LOCK_TIMEOUT)
+        .bind(wait)
         .execute(&mut *tx)
         .await?;
     Ok(())
 }
-/// N1: locks the live node rows (all of them, or one machine's) in id order, so
-/// two owner actions that lock several nodes wait for each other instead of
-/// deadlocking (40P01). Callers then update the rows they hold.
-pub async fn lock_live_nodes(tx: &mut PgConnection, key: Option<&str>) -> Result<(), Error> {
-    sqlx::query(
-        "SELECT id FROM nodes WHERE revoked_at IS NULL AND ($1::text IS NULL OR machine_key=$1) \
-         ORDER BY id FOR UPDATE",
+/// N1: the live nodes (all of them, or one machine's) in id order.
+async fn live_nodes(tx: &mut PgConnection, key: Option<&str>) -> Result<Vec<Uuid>, Error> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM nodes WHERE revoked_at IS NULL AND ($1::text IS NULL OR machine_key=$1) ORDER BY id",
     )
     .bind(key)
-    .execute(&mut *tx)
-    .await?;
-    Ok(())
+    .fetch_all(&mut *tx)
+    .await?)
 }
 
 pub async fn lock_machine(tx: &mut PgConnection, key: &str) -> Result<(), Error> {
@@ -303,15 +299,20 @@ pub async fn claim_key(tx: &mut PgConnection, node: Uuid, key: &str) -> Result<M
     if taken {
         return Err(Error::KeyInUse);
     }
-    sqlx::query("UPDATE nodes SET machine_key=$2, slot=1 WHERE id=$1")
-        .bind(node)
-        .bind(key)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
-            Some(code) if code == "23505" => Error::KeyInUse,
-            _ => Error::Db(e),
-        })?;
+    // The credential check no longer excludes a concurrent claim by the same node.
+    let claimed =
+        sqlx::query("UPDATE nodes SET machine_key=$2, slot=1 WHERE id=$1 AND machine_key IS NULL")
+            .bind(node)
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
+                Some(code) if code == "23505" => Error::KeyInUse,
+                _ => Error::Db(e),
+            })?;
+    if claimed.rows_affected() != 1 {
+        return Err(Error::Invalid("not_slot_one"));
+    }
     Ok(MachineNode {
         node_id: node,
         machine_key: Some(key.into()),
@@ -436,18 +437,13 @@ pub async fn set_desired(
         now,
     } = change;
     let next = expected_generation as i64 + 1;
-    // Review I2: touch the machine's live node rows first. A publication holds
-    // its node row lock while it re-checks the gate, so it either commits
+    // Review I2: fence the machine's live nodes first. A publication holds
+    // its allocation row while it re-checks the gate, so it either commits
     // before this change (and its attempt is then handed off) or fails to
     // serialize after it. N1: locked in id order, with a bounded wait.
     bound(tx).await?;
-    lock_live_nodes(tx, Some(key)).await?;
-    sqlx::query(
-        "UPDATE nodes SET machine_key=machine_key WHERE machine_key=$1 AND revoked_at IS NULL",
-    )
-    .bind(key)
-    .execute(&mut *tx)
-    .await?;
+    let nodes = live_nodes(tx, Some(key)).await?;
+    allocation::fence(tx, Some(&nodes)).await?;
     let done = if expected_generation == 1 {
         sqlx::query(
             "INSERT INTO machine_controls(machine_key,desired,generation,operation_id,updated_at,updated_by) \
@@ -610,13 +606,18 @@ pub const MACHINE_NODE: &str =
     "machine_node: this node belongs to a service machine; revoke the whole machine by its key";
 
 /// `machine` is a key or `node:<uuid>`. Sets revoked_at on every live node of
-/// it and deletes its machine_controls row. Returns the number of nodes revoked.
+/// it and deletes its machine_controls row. Returns the nodes revoked; once
+/// the caller commits, it calls [`drain_revoked`] for them.
 /// A `node:` that holds a machine key is refused (`MACHINE_NODE`).
+///
+/// The node rows are locked FOR NO KEY UPDATE, which worker credential checks
+/// (FOR KEY SHARE) do not block: the revocation commits at once, and from then
+/// on no new check passes, so a stream of checks cannot hold it off.
 pub async fn revoke_machine(
     tx: &mut PgConnection,
     machine: &str,
     now: DateTime<Utc>,
-) -> Result<u32, Error> {
+) -> Result<Vec<Uuid>, Error> {
     bound(tx).await?;
     if let Some(id) = machine.strip_prefix("node:") {
         let id: Uuid = id.parse().map_err(|_| Error::Invalid("machine"))?;
@@ -624,7 +625,7 @@ pub async fn revoke_machine(
         // locks this row first) is seen or waits for the revocation.
         if has_format(tx).await? {
             let key: Option<Option<String>> = sqlx::query_scalar(
-                "SELECT machine_key FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE",
+                "SELECT machine_key FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR NO KEY UPDATE",
             )
             .bind(id)
             .fetch_optional(&mut *tx)
@@ -641,13 +642,18 @@ pub async fn revoke_machine(
         .fetch_all(&mut *tx)
         .await?;
         lost::release_revoked(tx, &revoked, now).await?;
-        return Ok(revoked.len() as u32);
+        return Ok(revoked);
     }
     if !valid_machine_key(machine) {
         return Err(Error::Invalid("machine"));
     }
     lock_machine(tx, machine).await?;
-    lock_live_nodes(tx, Some(machine)).await?;
+    sqlx::query(
+        "SELECT id FROM nodes WHERE revoked_at IS NULL AND machine_key=$1 ORDER BY id FOR NO KEY UPDATE",
+    )
+    .bind(machine)
+    .execute(&mut *tx)
+    .await?;
     let revoked: Vec<Uuid> = sqlx::query_scalar(
         "UPDATE nodes SET revoked_at=$2 WHERE machine_key=$1 AND revoked_at IS NULL RETURNING id",
     )
@@ -660,23 +666,65 @@ pub async fn revoke_machine(
         .bind(machine)
         .execute(&mut *tx)
         .await?;
-    Ok(revoked.len() as u32)
+    Ok(revoked)
 }
 
-/// Fix round 2 (review I2): the publication's first lock, on its node row. A
-/// serialization failure here means a machine change (Stop, Drain) or an
-/// availability change committed after the transaction began, and a lock
-/// timeout means one is still open: `Ok(false)`, which publishes no offer.
-pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
-    management::lock(tx).await?;
-    let locked = sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(node)
+/// After a revocation committed: waits until every worker transaction that
+/// passed its credential check before the revocation has ended. Taking the
+/// rows FOR UPDATE waits for their FOR KEY SHARE checks, and no new check can
+/// pass any more. Then the revocation's effects are applied again, for what
+/// those transactions committed meanwhile (a permit, a claimed attempt).
+/// Each try waits `revoke_drain_wait_ms`, at most `revoke_drain_tries` tries
+/// (Settings); `Refused` when they still run.
+pub async fn drain_revoked(
+    pool: &sqlx::PgPool,
+    nodes: &[Uuid],
+    now: DateTime<Utc>,
+) -> Result<(), Error> {
+    if nodes.is_empty() {
+        return Ok(());
+    }
+    let limits = limits::current();
+    for _ in 0..limits.revoke_drain_tries {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT set_config('lock_timeout',$1,true)")
+            .bind(limits::pg_ms(limits.revoke_drain_wait_ms))
+            .execute(&mut *tx)
+            .await?;
+        let locked = sqlx::query("SELECT id FROM nodes WHERE id=ANY($1) ORDER BY id FOR UPDATE")
+            .bind(nodes)
+            .execute(&mut *tx)
+            .await;
+        match locked {
+            Ok(_) => {}
+            Err(e) if is_lock_timeout(&e) => continue,
+            Err(e) => return Err(e.into()),
+        }
+        // Fires `delegated_node_revoke` again for permits issued meanwhile.
+        sqlx::query(
+            "UPDATE nodes SET revoked_at=revoked_at WHERE id=ANY($1) AND revoked_at IS NOT NULL",
+        )
+        .bind(nodes)
         .execute(&mut *tx)
-        .await;
-    match locked {
-        Ok(_) => Ok(true),
-        Err(e) if is_serialization_failure(&e) || is_lock_timeout(&e) => Ok(false),
-        Err(e) => Err(e.into()),
+        .await?;
+        lost::release_revoked(&mut tx, nodes, now).await?;
+        return Ok(tx.commit().await?);
+    }
+    Err(Error::Refused(
+        "revoke_draining: the revocation is recorded; worker requests authorized before it are still running",
+    ))
+}
+
+/// Fix round 2 (review I2): the publication's first lock, on its allocation
+/// row (and its machine's, under a machine maximum). A serialization failure
+/// here means a machine change (Stop, Drain), an availability or a Settings
+/// change committed after the transaction began, and a lock timeout means one
+/// is still open: `Ok(false)`, which publishes no offer.
+pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
+    match allocation::lock(tx, node).await {
+        Ok(()) => Ok(true),
+        Err(Error::Db(e)) if is_serialization_failure(&e) || is_lock_timeout(&e) => Ok(false),
+        Err(e) => Err(e),
     }
 }
 /// SQLSTATE 55P03: the publication's `lock_timeout` passed waiting for the row.

@@ -15,36 +15,22 @@ pub async fn existing(
     request: &Poll,
     slot: u32,
 ) -> Result<Option<OfferDelivery>, AppError> {
-    // Most polls have nothing to redeliver and share the node row with their
-    // sibling slots. Loading an offer locks that row FOR UPDATE, and two slots
-    // that each upgrade a shared lock wait for each other until one times out,
-    // the same one on every poll. A slot that finds an offer under the shared
-    // lock therefore releases it and looks again under the exclusive one.
-    let mut exclusive = false;
-    let (mut tx, attempt) = loop {
-        let mut tx = state.store.pool.begin().await.map_err(db)?;
-        if exclusive {
-            crate::worker_api::lock_current_node(&mut tx, auth).await?;
-        } else {
-            crate::worker_api::read_current_node(&mut tx, auth).await?;
-        }
-        if !slots::redelivery_allowed(&mut tx, auth.id())
-            .await
-            .map_err(mapped)?
-        {
-            return Ok(None);
-        }
-        let boot = request.identity.boot_id;
-        super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
-        let offered = slots::offered_attempt(&mut tx, auth.id(), request.after_offer, slot);
-        let Some(attempt) = offered.await.map_err(mapped)? else {
-            return Ok(None);
-        };
-        if exclusive {
-            break (tx, attempt);
-        }
-        tx.rollback().await.map_err(db)?;
-        exclusive = true;
+    let mut tx = state.store.pool.begin().await.map_err(db)?;
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    // No allocation lock: redelivery claims nothing new, so it neither waits
+    // for a sibling slot's publication nor for an owner fence. An offer
+    // redelivered as a Stop commits is an attempt the Stop already hands off.
+    if !slots::redelivery_allowed(&mut tx, auth.id())
+        .await
+        .map_err(mapped)?
+    {
+        return Ok(None);
+    }
+    let boot = request.identity.boot_id;
+    super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
+    let offered = slots::offered_attempt(&mut tx, auth.id(), request.after_offer, slot);
+    let Some(attempt) = offered.await.map_err(mapped)? else {
+        return Ok(None);
     };
     let view = crate::execution::authority::load_attempt_locked(
         state,

@@ -581,7 +581,7 @@ pub(crate) async fn fence_for_offer(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     frozen: &FrozenProjectBinding,
 ) -> Result<()> {
-    let node = sqlx::query("SELECT revoked_at,last_seen_at FROM nodes WHERE id=$1 FOR SHARE")
+    let node = sqlx::query("SELECT revoked_at,last_seen_at FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(frozen.node_id)
         .fetch_optional(&mut **tx)
         .await

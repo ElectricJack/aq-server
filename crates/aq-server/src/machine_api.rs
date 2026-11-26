@@ -134,10 +134,19 @@ async fn control(
     let handoff = mc::pending_handoffs(&mut conn, &key)
         .await
         .map_err(mapped)?;
-    let slots = if req.schema_version == 2 {
-        Some(mc::slots::count(&mut conn, node.id).await.map_err(mapped)?)
+    let (slots, limits) = if req.schema_version == 2 {
+        let limits = aq_role_settings::node_limits(&mut conn)
+            .await
+            .map_err(crate::error::db)?
+            .0;
+        let limits = aq_protocol::NodeLimits {
+            sandbox_headroom_bytes: limits.sandbox_headroom_bytes,
+            build_cache_keys_kept: u32::try_from(limits.build_cache_keys_kept).unwrap_or(u32::MAX),
+        };
+        let count = mc::slots::count(&mut conn, node.id).await.map_err(mapped)?;
+        (Some(count), Some(limits))
     } else {
-        None
+        (None, None)
     };
     drop(conn);
     state
@@ -152,6 +161,7 @@ async fn control(
         handoff,
         qualification: None,
         slots,
+        limits,
     }))
 }
 
