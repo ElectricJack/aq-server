@@ -21,32 +21,7 @@ pub async fn existing(
     request: &Poll,
     slot: u32,
 ) -> Result<Option<OfferDelivery>, AppError> {
-<<<<<<< HEAD
-    let poll = SlotPoll {
-        state,
-        auth,
-        request,
-        slot,
-=======
-    let mut tx = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::lock_current_node(&mut tx, auth).await?;
-    // No allocation lock: redelivery claims nothing new, so it neither waits
-    // for a sibling slot's publication nor for an owner fence. An offer
-    // redelivered as a Stop commits is an attempt the Stop already hands off.
-    if !slots::redelivery_allowed(&mut tx, auth.id())
-        .await
-        .map_err(mapped)?
-    {
-        return Ok(None);
-    }
-    let boot = request.identity.boot_id;
-    super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
-    let offered = slots::offered_attempt(&mut tx, auth.id(), request.after_offer, slot);
-    let Some(attempt) = offered.await.map_err(mapped)? else {
-        return Ok(None);
->>>>>>> refs/remotes/central/main
-    };
-    let Some((mut tx, attempt)) = poll.exclusively_offered_attempt().await? else {
+    let Some((mut tx, attempt)) = offered_attempt(state, auth, request, slot).await? else {
         return Ok(None);
     };
     let view = authority::load_attempt_locked(
@@ -79,58 +54,30 @@ pub async fn existing(
     Ok(Some(offer))
 }
 
-/// One slot's redelivery poll.
-struct SlotPoll<'a> {
-    state: &'a AppState,
-    auth: &'a AuthenticatedNode,
-    request: &'a Poll,
+/// The slot's offered attempt, with the transaction that found it.
+///
+/// No allocation lock: redelivery claims nothing new, so it neither waits for
+/// a sibling slot's publication nor for an owner fence. An offer redelivered
+/// as a Stop commits is an attempt the Stop already hands off.
+async fn offered_attempt(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &Poll,
     slot: u32,
-}
-
-impl SlotPoll<'_> {
-    /// The slot's offered attempt, with its transaction holding the node row
-    /// exclusively.
-    ///
-    /// Most polls have nothing to redeliver and share the node row with their
-    /// sibling slots. Loading an offer locks that row FOR UPDATE, and two slots
-    /// that each upgrade a shared lock wait for each other until one times out,
-    /// the same one on every poll. A slot that finds an offer under the shared
-    /// lock therefore releases it and looks again under the exclusive one.
-    async fn exclusively_offered_attempt(&self) -> Result<Option<(Tx, Uuid)>, AppError> {
-        let Some((shared, _)) = self.offered_attempt(NodeLock::Shared).await? else {
-            return Ok(None);
-        };
-        shared.rollback().await.map_err(db)?;
-        self.offered_attempt(NodeLock::Exclusive).await
+) -> Result<Option<(Tx, Uuid)>, AppError> {
+    let mut tx = state.store.pool.begin().await.map_err(db)?;
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    if !slots::redelivery_allowed(&mut tx, auth.id())
+        .await
+        .map_err(mapped)?
+    {
+        return Ok(None);
     }
-
-    /// Looks for the slot's offered attempt under `lock` on the node row.
-    async fn offered_attempt(&self, lock: NodeLock) -> Result<Option<(Tx, Uuid)>, AppError> {
-        let (state, auth) = (self.state, self.auth);
-        let mut tx = state.store.pool.begin().await.map_err(db)?;
-        match lock {
-            NodeLock::Exclusive => crate::worker_api::lock_current_node(&mut tx, auth).await?,
-            NodeLock::Shared => crate::worker_api::read_current_node(&mut tx, auth).await?,
-        };
-        if !slots::redelivery_allowed(&mut tx, auth.id())
-            .await
-            .map_err(mapped)?
-        {
-            return Ok(None);
-        }
-        let boot = self.request.identity.boot_id;
-        super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
-        let after = self.request.after_offer;
-        let offered = slots::offered_attempt(&mut tx, auth.id(), after, self.slot);
-        let attempt = offered.await.map_err(mapped)?;
-        Ok(attempt.map(|attempt| (tx, attempt)))
-    }
-}
-
-#[derive(Clone, Copy)]
-enum NodeLock {
-    Shared,
-    Exclusive,
+    let boot = request.identity.boot_id;
+    super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
+    let offered = slots::offered_attempt(&mut tx, auth.id(), request.after_offer, slot);
+    let attempt = offered.await.map_err(mapped)?;
+    Ok(attempt.map(|attempt| (tx, attempt)))
 }
 
 async fn hot_state(tx: &mut Tx, attempt: Uuid) -> Result<serde_json::Value, AppError> {
