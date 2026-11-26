@@ -61,7 +61,10 @@ pub fn routing() -> SourceRecord {
 /// the task and its result (`work.read`, with the result facts of catalog
 /// 2.3.0) and settles it with the delivery commands of that catalog: publish,
 /// open a pull request, wait for checks, merge, complete, return or hold. It
-/// asks no judgment of its own, so its judgments (none) run as playbook calls.
+/// may ask a structured judgment (`judgment.assess`), for example whether a
+/// result that changed nothing meets the task; whether and when to ask is the
+/// document's. Its judgments run as playbook calls, bounded by the budget the
+/// playbook gives and internal work's caps.
 /// Its scope is `project`, the only scope the catalog's contracts have; that
 /// one document serves every project is the namespace's `installation_routing`
 /// (see `routing()`). It is authored against catalog 2.3.0
@@ -75,6 +78,7 @@ pub fn delivery() -> SourceRecord {
     #[allow(unused_mut)]
     let mut commands = names(&[
         "work.read",
+        "judgment.assess",
         "work.complete",
         "work.return",
         "work.hold",
@@ -165,6 +169,7 @@ mod tests {
             commands,
             [
                 "branch.publish",
+                "judgment.assess",
                 "main.sync",
                 "pull_request.await_checks",
                 "pull_request.close",
@@ -177,11 +182,14 @@ mod tests {
                 "work.return"
             ]
         );
-        // Each command is covered by its capability, and nothing routes.
+        // Each command is covered by its capability, and nothing routes; the
+        // judgment's reconciliation comes with it, billed as a playbook call.
         for command in &record.commands {
             assert!(record.capabilities.contains(command), "{command}");
         }
+        assert!(record.capabilities.contains("operation.get"));
         assert!(!record.capabilities.contains("work.route"));
+        assert_eq!(record.judgment_purpose, Purpose::PlaybookCall);
         assert!(record.facts.is_empty());
         // The catalog 2.3.0 notes render for it, and its work.read has the
         // result facts the 2.2.0 one lacks.
@@ -257,6 +265,7 @@ mod tests {
                 "branch.publish",
                 "environment.admit",
                 "environment.build",
+                "judgment.assess",
                 "main.sync",
                 "pull_request.await_checks",
                 "pull_request.close",
