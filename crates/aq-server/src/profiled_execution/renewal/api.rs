@@ -8,13 +8,14 @@ use crate::{
 };
 use aq_admission::{control::ControlReply, transport::Renew};
 use aq_admission_sandbox::sandbox::{
-    GrantPhase, PermitContext, PhaseProfile, RunnerOperation, SandboxDocument,
+    GrantPhase, PermitContext, PhaseProfile, RunnerOperation, RunnerRenewalRequest,
+    RunnerRenewalResponse, SandboxDocument,
 };
 use axum::{
     Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, State, rejection::BytesRejection},
-    http::{HeaderMap, header},
+    http::{HeaderMap, HeaderValue, header},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -64,25 +65,7 @@ async fn renew_delegated(
     };
     runtime::require_attempts(auth, [request.permit.binding.attempt_id])?;
     runtime::require_binding(auth, &request.authority.grant.binding)?;
-    let reply =
-        if let Some(reply) = incarnation::renew_after_reboot(state, auth, &request, nonce).await? {
-            reply
-        } else {
-            match request.authority.profile {
-                PhaseProfile::PhaseV2 => {
-                    crate::profiled_execution::phase_execution::renew_delegated(
-                        state, auth, &request, nonce,
-                    )
-                    .await?
-                }
-                PhaseProfile::PhaseRefreshV1 => {
-                    crate::profiled_execution::phase_refresh_execution::renew_delegated(
-                        state, auth, &request, nonce,
-                    )
-                    .await?
-                }
-            }
-        };
+    let reply = delegated_reply(state, auth, &request, nonce).await?;
     // The sibling headers carry the committed operation's pre-mutation
     // context for B6a2; the owner response body remains unchanged. On exact
     // replay this is the original request context, not a fresh lease.
@@ -97,19 +80,35 @@ async fn renew_delegated(
         None => runtime::now(state)?,
     };
     let mut response = Json(SandboxDocument::RunnerRenewalResponse(reply)).into_response();
-    response.headers_mut().insert(
-        "aq-permit-context",
-        serde_json::to_string(&context)
-            .map_err(|_| AppError::Internal)?
-            .parse()
-            .map_err(|_| AppError::Internal)?,
-    );
-    response.headers_mut().insert(
-        "aq-server-now-ms",
-        server_now
-            .to_string()
-            .parse()
-            .map_err(|_| AppError::Internal)?,
-    );
+    let context = serde_json::to_string(&context).map_err(|_| AppError::Internal)?;
+    let headers = response.headers_mut();
+    headers.insert("aq-permit-context", header_value(context)?);
+    headers.insert("aq-server-now-ms", header_value(server_now.to_string())?);
     Ok(response)
+}
+fn header_value(text: String) -> Result<HeaderValue, AppError> {
+    text.parse().map_err(|_| AppError::Internal)
+}
+/// A rebooted runner's replay wins; otherwise the permit's phase profile renews.
+async fn delegated_reply(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &RunnerRenewalRequest,
+    nonce: Uuid,
+) -> Result<RunnerRenewalResponse, AppError> {
+    if let Some(reply) = incarnation::renew_after_reboot(state, auth, request, nonce).await? {
+        return Ok(reply);
+    }
+    match request.authority.profile {
+        PhaseProfile::PhaseV2 => {
+            crate::profiled_execution::phase_execution::renew_delegated(state, auth, request, nonce)
+                .await
+        }
+        PhaseProfile::PhaseRefreshV1 => {
+            crate::profiled_execution::phase_refresh_execution::renew_delegated(
+                state, auth, request, nonce,
+            )
+            .await
+        }
+    }
 }

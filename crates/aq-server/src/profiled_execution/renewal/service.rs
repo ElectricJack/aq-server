@@ -1,8 +1,10 @@
 //! Atomic same-grant renewal. All filesystem/Git/Graph reads precede SQL locks.
 use super::{
-    current,
+    current::{self, Current},
     history::{self, Body, Stored},
-    now, observations, pinned,
+    now,
+    observations::{self, Observed},
+    pinned,
 };
 use crate::{AppState, error::AppError, worker_api::AuthenticatedNode};
 use aq_admission::{
@@ -64,61 +66,36 @@ pub async fn renew(
         .as_ref()
         .ok_or_else(|| refused())?
         .expires_at_ms;
-    let hard = after.original.execution_deadline_ms;
-    let ceiling = hard
-        .min(observed.ceiling()?)
-        .min(facts.inventory_expires_at_ms);
+    let hard_deadline = after.original.execution_deadline_ms;
+    let window = Window {
+        previous_expiry,
+        hard_deadline,
+        ceiling: hard_deadline
+            .min(observed.ceiling()?)
+            .min(facts.inventory_expires_at_ms),
+    };
     let stored = if let Some(stored) = history::lookup(&mut tx, auth.id(), request).await? {
-        validate_replay(
-            &stored.body,
-            &after.versions,
-            previous_expiry,
-            hard,
-            ceiling,
-        )?;
+        validate_replay(&stored.body, &after.versions, &window)?;
         stored
     } else {
         ensure_journal_advanced_locked(&mut tx, auth.id(), request).await?;
-        let issued = now(state)?;
-        observed.fresh_at(issued)?;
-        let expiry = issued
+        let issued_at_ms = now(state)?;
+        observed.fresh_at(issued_at_ms)?;
+        let expires_at_ms = issued_at_ms
             .checked_add(10_000)
             .ok_or_else(|| refused())?
-            .min(ceiling);
-        if issued >= previous_expiry || expiry <= previous_expiry {
+            .min(window.ceiling);
+        if issued_at_ms >= previous_expiry || expires_at_ms <= previous_expiry {
             return Err(refused());
         }
-        let versions = extend_grant_locked(&mut tx, request, &mut after, expiry).await?;
-        let stored = Stored::new(Body {
-            operation_id: request.operation_id,
-            binding: request.binding.clone(),
-            grant_id: request.grant_id,
-            reservation_id: request.reservation_id,
-            guardian_id: request.guardian_id,
-            launch_id: request.launch_id,
-            journal_revision: request.journal_revision,
-            execution_deadline_ms: hard,
-            issued_at_ms: issued,
-            expires_at_ms: expiry,
+        let versions = extend_grant_locked(&mut tx, request, &mut after, expires_at_ms).await?;
+        let issue = Issue {
+            hard_deadline,
+            issued_at_ms,
+            expires_at_ms,
             versions,
-            health: facts.health,
-            registry_revision: facts.registry_revision,
-            inventory_revision: facts.inventory_revision,
-            binding_observation_digest: aq_selection::digest(&observed.binding.binding_observation)
-                .map_err(|_| AppError::Internal)?,
-            task_observation_digest: observed.task.response_digest.clone(),
-            source_observation_digest: aq_selection::digest(&observed.source)
-                .map_err(|_| AppError::Internal)?,
-            material_observed_at_ms: observed.file_received_at_ms,
-            task_observed_at_ms: observed.task.observed_at_ms,
-            task_received_at_ms: observed.task.received_at_ms,
-            task_expires_at_ms: observed.task.expires_at_ms,
-            source_observed_at_ms: observed.source.observed_at_ms(),
-            source_expires_at_ms: observed.source.expires_at_ms(),
-            binding_observed_at_ms: observed.binding.binding_observation.observed_at_ms,
-            binding_expires_at_ms: observed.binding.binding_observation.expires_at_ms,
-            inventory_expires_at_ms: facts.inventory_expires_at_ms,
-        })?;
+        };
+        let stored = new_receipt(request, &observed, facts, issue)?;
         let value = history::reserve_quota(&mut tx, auth.id(), &request.binding, &stored).await?;
         history::insert(&mut tx, auth.id(), request, value).await?;
         stored
@@ -127,7 +104,7 @@ pub async fn renew(
     // new permit must all still be live; rollback cannot resurrect an expired one.
     let time = now(state)?;
     observed.fresh_at(time)?;
-    if time >= previous_expiry || time >= ceiling {
+    if time >= previous_expiry || time >= window.ceiling {
         return Err(refused());
     }
     let reply = stored.deliver(nonce, time)?;
@@ -135,23 +112,68 @@ pub async fn renew(
     Ok(reply)
 }
 
-fn validate_replay(
-    body: &Body,
-    current_versions: &Versions,
+/// Bounds shared by a replayed and a newly issued renewal of the same grant.
+struct Window {
     previous_expiry: u64,
     hard_deadline: u64,
     ceiling: u64,
-) -> Result<(), AppError> {
-    if body.expires_at_ms != previous_expiry
-        || body.versions.grant_revision != current_versions.grant_revision
-        || body.versions.record_revision > current_versions.record_revision
-        || body.versions.authority_revision > current_versions.authority_revision
-        || body.execution_deadline_ms != hard_deadline
-        || body.expires_at_ms > ceiling
+}
+fn validate_replay(body: &Body, current: &Versions, window: &Window) -> Result<(), AppError> {
+    if body.expires_at_ms != window.previous_expiry
+        || body.versions.grant_revision != current.grant_revision
+        || body.versions.record_revision > current.record_revision
+        || body.versions.authority_revision > current.authority_revision
+        || body.execution_deadline_ms != window.hard_deadline
+        || body.expires_at_ms > window.ceiling
     {
         return Err(refused());
     }
     Ok(())
+}
+/// The lifetime and revisions this renewal actually issued.
+struct Issue {
+    hard_deadline: u64,
+    issued_at_ms: u64,
+    expires_at_ms: u64,
+    versions: Versions,
+}
+fn new_receipt(
+    request: &Renew,
+    observed: &Observed,
+    facts: Current,
+    issue: Issue,
+) -> Result<Stored, AppError> {
+    let binding = &observed.binding.binding_observation;
+    Stored::new(Body {
+        operation_id: request.operation_id,
+        binding: request.binding.clone(),
+        grant_id: request.grant_id,
+        reservation_id: request.reservation_id,
+        guardian_id: request.guardian_id,
+        launch_id: request.launch_id,
+        journal_revision: request.journal_revision,
+        execution_deadline_ms: issue.hard_deadline,
+        issued_at_ms: issue.issued_at_ms,
+        expires_at_ms: issue.expires_at_ms,
+        versions: issue.versions,
+        health: facts.health,
+        registry_revision: facts.registry_revision,
+        inventory_revision: facts.inventory_revision,
+        binding_observation_digest: aq_selection::digest(binding)
+            .map_err(|_| AppError::Internal)?,
+        task_observation_digest: observed.task.response_digest.clone(),
+        source_observation_digest: aq_selection::digest(&observed.source)
+            .map_err(|_| AppError::Internal)?,
+        material_observed_at_ms: observed.file_received_at_ms,
+        task_observed_at_ms: observed.task.observed_at_ms,
+        task_received_at_ms: observed.task.received_at_ms,
+        task_expires_at_ms: observed.task.expires_at_ms,
+        source_observed_at_ms: observed.source.observed_at_ms(),
+        source_expires_at_ms: observed.source.expires_at_ms(),
+        binding_observed_at_ms: binding.observed_at_ms,
+        binding_expires_at_ms: binding.expires_at_ms,
+        inventory_expires_at_ms: facts.inventory_expires_at_ms,
+    })
 }
 
 async fn ensure_journal_advanced_locked(
@@ -204,11 +226,7 @@ async fn extend_grant_locked(
         .fetch_one(&mut **tx)
         .await
         .map_err(|_| AppError::Internal)?;
-    let versions = Versions {
-        record_revision: row.get::<i64, _>("record_revision") as u64,
-        authority_revision: row.get::<i64, _>("authority_revision") as u64,
-        grant_revision: row.get::<i64, _>("grant_revision") as u64,
-    };
+    let versions = pinned::versions(&row);
     if versions.grant_revision <= pinned.versions.grant_revision {
         return Err(refused());
     }

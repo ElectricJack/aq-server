@@ -5,6 +5,7 @@ use crate::error::AppError;
 use aq_admission::{
     Digest, LaunchBinding,
     control::{DeliveryStamp, RenewedAuthority, Versions},
+    scoped_presence::AuthorityAnchor,
     transport::{DeliveryClock, Renew},
 };
 use aq_session_protocol::Validate;
@@ -60,26 +61,31 @@ enum Kind {
 fn invalid() -> AppError {
     AppError::Conflict("renewal receipt identity or history changed".into())
 }
+fn ensure(consistent: bool) -> Result<(), AppError> {
+    if consistent { Ok(()) } else { Err(invalid()) }
+}
+fn request_digest(request: &Renew) -> Result<Digest, AppError> {
+    aq_selection::digest(request).map_err(|_| AppError::Internal)
+}
 impl Body {
     fn validate_identity(&self) -> Result<(), AppError> {
-        if [
+        let ids = [
             self.operation_id,
             self.grant_id,
             self.reservation_id,
             self.guardian_id,
             self.launch_id,
-        ]
-        .iter()
-        .any(Uuid::is_nil)
-            || self.journal_revision == 0
-            || self.journal_revision > i64::MAX as u64
-            || self.versions.grant_revision == 0
-            || self.registry_revision == 0
-            || self.inventory_revision == 0
-        {
-            return Err(invalid());
-        }
-        Ok(())
+        ];
+        let revisions = [
+            self.versions.grant_revision,
+            self.registry_revision,
+            self.inventory_revision,
+        ];
+        ensure(
+            !ids.iter().any(Uuid::is_nil)
+                && (1..=i64::MAX as u64).contains(&self.journal_revision)
+                && !revisions.contains(&0),
+        )
     }
     fn validate_lifetime(&self) -> Result<(), AppError> {
         let ceilings = [
@@ -89,13 +95,13 @@ impl Body {
             self.binding_expires_at_ms,
             self.inventory_expires_at_ms,
         ];
-        if self.issued_at_ms == 0
-            || self.expires_at_ms <= self.issued_at_ms
-            || ceilings.iter().any(|ceiling| self.expires_at_ms > *ceiling)
-        {
-            return Err(invalid());
-        }
-        Ok(())
+        ensure(
+            self.issued_at_ms != 0
+                && self.expires_at_ms > self.issued_at_ms
+                && ceilings
+                    .iter()
+                    .all(|ceiling| self.expires_at_ms <= *ceiling),
+        )
     }
     fn validate_observations(&self) -> Result<(), AppError> {
         let observations = [
@@ -105,16 +111,21 @@ impl Body {
             (self.binding_observed_at_ms, self.issued_at_ms),
             (self.health.evaluated_at_ms, self.issued_at_ms),
         ];
-        if observations
-            .iter()
-            .any(|(observed, received)| *observed == 0 || observed > received)
-            || self.task_received_at_ms > self.issued_at_ms
-            || self.health.matching_sources > 1024
-            || self.health.state == super::health::State::Denied
-        {
-            return Err(invalid());
-        }
-        Ok(())
+        let ordered = |&(observed, received): &(u64, u64)| observed != 0 && observed <= received;
+        ensure(
+            observations.iter().all(ordered)
+                && self.task_received_at_ms <= self.issued_at_ms
+                && self.health.matching_sources <= 1024
+                && self.health.state != super::health::State::Denied,
+        )
+    }
+    /// This receipt is the one a scoped presence anchor names for the grant.
+    fn anchors(&self, binding: &LaunchBinding, grant: Uuid, anchor: &AuthorityAnchor) -> bool {
+        self.binding == *binding
+            && self.grant_id == grant
+            && self.operation_id == anchor.operation_id
+            && self.versions.grant_revision == anchor.grant_revision
+            && self.expires_at_ms == anchor.expires_at_ms
     }
 }
 impl Stored {
@@ -130,20 +141,12 @@ impl Stored {
     fn validate(&self) -> Result<(), AppError> {
         self.body.binding.validate().map_err(|_| invalid())?;
         self.body.versions.validate().map_err(|_| invalid())?;
-        if self.schema_version != 1 {
-            return Err(invalid());
-        }
+        ensure(self.schema_version == 1)?;
         self.body.validate_identity()?;
         self.body.validate_lifetime()?;
         self.body.validate_observations()?;
-        if serde_json::to_vec(self)
-            .map_err(|_| AppError::Internal)?
-            .len()
-            > 16384
-        {
-            return Err(invalid());
-        }
-        Ok(())
+        let encoded = serde_json::to_vec(self).map_err(|_| AppError::Internal)?;
+        ensure(encoded.len() <= 16384)
     }
     pub fn decode(value: Value) -> Result<Self, AppError> {
         let result: Self = serde_json::from_value(value).map_err(|_| invalid())?;
@@ -163,9 +166,7 @@ impl Stored {
     pub fn deliver(&self, nonce: Uuid, now: u64) -> Result<RenewedAuthority, AppError> {
         self.validate()?;
         let b = &self.body;
-        if now < b.issued_at_ms {
-            return Err(invalid());
-        }
+        ensure(now >= b.issued_at_ms)?;
         let reply = RenewedAuthority {
             schema_version: 1,
             operation_id: b.operation_id,
@@ -195,18 +196,12 @@ pub async fn lookup(
 ) -> Result<Option<Stored>, AppError> {
     let row=sqlx::query("SELECT kind,request_digest,response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 FOR SHARE").bind(node).bind(request.operation_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?;
     let Some(row) = row else { return Ok(None) };
-    if row.get::<String, _>("kind") != "renew"
-        || row.get::<String, _>("request_digest")
-            != aq_selection::digest(request)
-                .map_err(|_| AppError::Internal)?
-                .as_str()
-    {
-        return Err(invalid());
-    }
+    ensure(
+        row.get::<String, _>("kind") == "renew"
+            && row.get::<String, _>("request_digest") == request_digest(request)?.as_str(),
+    )?;
     let stored = Stored::decode(row.get("response"))?;
-    if !stored.matches(request) {
-        return Err(invalid());
-    }
+    ensure(stored.matches(request))?;
     Ok(Some(stored))
 }
 /// The counter is acknowledged by the server, not a claimed worker journal
@@ -218,23 +213,18 @@ pub(crate) async fn latest_renewal_revision_locked(
     binding: &LaunchBinding,
 ) -> Result<Option<u64>, AppError> {
     binding.validate().map_err(|_| invalid())?;
-    if !matches!(binding.session,aq_admission::SessionIdentity::Remote{node_id,..}if node_id==node)
-    {
-        return Err(invalid());
-    }
+    ensure(
+        matches!(binding.session,aq_admission::SessionIdentity::Remote{node_id,..}if node_id==node),
+    )?;
     // The node PK prefix is bounded by this API's finite node quota. LIMIT257
     // additionally bounds decoding/rows for one attempt even on corrupt data.
     let rows=sqlx::query("SELECT response FROM profiled_execution_receipts WHERE node_id=$1 AND kind='renew' AND (COALESCE(response#>>'{body,binding,attempt_id}',response#>>'{body,grant,binding,attempt_id}')=$2 OR COALESCE(response#>>'{body,binding,attempt_id}',response#>>'{body,grant,binding,attempt_id}') IS NULL) ORDER BY operation_id LIMIT 257 FOR SHARE").bind(node).bind(binding.attempt_id.to_string()).fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
-    if rows.len() > MAX_PER_ATTEMPT {
-        return Err(invalid());
-    }
+    ensure(rows.len() <= MAX_PER_ATTEMPT)?;
     let mut latest = None;
     for row in rows {
         let stored = Stored::decode(row.get("response"))?;
-        if stored.body.binding != *binding {
-            return Err(invalid());
-        }
-        latest = Some(latest.unwrap_or(0_u64).max(stored.body.journal_revision));
+        ensure(stored.body.binding == *binding)?;
+        latest = latest.max(Some(stored.body.journal_revision));
     }
     Ok(latest)
 }
@@ -258,19 +248,12 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for HistoryUsage {
 }
 impl HistoryUsage {
     fn ensure_capacity(&self, incoming: i64) -> Result<(), AppError> {
-        if incoming > 32768
-            || self.global_count >= MAX_GLOBAL
-            || self.node_count >= MAX_PER_NODE
-            || self.attempt_count >= MAX_PER_ATTEMPT as i64
-            || self
-                .global_bytes
-                .checked_add(incoming)
-                .is_none_or(|n| n > 67_108_864)
-            || self
-                .node_bytes
-                .checked_add(incoming)
-                .is_none_or(|n| n > 8_388_608)
-        {
+        let rows_free = self.global_count < MAX_GLOBAL
+            && self.node_count < MAX_PER_NODE
+            && self.attempt_count < MAX_PER_ATTEMPT as i64;
+        let fits = |used: i64, limit: i64| used.checked_add(incoming).is_some_and(|n| n <= limit);
+        let bytes_free = fits(self.global_bytes, 67_108_864) && fits(self.node_bytes, 8_388_608);
+        if incoming > 32768 || !rows_free || !bytes_free {
             return Err(AppError::UpdatesUnavailable(
                 "retained renewal history capacity reached".into(),
             ));
@@ -312,7 +295,7 @@ pub async fn insert(
     request: &Renew,
     response: Value,
 ) -> Result<(), AppError> {
-    sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) VALUES($1,$2,'renew',$3,$4)").bind(node).bind(request.operation_id).bind(aq_selection::digest(request).map_err(|_|AppError::Internal)?.as_str()).bind(response).execute(&mut **tx).await.map_err(|_|AppError::Internal)?;
+    sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) VALUES($1,$2,'renew',$3,$4)").bind(node).bind(request.operation_id).bind(request_digest(request)?.as_str()).bind(response).execute(&mut **tx).await.map_err(|_|AppError::Internal)?;
     Ok(())
 }
 
@@ -328,23 +311,13 @@ pub(crate) async fn issuance_locked(
     node: Uuid,
     binding: &LaunchBinding,
     grant: Uuid,
-    anchor: &aq_admission::scoped_presence::AuthorityAnchor,
+    anchor: &AuthorityAnchor,
 ) -> Result<Issuance, AppError> {
     anchor.validate().map_err(|_| invalid())?;
     let row=sqlx::query("SELECT kind,response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 FOR SHARE").bind(node).bind(anchor.operation_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
-    if row.get::<String, _>("kind") != "renew" {
-        return Err(invalid());
-    }
-    let stored = Stored::decode(row.get("response"))?;
-    let b = stored.body;
-    if b.binding != *binding
-        || b.grant_id != grant
-        || b.operation_id != anchor.operation_id
-        || b.versions.grant_revision != anchor.grant_revision
-        || b.expires_at_ms != anchor.expires_at_ms
-    {
-        return Err(invalid());
-    }
+    ensure(row.get::<String, _>("kind") == "renew")?;
+    let b = Stored::decode(row.get("response"))?.body;
+    ensure(b.anchors(binding, grant, anchor))?;
     Ok(Issuance {
         issued_at_ms: b.issued_at_ms,
         expires_at_ms: b.expires_at_ms,
@@ -499,35 +472,19 @@ mod tests {
         };
         assert!(empty().ensure_capacity(32768).is_ok());
         assert!(empty().ensure_capacity(32769).is_err());
+        let full = |change: fn(&mut HistoryUsage)| {
+            let mut usage = empty();
+            change(&mut usage);
+            usage
+        };
         for usage in [
-            HistoryUsage {
-                global_count: MAX_GLOBAL,
-                ..empty()
-            },
-            HistoryUsage {
-                node_count: MAX_PER_NODE,
-                ..empty()
-            },
-            HistoryUsage {
-                attempt_count: MAX_PER_ATTEMPT as i64,
-                ..empty()
-            },
-            HistoryUsage {
-                global_bytes: 67_108_864,
-                ..empty()
-            },
-            HistoryUsage {
-                node_bytes: 8_388_608,
-                ..empty()
-            },
-            HistoryUsage {
-                global_bytes: i64::MAX,
-                ..empty()
-            },
-            HistoryUsage {
-                node_bytes: i64::MAX,
-                ..empty()
-            },
+            full(|u| u.global_count = MAX_GLOBAL),
+            full(|u| u.node_count = MAX_PER_NODE),
+            full(|u| u.attempt_count = MAX_PER_ATTEMPT as i64),
+            full(|u| u.global_bytes = 67_108_864),
+            full(|u| u.node_bytes = 8_388_608),
+            full(|u| u.global_bytes = i64::MAX),
+            full(|u| u.node_bytes = i64::MAX),
         ] {
             assert!(usage.ensure_capacity(1).is_err());
         }

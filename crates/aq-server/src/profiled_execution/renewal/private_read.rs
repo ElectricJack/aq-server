@@ -1,6 +1,10 @@
 //! Reserved private read workers. A cancelled waiter never frees a job's permit
 //! before its actual read finishes; no raw material leaves the worker thread.
-use crate::{error::AppError, intelligence::config::LoadedRegistry, profiled_execution::material};
+use crate::{
+    error::AppError,
+    intelligence::config::LoadedRegistry,
+    profiled_execution::{login_refresh::HeadSource, material},
+};
 use aq_admission::{Digest, MaterialLease};
 use std::sync::{
     Arc, Mutex, OnceLock,
@@ -17,13 +21,32 @@ struct Input {
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
-    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
+    source: Option<HeadSource>,
     #[cfg(test)]
     gate: Option<Arc<tests::Gate>>,
 }
+impl Input {
+    fn new(
+        registry: Arc<LoadedRegistry>,
+        lease: MaterialLease,
+        node: Uuid,
+        source: Option<HeadSource>,
+    ) -> Self {
+        Self {
+            registry,
+            lease,
+            node,
+            source,
+            #[cfg(test)]
+            gate: None,
+        }
+    }
+}
+type ReadResult = Result<Fingerprint, material::MaterialError>;
+type Reader = fn(&Input) -> ReadResult;
 struct Job {
     input: Input,
-    reply: oneshot::Sender<Result<Fingerprint, material::MaterialError>>,
+    reply: oneshot::Sender<ReadResult>,
     _ownership: OwnedSemaphorePermit,
 }
 struct Readers {
@@ -32,20 +55,12 @@ struct Readers {
 }
 impl Readers {
     fn start() -> Result<Self, ()> {
-        Self::with_reader(read)
+        Self::with_reader(read, "aq-renew-material")
     }
     fn start_phase() -> Result<Self, ()> {
-        Self::with_reader_named(read, "aq-phase-material")
+        Self::with_reader(read, "aq-phase-material")
     }
-    fn with_reader(
-        reader: fn(&Input) -> Result<Fingerprint, material::MaterialError>,
-    ) -> Result<Self, ()> {
-        Self::with_reader_named(reader, "aq-renew-material")
-    }
-    fn with_reader_named(
-        reader: fn(&Input) -> Result<Fingerprint, material::MaterialError>,
-        name: &str,
-    ) -> Result<Self, ()> {
+    fn with_reader(reader: Reader, name: &str) -> Result<Self, ()> {
         let (send, receive) = mpsc::sync_channel::<Job>(2);
         let receive = Arc::new(Mutex::new(receive));
         for index in 0..2 {
@@ -67,10 +82,7 @@ impl Readers {
             permits: Arc::new(Semaphore::new(4)),
         })
     }
-    fn submit(
-        &self,
-        input: Input,
-    ) -> Result<oneshot::Receiver<Result<Fingerprint, material::MaterialError>>, AppError> {
+    fn submit(&self, input: Input) -> Result<oneshot::Receiver<ReadResult>, AppError> {
         let ownership = self
             .permits
             .clone()
@@ -91,7 +103,7 @@ fn next_job(receive: &Mutex<mpsc::Receiver<Job>>) -> Option<Job> {
     // Release the receiver lock before reading so both workers can run.
     receive.lock().ok()?.recv().ok()
 }
-fn read(input: &Input) -> Result<Fingerprint, material::MaterialError> {
+fn read(input: &Input) -> ReadResult {
     let material = material::read_for_lease_from(
         &input.registry,
         &input.lease,
@@ -111,44 +123,25 @@ pub async fn verify(
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
-    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
+    source: Option<HeadSource>,
 ) -> Result<Fingerprint, AppError> {
     static READERS: OnceLock<Result<Readers, ()>> = OnceLock::new();
-    let readers = READERS
-        .get_or_init(Readers::start)
-        .as_ref()
-        .map_err(|_| unavailable())?;
-    verify_with(readers, registry, lease, node, source).await
+    let readers = READERS.get_or_init(Readers::start);
+    verify_with(readers, Input::new(registry, lease, node, source)).await
 }
 /// Separate initial-phase pool; initial Grant work never consumes renewal reserve.
 pub(crate) async fn verify_phase(
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
-    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
+    source: Option<HeadSource>,
 ) -> Result<Fingerprint, AppError> {
     static READERS: OnceLock<Result<Readers, ()>> = OnceLock::new();
-    let readers = READERS
-        .get_or_init(Readers::start_phase)
-        .as_ref()
-        .map_err(|_| unavailable())?;
-    verify_with(readers, registry, lease, node, source).await
+    let readers = READERS.get_or_init(Readers::start_phase);
+    verify_with(readers, Input::new(registry, lease, node, source)).await
 }
-async fn verify_with(
-    readers: &Readers,
-    registry: Arc<LoadedRegistry>,
-    lease: MaterialLease,
-    node: Uuid,
-    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
-) -> Result<Fingerprint, AppError> {
-    let reply = readers.submit(Input {
-        registry,
-        lease,
-        node,
-        source,
-        #[cfg(test)]
-        gate: None,
-    })?;
+async fn verify_with(readers: &Result<Readers, ()>, input: Input) -> Result<Fingerprint, AppError> {
+    let reply = readers.as_ref().map_err(|_| unavailable())?.submit(input)?;
     tokio::time::timeout(std::time::Duration::from_secs(2), reply)
         .await
         .map_err(|_| unavailable())?
@@ -249,16 +242,14 @@ mod tests {
             expires_at_ms: 2,
         };
         // Length is real, not a token/window estimate or zero placeholder.
-        (
-            dir,
-            Input {
-                registry: Arc::new(registry),
-                lease,
-                node,
-                source: None,
-                gate: None,
-            },
-        )
+        (dir, Input::new(Arc::new(registry), lease, node, None))
+    }
+    async fn eventually(done: impl Fn() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < Duration::from_secs(2));
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
     }
     pub struct Gate {
         open: Mutex<bool>,
@@ -286,7 +277,7 @@ mod tests {
             self.0.release();
         }
     }
-    fn blocked(input: &Input) -> Result<Fingerprint, material::MaterialError> {
+    fn blocked(input: &Input) -> ReadResult {
         let gate = input.gate.as_ref().unwrap();
         let active = gate.active.fetch_add(1, Ordering::SeqCst) + 1;
         gate.maximum.fetch_max(active, Ordering::SeqCst);
@@ -299,7 +290,7 @@ mod tests {
     }
     #[tokio::test]
     async fn cancelled_waiters_keep_actual_jobs_bounded_until_read_returns() {
-        let readers = Readers::with_reader(blocked).unwrap();
+        let readers = Readers::with_reader(blocked, "aq-renew-material").unwrap();
         let gate = Gate::new();
         let _release = Release(gate.clone());
         let mut dirs = vec![];
@@ -309,11 +300,7 @@ mod tests {
             dirs.push(dir);
             drop(readers.submit(input).unwrap());
         }
-        let start = Instant::now();
-        while gate.active.load(Ordering::SeqCst) < 2 {
-            assert!(start.elapsed() < Duration::from_secs(2));
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        eventually(|| gate.active.load(Ordering::SeqCst) >= 2).await;
         for _ in 0..2 {
             let (dir, mut input) = input();
             input.gate = Some(gate.clone());
@@ -324,11 +311,7 @@ mod tests {
         let (_dir, extra) = input();
         assert!(readers.submit(extra).is_err());
         gate.release();
-        let start = Instant::now();
-        while readers.permits.available_permits() != 4 {
-            assert!(start.elapsed() < Duration::from_secs(2));
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        eventually(|| readers.permits.available_permits() == 4).await;
         assert_eq!(gate.maximum.load(Ordering::SeqCst), 2);
     }
     #[test]
@@ -350,11 +333,7 @@ mod tests {
                     open = g.changed.wait(open).unwrap();
                 }
             });
-            let start = Instant::now();
-            while gate.active.load(Ordering::SeqCst) == 0 {
-                assert!(start.elapsed() < Duration::from_secs(2));
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
+            eventually(|| gate.active.load(Ordering::SeqCst) != 0).await;
             let (_dir, input) = input();
             let lease = input.lease.clone();
             let fingerprint = tokio::time::timeout(

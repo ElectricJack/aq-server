@@ -52,19 +52,7 @@ pub fn evaluate(
         }
         retain_latest(&mut latest, observation)?;
     }
-    let mut state = State::Unknown;
-    for observation in latest.values() {
-        let live = now < observation.expires_at_ms;
-        let fresh = live && now - observation.received_at_ms <= maximum_age_ms;
-        let cooling = live && now < observation.cooldown_until_ms;
-        if cooling || (fresh && observation.state != Availability::Available) {
-            state = State::Denied;
-            break;
-        }
-        if fresh {
-            state = State::ObservedAvailable;
-        }
-    }
+    let state = classify(latest.values().copied(), maximum_age_ms, now);
     let matching_sources = latest.len() as u32;
     let observations_digest =
         aq_selection::digest(&latest.values().collect::<Vec<_>>()).map_err(|_| invalid())?;
@@ -74,6 +62,27 @@ pub fn evaluate(
         matching_sources,
         evaluated_at_ms: now,
     })
+}
+/// Any fresh negative or active cooldown denies; otherwise a fresh positive is
+/// available, and no fresh evidence stays unknown.
+fn classify<'a>(
+    latest: impl Iterator<Item = &'a AvailabilityObservation>,
+    maximum_age_ms: u64,
+    now: u64,
+) -> State {
+    let mut state = State::Unknown;
+    for observation in latest {
+        let live = now < observation.expires_at_ms;
+        let fresh = live && now - observation.received_at_ms <= maximum_age_ms;
+        let cooling = live && now < observation.cooldown_until_ms;
+        if cooling || (fresh && observation.state != Availability::Available) {
+            return State::Denied;
+        }
+        if fresh {
+            state = State::ObservedAvailable;
+        }
+    }
+    state
 }
 impl Subject<'_> {
     fn matches(&self, scope: &ObservationScope) -> bool {
@@ -92,18 +101,15 @@ fn retain_latest<'a>(
 ) -> Result<(), AppError> {
     let key =
         aq_selection::digest(&(&observation.scope, &observation.source)).map_err(|_| invalid())?;
-    if let Some(old) = latest.get(&key) {
-        if observation.sequence < old.sequence {
-            return Ok(());
+    if let Some(old) = latest.get(&key)
+        && observation.sequence <= old.sequence
+    {
+        // An older sequence never wins; a repeated one must be the same report.
+        let digest = |value| aq_selection::digest(value).map_err(|_| invalid());
+        if observation.sequence == old.sequence && digest(observation)? != digest(*old)? {
+            return Err(invalid());
         }
-        if observation.sequence == old.sequence {
-            if aq_selection::digest(observation).map_err(|_| invalid())?
-                != aq_selection::digest(old).map_err(|_| invalid())?
-            {
-                return Err(invalid());
-            }
-            return Ok(());
-        }
+        return Ok(());
     }
     latest.insert(key, observation);
     Ok(())
@@ -139,23 +145,20 @@ mod tests {
             cooldown_until_ms: 100,
         }
     }
+    fn subject(scope: &ObservationScope) -> Subject<'_> {
+        Subject {
+            profile: &scope.credential_profile,
+            revision: 1,
+            provider: "provider",
+            account: "account",
+            endpoint: "endpoint",
+            model: "model",
+            node: Uuid::from_u128(1),
+        }
+    }
     fn run(obs: &[AvailabilityObservation], now: u64) -> Evidence {
         let scope = observation().scope;
-        evaluate(
-            Subject {
-                profile: &scope.credential_profile,
-                revision: 1,
-                provider: "provider",
-                account: "account",
-                endpoint: "endpoint",
-                model: "model",
-                node: Uuid::from_u128(1),
-            },
-            obs,
-            100,
-            now,
-        )
-        .unwrap()
+        evaluate(subject(&scope), obs, 100, now).unwrap()
     }
     #[test]
     fn unknown_never_becomes_available_or_missing_credentials() {
@@ -219,22 +222,6 @@ mod tests {
         let mut conflict = old.clone();
         conflict.state = Availability::ModelUnsupported;
         let scope = old.scope.clone();
-        assert!(
-            evaluate(
-                Subject {
-                    profile: &scope.credential_profile,
-                    revision: 1,
-                    provider: "provider",
-                    account: "account",
-                    endpoint: "endpoint",
-                    model: "model",
-                    node: Uuid::from_u128(1)
-                },
-                &[old, conflict],
-                100,
-                150
-            )
-            .is_err()
-        );
+        assert!(evaluate(subject(&scope), &[old, conflict], 100, 150).is_err());
     }
 }

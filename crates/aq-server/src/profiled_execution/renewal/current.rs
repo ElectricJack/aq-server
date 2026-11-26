@@ -4,7 +4,8 @@ use super::{health, now, pinned::Pinned};
 use crate::{AppState, error::AppError, project_bindings::domain::FrozenProjectBinding};
 use aq_admission::transport::Renew;
 use aq_selection::{
-    AvailabilityObservation, CapabilitySnapshot, ExecutionTarget, InstalledHarness,
+    AvailabilityObservation, CapabilitySnapshot, CredentialBinding, ExecutionTarget,
+    InstalledHarness,
 };
 use sqlx::{Postgres, Row, Transaction};
 pub struct Current {
@@ -16,8 +17,16 @@ pub struct Current {
 fn invalid() -> AppError {
     AppError::Conflict("continuing choice is not currently authorized or supported".into())
 }
+fn ensure(supported: bool) -> Result<(), AppError> {
+    if supported { Ok(()) } else { Err(invalid()) }
+}
 fn harness_supports(h: &InstalledHarness, p: &Pinned) -> bool {
     choice_supported_by_harness(h, &p.selection.choice, &p.policy)
+}
+/// The node's binding for exactly the held credential profile and revision.
+fn holds_credential(binding: &CredentialBinding, p: &Pinned) -> bool {
+    binding.credential_profile == p.selection.choice.credential_profile
+        && binding.credential_revision == p.selection.credential_revision
 }
 pub(crate) fn choice_supported_by_harness(
     h: &InstalledHarness,
@@ -48,31 +57,24 @@ pub async fn fence_locked(
     p: &Pinned,
     fresh: &FrozenProjectBinding,
 ) -> Result<Current, AppError> {
-    if fresh.project.revision != p.spec.project_revision
-        || fresh.node_id != request.identity.node_id
-        || serde_json::to_value(&fresh.project.binding).map_err(|_| AppError::Internal)?
-            != serde_json::to_value(&p.project.binding).map_err(|_| AppError::Internal)?
-    {
-        return Err(invalid());
-    }
+    let json = |binding| serde_json::to_value(binding).map_err(|_| AppError::Internal);
+    ensure(
+        fresh.project.revision == p.spec.project_revision
+            && fresh.node_id == request.identity.node_id
+            && json(&fresh.project.binding)? == json(&p.project.binding)?,
+    )?;
     crate::project_bindings::fence_for_offer(state, tx, fresh).await?;
     let registry_revision = crate::intelligence::fence_current_registry(state, tx).await?;
     let loaded = state.config.intelligence.as_ref().ok_or_else(invalid)?;
     let index = authorized_credential_index(loaded, p, request)?;
     // C5b: a refreshed version of the same login is continuity; an operator
     // replace or a rotated configured file is not (credential identity).
-    if !crate::profiled_execution::login_refresh::continuous_locked(tx, loaded, index, &p.material)
-        .await?
-    {
-        return Err(invalid());
-    }
+    ensure(
+        crate::profiled_execution::login_refresh::continuous_locked(tx, loaded, index, &p.material)
+            .await?,
+    )?;
     let (snapshot, revision, time) =
         load_inventory_locked(state, tx, request, p, &loaded.config.qualified_harnesses).await?;
-    let c = &p.selection.choice;
-    let binding = snapshot.credential_bindings.iter().find(|binding| {
-        binding.credential_profile == c.credential_profile
-            && binding.credential_revision == p.selection.credential_revision
-    });
     let scoped = crate::profiled_execution::presence::scoped_locked(
         state,
         tx,
@@ -87,22 +89,9 @@ pub async fn fence_locked(
         },
     )
     .await?;
-    let inventory_ceiling = if let Some(expiry) = scoped {
-        expiry
-    } else {
-        installation_supports_inventory(
-            revision,
-            p.selection.node_revision,
-            binding.map(|b| (b.available, b.observed_at_ms, b.expires_at_ms)),
-            time,
-            p.installation.lease_id == p.material.lease_id
-                && p.installation.material_digest == p.material.material_digest,
-        )?;
-        binding
-            .filter(|b| b.available)
-            .map_or(snapshot.expires_at_ms, |b| {
-                snapshot.expires_at_ms.min(b.expires_at_ms)
-            })
+    let inventory_ceiling = match scoped {
+        Some(expiry) => expiry,
+        None => unscoped_inventory_ceiling(p, &snapshot, revision, time)?,
     };
     crate::intelligence::fence_continuing_principal(
         state,
@@ -120,6 +109,31 @@ pub async fn fence_locked(
     })
 }
 
+/// Without scoped presence, the node report itself must still back the material.
+fn unscoped_inventory_ceiling(
+    p: &Pinned,
+    snapshot: &CapabilitySnapshot,
+    revision: u64,
+    time: u64,
+) -> Result<u64, AppError> {
+    let binding = snapshot
+        .credential_bindings
+        .iter()
+        .find(|b| holds_credential(b, p));
+    installation_supports_inventory(
+        revision,
+        p.selection.node_revision,
+        binding.map(|b| (b.available, b.observed_at_ms, b.expires_at_ms)),
+        time,
+        p.installation.lease_id == p.material.lease_id
+            && p.installation.material_digest == p.material.material_digest,
+    )?;
+    Ok(binding
+        .filter(|b| b.available)
+        .map_or(snapshot.expires_at_ms, |b| {
+            snapshot.expires_at_ms.min(b.expires_at_ms)
+        }))
+}
 fn authorized_credential_index(
     loaded: &crate::intelligence::config::LoadedRegistry,
     p: &Pinned,
@@ -135,21 +149,16 @@ fn authorized_credential_index(
                 && credential.revision == p.selection.credential_revision
         })
         .ok_or_else(invalid)?;
-    if !credential.enabled
-        || !credential.provisionable
-        || credential.material_owner.is_none()
-        || credential.provider != c.provider
-        || credential.account_reference != c.account_reference
-        || credential.endpoint_reference != c.endpoint_reference
-        || !loaded
-            .config
-            .credentials
-            .get(index)
-            .ok_or_else(invalid)?
-            .allows(request.identity.node_id)
-    {
-        return Err(invalid());
-    }
+    let config = loaded.config.credentials.get(index);
+    ensure(
+        credential.enabled
+            && credential.provisionable
+            && credential.material_owner.is_some()
+            && credential.provider == c.provider
+            && credential.account_reference == c.account_reference
+            && credential.endpoint_reference == c.endpoint_reference
+            && config.ok_or_else(invalid)?.allows(request.identity.node_id),
+    )?;
     Ok(index)
 }
 async fn load_inventory_locked(
@@ -165,45 +174,33 @@ async fn load_inventory_locked(
     let qualified = super::super::definitions::qualified(state, tx, qualified_harnesses).await?;
     let time = now(state)?;
     let revision = row.get::<i64, _>("revision") as u64;
-    if row.get::<uuid::Uuid, _>("boot_id") != request.identity.boot_id
-        || snapshot.target
-            != (ExecutionTarget::Worker {
-                node_id: request.identity.node_id,
-                boot_id: request.identity.boot_id,
-            })
-        || snapshot.revision != revision
-        || revision < p.selection.node_revision
-        || snapshot.revision == 0
-        || snapshot.harnesses.len() > 16
-        || snapshot.credential_bindings.len() > 32
-        || snapshot.observed_at_ms == 0
-        || snapshot
-            .expires_at_ms
-            .checked_sub(snapshot.observed_at_ms)
-            .is_none_or(|ttl| ttl == 0 || ttl > 120_000)
-        || snapshot.observed_at_ms > time
-        || time >= snapshot.expires_at_ms
-    {
-        return Err(invalid());
-    }
-    if !snapshot.harnesses.iter().any(|h| harness_supports(h, p))
-        || !qualified.iter().any(|h| harness_supports(h, p))
-    {
-        return Err(invalid());
-    }
-    let c = &p.selection.choice;
-    if snapshot
+    let target = ExecutionTarget::Worker {
+        node_id: request.identity.node_id,
+        boot_id: request.identity.boot_id,
+    };
+    let ttl = snapshot.expires_at_ms.checked_sub(snapshot.observed_at_ms);
+    ensure(
+        row.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
+            && snapshot.target == target
+            && snapshot.revision == revision
+            && revision >= p.selection.node_revision
+            && snapshot.revision != 0
+            && snapshot.harnesses.len() <= 16
+            && snapshot.credential_bindings.len() <= 32
+            && snapshot.observed_at_ms != 0
+            && ttl.is_some_and(|ttl| ttl != 0 && ttl <= 120_000)
+            && snapshot.observed_at_ms <= time
+            && time < snapshot.expires_at_ms,
+    )?;
+    ensure(
+        snapshot.harnesses.iter().any(|h| harness_supports(h, p))
+            && qualified.iter().any(|h| harness_supports(h, p)),
+    )?;
+    let held = snapshot
         .credential_bindings
         .iter()
-        .filter(|binding| {
-            binding.credential_profile == c.credential_profile
-                && binding.credential_revision == p.selection.credential_revision
-        })
-        .count()
-        > 1
-    {
-        return Err(invalid());
-    }
+        .filter(|b| holds_credential(b, p));
+    ensure(held.count() <= 1)?;
     Ok((snapshot, revision, time))
 }
 async fn load_health_locked(
@@ -214,9 +211,7 @@ async fn load_health_locked(
 ) -> Result<health::Evidence, AppError> {
     let c = &p.selection.choice;
     let observations:Vec<serde_json::Value>=sqlx::query_scalar("SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1025 FOR SHARE").fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
-    if observations.len() > 1024 {
-        return Err(invalid());
-    }
+    ensure(observations.len() <= 1024)?;
     let observations: Vec<AvailabilityObservation> = observations
         .into_iter()
         .map(serde_json::from_value)
