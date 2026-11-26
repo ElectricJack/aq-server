@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub use aq_intelligence_config::AttestationTime;
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
 pub mod attempts;
+pub mod closed_launch;
 pub mod fresh;
 mod handoffs;
 pub mod holds;
@@ -28,6 +29,7 @@ pub mod lost;
 pub mod management;
 pub mod offer_assembly;
 pub mod owner_retry;
+pub mod platform_retry;
 pub mod recent;
 pub mod slots;
 
@@ -207,7 +209,7 @@ fn reason_of(s: &str) -> Result<HandoffReason, Error> {
     match s {
         "owner_stop" => Ok(HandoffReason::OwnerStop),
         "service_stop" => Ok(HandoffReason::ServiceStop),
-        "restart" => Ok(HandoffReason::Restart),
+        "restart" | "workspace_expansion" => Ok(HandoffReason::Restart),
         _ => Err(Error::Invalid("reason")),
     }
 }
@@ -719,3 +721,5 @@ pub async fn attempt_released(pool: &sqlx::PgPool, attempt: uuid::Uuid, node: uu
         .await;
     released.ok().flatten().unwrap_or(false)
 }
+
+pub mod task_needs;

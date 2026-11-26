@@ -165,7 +165,6 @@ pub(super) async fn work(
         .await?
         .pop()
         .unwrap_or(Value::Null);
-    // QA P1-01: a stopped attempt that keeps the claim is `held`, not running.
     let hold = aq_human_work::attempt_hold(&r.pool, &execution["attempt_id"]).await;
     let hold = hold.map_err(|_| unavailable())?;
     let task = TaskWork {
@@ -178,7 +177,6 @@ pub(super) async fn work(
     let open = root["task_state"] == "active" && root["retired"] != true;
     let held = task.recorded_hold(open).await?;
     let role_hold = task.role_hold(&raw["node"]).await?;
-    // Spec 0014 §6.1: and one whose last offer was refused before any attempt.
     let offer_hold = task.offer_hold(open, &execution).await;
     let graph_wait = match (&hold, open) {
         (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
@@ -193,8 +191,15 @@ pub(super) async fn work(
         (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
         _ => None,
     };
+    let workspace_wait = if open {
+        let running = hold.as_ref().filter(|h| h.running()).map(|h| h.attempt_id);
+        crate::task_workspace_resume::work_reason(&r.pool, p, id, running).await?
+    } else {
+        None
+    };
     let held = held
         .into_iter()
+        .chain(workspace_wait)
         .chain(recovery)
         .chain(role_hold)
         .chain(offer_hold)
@@ -223,6 +228,8 @@ pub(super) async fn work(
     )
     .await
     .map_err(|_| unavailable())?;
+    #[cfg(feature = "delivery_playbook")]
+    aq_human_work::delivery::show_followup(&r.pool, p, id, &mut readiness).await;
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
         "readiness":readiness,"parent":parent,"execution":execution});

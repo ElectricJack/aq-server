@@ -55,10 +55,10 @@ A route is a typed record on the task, written only through the routing command 
 | Field | Meaning |
 | --- | --- |
 | `class` | Parent and effort, for example `standard-high`. |
-| `harnesses`, `providers` | Allowlists. Empty means no restriction. |
-| `prefer` | Harnesses to try first among those allowed. |
+| `harnesses`, `providers` | Ordered preferences for eligible candidates. An empty list leaves that dimension to placement. |
+| `prefer` | Explicit harness preferences, ordered ahead of the historical harness list. |
 | `lane` | The lane that matched, if any. |
-| `provider_intent` | `any` or `pinned` (a lane with `hold: true`). |
+| `provider_intent` | Effective reads and new routes use `any`. Historical `pinned` values remain readable as preferences. |
 | `reasons` | Typed codes such as `class_raised_for_risk`, `hint_clamped`, `escalated_after_failure`, `classification_failed`, each with its inputs. |
 | `classification` | The classifier's answer, or absent when none was needed. |
 | `policy_digest`, `structure_revision` | What produced the route. |
@@ -71,8 +71,8 @@ Where it lives: the current route is one compact value in the task's graph metad
 ## 4. Placement honors the route
 
 - A route applies only where the project binding's intelligence is the automatic router (`automatic_routing: true`). A binding pinned to a named profile keeps that profile: pinning is the owner's override **(author's call)**.
-- For a routed task, composition substitutes the profile assigned to the route's parent and effort for the router. Candidate selection then drops candidates whose harness or provider is outside the route's allowlists. Everything else (qualification, quota, capacity, fallback bounds, node eligibility) is unchanged.
-- `provider_intent: pinned` turns "no candidate available" into a hold instead of a fallback.
+- For a routed task, composition substitutes the profile assigned to the route's parent and effort for the router. Ordered provider and harness preferences guide placement among candidates in that profile. Qualification, quota, capacity, fallback policy and node eligibility still apply.
+- Existing owner and playbook routes keep their order. A route naming only Claude or Codex makes that candidate a preference. Legacy playbooks can still send `hold: true`. The host records their route as a preference and does not rewrite earlier route records.
 - **Unrouted tasks wait** **(author's call)**. A ready task under an automatic-router binding with no route is not offered, and the task shows "Waiting for routing" with how long it has waited. There is no silent fallback to the router's default model. This is not one of the existing holds: those record a refusal about a specific attempt and cannot exist for a task that has never had one, so the waiting state is shown from the task's routing state instead.
 - **One switch** **(author's call)**. Routing is on or off for the whole installation, in Settings beside the policy. Off, placement behaves as it does today and ignores a missing route; a route that exists is still honored. It is on only once a policy has compiled.
 - W6: a task unrouted for longer than 10 minutes, a routing run that failed, and a routed task that no candidate can serve are each a failure with a typed reason. They follow the failure path of spec 0012 §8: the supervisor first, which may retry or fix the cause, and "Needs your attention" only when it cannot. The item opens the task.
@@ -81,7 +81,7 @@ Where it lives: the current route is one compact value in the task's graph metad
 
 A new crate, `aq-routing`, ports v1's planner. It has no I/O.
 
-- Input: the compiled policy (§6), the task's kind, class hint, origin and failed-attempt count, the permitted options (the classes with an assigned profile, and the harnesses and providers each profile lists), and optionally a classification. **(owner, 2026-11-13)** Worker qualification is not an input: a route to a harness no worker can run now is planned, and the task waits in placement (§4).
+- Input: the compiled policy (§6), the task's kind, class hint, origin and failed-attempt count, the permitted options (the classes with an assigned profile, and the harnesses and providers each profile lists), and optionally a classification. **(owner, 2026-11-13)** Worker qualification is checked during placement (§4). The route can prefer a harness that no worker currently serves.
 - Output: `planned` with a route; `needs_classification` with the allowed kinds and classes; or `no_candidates` with the reason. Every task is classified once, because the risk answer is needed for almost all of them. Whether a task is already routed is checked by the host command, and waiting for an unavailable provider is placement's job, so neither is a planner outcome.
 
 Two host commands expose it. They need host catalog 2.2.0 in aq-playbooks and a new host profile in aq-server:
@@ -120,14 +120,14 @@ The planner in §5 stays deterministic: a model produces the compiled policy onc
 ## 8. Dashboard
 
 - The routing policy editor shows the compiled summary, any sentence the compiler could not resolve, and when the current policy took effect. Its caption no longer says execution is connected later.
-- The task view shows the route: class, lane, allowlists, reasons and policy digest, or "Waiting for routing".
+- The task view shows the route: class, lane, effective preferences, reasons and policy digest, or "Waiting for routing".
 - The owner can set or clear a route on a task.
 
 ## 9. Phases
 
 | Phase | Delivers | Size |
 | --- | --- | --- |
-| R1 | Route record, owner set and clear, placement substitution and allowlists, the waiting state behind the routing switch. Useful alone: the owner can route by hand. | large |
+| R1 | Route record, owner set and clear, placement substitution and preferences, the waiting state behind the routing switch. Useful alone: the owner can route by hand. | large |
 | R2 | `aq-routing` planner over a compiled policy; compiling the plain-language source into it through internal work, with the summary shown back to the owner. Needs 0012 I1 and I2. | large |
 | R3 | Host catalog 2.2.0: `routing_plan` view, `route` variant, the named classification answer shape, `aq.work.route_needed`. New host profile, and the server-originated event. | medium to large, two repositories |
 | R4 | Routing playbook built, installed and activated by default, with its classification step served by internal work; the W6 failure path (needs 0012 I3); dashboard §8. | medium |

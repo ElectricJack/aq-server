@@ -449,14 +449,12 @@ fn supervisor_reads_declare_the_owner_query() {
     }
 }
 
-/// A supervisor reads the results of a hold through the read nest (without
-/// full access; with it the owner bridge carries them).
-#[cfg(not(feature = "supervisor_full_access"))]
 #[test]
-fn a_supervisor_reads_results_through_the_read_nest() {
+fn a_supervisor_reads_hold_evidence_through_the_read_nest() {
     let r = Registry::new(&actions()).unwrap();
     for (name, path) in [
         ("result.list", "/v1/supervisor/read/api/human/results"),
+        ("result.feed", "/v1/supervisor/read/api/v1/results"),
         (
             "result.show",
             "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}",
@@ -464,6 +462,10 @@ fn a_supervisor_reads_results_through_the_read_nest() {
         (
             "result.detail",
             "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}",
+        ),
+        (
+            "attempt.show",
+            "/v1/supervisor/read/api/execution/attempts/{id}",
         ),
     ] {
         let c = r.get(name).unwrap();
@@ -745,7 +747,13 @@ fn owner_mutation_schemas_require_their_path_parameters() {
 
 #[cfg(feature = "supervisor_full_access")]
 #[test]
-fn every_owner_command_has_a_supervisor_route() {
+fn owner_commands_follow_the_supervisor_route_policy() {
+    let unbridged = [
+        "project.workspace.decide",
+        "project.workspace.requests",
+        "task.workspace.request",
+        "task.workspace.show",
+    ];
     let kept = [
         "whoami",
         "operation.show",
@@ -759,12 +767,23 @@ fn every_owner_command_has_a_supervisor_route() {
         "task.dependency.add",
         "task.dependency.remove",
         "project.list",
+        "result.list",
+        "result.feed",
+        "result.show",
+        "result.detail",
+        "attempt.show",
     ];
     let r = Registry::new(&actions()).unwrap();
     for c in r.commands() {
         let Some(owner) = c.owner.filter(|o| o.body != Body::Local) else {
             continue;
         };
+        // Workspace requests and decisions cross project boundaries. The
+        // supervisor owner bridge only establishes its home project actor.
+        if unbridged.contains(&c.name) {
+            assert!(c.supervisor.is_none(), "{}", c.name);
+            continue;
+        }
         let supervisor = c.supervisor.unwrap_or_else(|| panic!("{}", c.name));
         if kept.contains(&c.name) {
             assert!(!supervisor.path.starts_with(OWNER_PREFIX), "{}", c.name);
@@ -785,5 +804,99 @@ fn every_owner_command_has_a_supervisor_route() {
             "{}",
             c.name
         );
+    }
+}
+
+#[test]
+fn workspace_commands_resolve_the_owner_paths_and_bind_the_reviewed_pin() {
+    let registry = Registry::new(&actions()).unwrap();
+    let request = registry.get("task.workspace.request").unwrap();
+    assert!(request.supervisor.is_none());
+    assert_eq!(request.agent.unwrap().path, "/v1/agent/workspace/request");
+    let params = CommandRequest {
+        params: json!({"home_project_id":"home","task_id":"task","target_project_id":"target","access":"write"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        ..Default::default()
+    };
+    let forwarded = request
+        .forward(&request.owner.unwrap(), &params, None)
+        .unwrap();
+    assert_eq!(forwarded.uri, "/api/projects/home/tasks/task/workspace");
+    assert_eq!(
+        forwarded.body,
+        Some(json!({"target_project_id":"target","access":"write"}))
+    );
+
+    let batch = json!([{"target_project_id":"target","access":"read"},{"service":"postgres"}]);
+    for (principal, input, path) in [
+        (
+            Principal::Owner,
+            json!({"home_project_id":"home","task_id":"task","workspace":batch}),
+            "/api/projects/home/tasks/task/workspace",
+        ),
+        (
+            Principal::Agent,
+            json!({"workspace":batch}),
+            "/v1/agent/workspace/request",
+        ),
+    ] {
+        let forwarded = request
+            .forward(
+                request.route(principal).unwrap(),
+                &CommandRequest {
+                    params: input.as_object().unwrap().clone(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(forwarded.uri, path);
+        assert_eq!(forwarded.body, Some(json!({"workspace":batch})));
+    }
+
+    let decided = owner_mutation(
+        "project.workspace.decide",
+        json!({"home_project_id":"home","task_id":"task","target_project_id":"target",
+            "decision":"approved","project_revision":5,"commit_oid":"abc","access":"write"}),
+        None,
+    );
+    assert_eq!(
+        decided.uri,
+        "/api/projects/target/workspace-requests/home/task/decision"
+    );
+    assert_eq!(
+        decided.body,
+        Some(
+            json!({"decision":"approved","project_revision":5,"commit_oid":"abc","access":"write"})
+        )
+    );
+    for (name, path) in [
+        (
+            "task.workspace.show",
+            "/api/projects/home/tasks/task/workspace",
+        ),
+        (
+            "project.workspace.requests",
+            "/api/projects/target/workspace-requests",
+        ),
+    ] {
+        let command = registry.get(name).unwrap();
+        let body = if name == "task.workspace.show" {
+            json!({"home_project_id":"home","task_id":"task"})
+        } else {
+            json!({"target_project_id":"target"})
+        };
+        let read = CommandRequest {
+            params: body.as_object().unwrap().clone(),
+            ..Default::default()
+        };
+        let forwarded = command
+            .forward(&command.owner.unwrap(), &read, None)
+            .unwrap();
+        assert_eq!(forwarded.method, "GET");
+        assert_eq!(forwarded.uri, path);
+        assert!(command.agent.is_none() && command.supervisor.is_none());
     }
 }

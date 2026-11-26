@@ -18,6 +18,7 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await,
@@ -50,6 +51,7 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
                     MergeGuard {
                         method: MergeMethod::Squash,
                         expected_head: &sha('a'),
+                        result_head: None,
                     },
                 )
                 .await,
@@ -114,6 +116,7 @@ async fn a_merged_pull_request_whose_branch_is_not_deleted_yet_is_retried_not_re
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await
@@ -157,6 +160,7 @@ async fn merge_recovers_after_an_unknown_reply() {
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await
@@ -258,4 +262,39 @@ async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge
     assert!(paths(&mock).iter().all(|(method, _)| method == "GET"));
     assert_eq!(git.operations(), ["ref.delete"]);
     assert_eq!(git.request(0)["params"]["expected_old"]["hex"], sha('a'));
+}
+
+#[tokio::test]
+async fn verifies_only_an_external_merge_of_the_exact_head_and_target_without_writes() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let target = target();
+    let merged = |values: Value| {
+        let mut values = values.as_object().cloned().unwrap();
+        values.insert("state".into(), json!("closed"));
+        values.insert("merged".into(), json!(true));
+        values.insert("merge_commit_sha".into(), json!(sha('d')));
+        pull(7, Value::Object(values))
+    };
+    for (answer, expected) in [
+        (pull(7, json!({})), false),
+        (
+            merged(json!({"head":{"ref":"aq/task","sha":sha('b')}})),
+            false,
+        ),
+        (
+            merged(json!({"base":{"ref":"release","sha":sha('c')}})),
+            false,
+        ),
+        (merged(json!({})), true),
+    ] {
+        mock.reply(200, vec![], answer);
+        let evidence = delivery
+            .verified_external_merge(&target, 7, &sha('a'))
+            .await
+            .unwrap();
+        assert_eq!(evidence.is_some(), expected);
+    }
+    assert_eq!(paths(&mock), vec![("GET".into(), "/pulls/7".into()); 4]);
+    assert!(git.operations().is_empty());
 }

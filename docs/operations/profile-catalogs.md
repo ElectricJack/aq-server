@@ -84,6 +84,10 @@ The task's work read lists why under `readiness.reasons`:
   profile's environment. Platform text ships with the server
   (`crates/aq-profiles/defaults/platform`); an environment without its own
   file gets `default.md`.
+- `slot_resources_short`: the assembled offer needs more cpu, memory or disk
+  than one slot of the polling node provides. The reason names the node and
+  each short resource with both values; it stays until an offer of the task is
+  published.
 
 The last two are recorded by the offer path, one row per task, and removed
 when a later offer of the task composes, so they clear at the next worker

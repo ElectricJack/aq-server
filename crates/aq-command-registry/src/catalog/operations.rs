@@ -2,6 +2,26 @@
 use super::*;
 
 pub(super) const COMMANDS: &[CommandSpec] = &[
+    read(
+        "performance.delivery.show",
+        "dashboard.read",
+        P,
+        "Read the project default or work-class delivery reporting preference",
+    )
+    .with_owner(Some(Route::get(
+        "/api/settings/performance/delivery/{id}",
+        &[("id", "project_id")],
+    ))),
+    owner_write(
+        "performance.delivery.set",
+        "project.admin",
+        "Set a delivery reporting preference (single-PR milestone for target merges), or restore inheritance with a null definition",
+        post_route(
+            "/api/settings/performance/delivery/{id}",
+            &[("id", "project_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","operation_id","expected_revision","definition"],"properties":{"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid"},"expected_revision":{"type":"integer","minimum":0},"work_class":{"type":"string","minLength":1,"maxLength":128},"definition":{"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"enum":["not_tracked","confirmed_completion"]}}},{"type":"object","additionalProperties":false,"required":["kind","repository_id","target_ref"],"properties":{"kind":{"const":"target_branch_merge"},"repository_id":{"type":"string","format":"uuid"},"target_ref":{"type":"string","pattern":"^refs/heads/","maxLength":255}}}]}}}"#,
+        ),
+    ),
     owner_write(
         "project.set",
         "project.admin",
@@ -50,6 +70,16 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
             "/api/execution/attempts/{id}/disposition",
             &[("id", "attempt_id")],
             r#"{"type":"object","additionalProperties":false,"required":["attempt_id","operation_id","reason"],"properties":{"attempt_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"reason":{"type":"string","minLength":1,"maxLength":4096}}}"#,
+        ),
+    ),
+    owner_write(
+        "attempt.settle_closed_launch",
+        "attempt.control",
+        "Settle a launch closed before the agent started whose host evidence shows it is over but not that the harness never ran; refused unless its grant expired, its node restarted, it has no history or effects and its task ref is still at the lease. Recorded with your reason; the task gets an ordinary replacement attempt",
+        post_route(
+            "/api/execution/projects/{project}/attempts/{id}/closed-launch-settlement",
+            &[("project", "project_id"), ("id", "attempt_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","attempt_id","operation_id","reason"],"properties":{"project_id":{"type":"string","format":"uuid","description":"The attempt's project"},"attempt_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"reason":{"type":"string","minLength":1,"maxLength":4096,"description":"Why the launch is over, recorded with your identity"}}}"#,
         ),
     ),
     owner_write(

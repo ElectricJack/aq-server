@@ -8,6 +8,7 @@ mod conversation;
 pub mod credentials;
 pub mod internal;
 mod journal;
+pub mod mcp;
 #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
 pub mod repo;
 pub mod service;
@@ -101,7 +102,7 @@ impl Launch {
     }
 }
 
-fn admission_clock(host: &HostPlan) -> Result<Clock> {
+pub(crate) fn admission_clock(host: &HostPlan) -> Result<Clock> {
     let now = clock()?;
     ensure!(
         now.machine_boot_id == host.machine_boot_id

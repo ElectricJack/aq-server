@@ -22,8 +22,8 @@ impl Selected {
         let retention_handle = fixed
             .as_ref()
             .map_or(policy.retention_handle, |f| f.retention_handle);
-        if let Some(handoff) = fixed.as_ref().and_then(|f| f.handoff.clone()) {
-            evidence.insert("handoff", handoff);
+        if let Some((key, value)) = fixed.as_ref().and_then(|f| f.evidence.clone()) {
+            evidence.insert(key, value);
         }
         Self {
             selection,

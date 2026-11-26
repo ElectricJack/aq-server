@@ -32,7 +32,7 @@ async fn upload_in(
     let terminals = terminal_set(r, node)?;
     // Authenticate even empty uploads; no capability/boot bypass through an empty batch.
     let mut check = super::persistence::begin(state).await?;
-    current_peer(state, &mut check, node, &r.peer).await?;
+    peer_rows(&mut check, node, &r.peer, Rows::Snapshot).await?;
     check.commit().await.map_err(|_| AppError::Internal)?;
     let upload = Upload {
         state,
@@ -101,7 +101,7 @@ impl Upload<'_> {
         let mut tx = super::persistence::begin(state).await?;
         let view =
             authority::load_locked(state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
-        current_peer(state, &mut tx, node, &r.peer).await?;
+        peer_rows(&mut tx, node, &r.peer, Rows::Snapshot).await?;
         let loaded = load(state, &mut tx, t, &view).await?;
         require_mode(&loaded.ledger, &r.capability)?;
         if loaded.ledger.input_mode() == draft::InputMode::EpochV1
@@ -174,7 +174,7 @@ impl Upload<'_> {
         if let Some(last) = last {
             let mut tx = super::persistence::begin(state).await?;
             authority::load_locked(state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
-            current_peer(state, &mut tx, node, &r.peer).await?;
+            peer_rows(&mut tx, node, &r.peer, Rows::Snapshot).await?;
             sqlx::query("UPDATE terminal_sessions SET last_output_at_ms=$2,last_output_sequence=greatest(last_output_sequence,$3) WHERE terminal_id=$1").bind(t.terminal_id).bind(dbtime(now(state))?).bind(dbtime(last)?).execute(&mut *tx).await.map_err(|_|AppError::Internal)?;
             tx.commit().await.map_err(|_| AppError::Internal)?;
         }

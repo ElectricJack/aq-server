@@ -129,6 +129,9 @@ impl Admission<'_> {
         } = *owner;
         let now = stamp(state);
         let retained = self.retained_size(now)?;
+        let workspace =
+            crate::project_bindings::workspace::creation::prepare(state, self.record, self.request)
+                .await?;
         let mut tx = transaction(r).await?;
         owner_locked(&mut tx, actor).await?;
         let current = sqlx::query(
@@ -176,6 +179,15 @@ impl Admission<'_> {
                 },
             )
             .await?;
+            if !stale {
+                crate::project_bindings::workspace::creation::stage(
+                    &mut tx,
+                    self.record.binding.project_id,
+                    self.request.operation_id,
+                    &workspace,
+                )
+                .await?;
+            }
         }
         tx.commit().await.map_err(db)?;
         Ok(())

@@ -28,10 +28,10 @@ use crate::{
     },
 };
 use aq_admission::{ArtifactRef, Digest, LaunchBinding, Text, granted_closure};
-use aq_machine_control::lapse;
+use aq_machine_control::{closed_launch, lapse};
 use serde::Serialize;
 use serde_json::{Value, json};
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -58,7 +58,13 @@ pub(crate) fn reference(id: String, value: &impl Serialize) -> Result<ArtifactRe
     })
 }
 
-pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement, AppError> {
+/// With an owner's `attest`ation (`aq_machine_control::closed_launch`) a closure that does not
+/// prove nonstart settles too, when every condition of it holds under these locks.
+pub async fn settle(
+    state: &AppState,
+    attempt: Uuid,
+    attest: Option<&closed_launch::Attestation>,
+) -> Result<ClosureSettlement, AppError> {
     let mut tx = state.store.pool.begin().await.map_err(database)?;
     for sql in [
         "SET LOCAL lock_timeout='500ms'",
@@ -67,7 +73,8 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         sqlx::query(sql).execute(&mut *tx).await.map_err(database)?;
     }
     let closure = sqlx::query(
-        "SELECT binding,operation_id,request_bytes,receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1",
+        "SELECT binding,operation_id,request_bytes,receipt_digest FROM \
+         profiled_launch_closures WHERE attempt_id=$1",
     )
     .bind(attempt)
     .fetch_optional(&mut *tx)
@@ -77,6 +84,9 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     // has expired (`aq_machine_control::lapse`).
     let binding = match &closure {
         Some(closure) => closure.get("binding"),
+        None if attest.is_some() => {
+            return Ok(ClosureSettlement::Held(closed_launch::NOT_HOST_STOPPED));
+        }
         None => match lapse::pending(&mut tx, attempt).await.map_err(mapped)? {
             Some((binding, _)) => binding,
             None => return Ok(ClosureSettlement::Unchanged),
@@ -119,8 +129,12 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         if request.binding != binding {
             return Err(AppError::Internal);
         }
-        if !request.evidence.proves_never_started() {
-            return Ok(ClosureSettlement::Held("closure_does_not_prove_nonstart"));
+        if attest.is_some() || !request.evidence.proves_never_started() {
+            let now = (state.clock)().timestamp_millis();
+            let checked = closed_launch::check(&mut tx, attempt, attest, now).await;
+            if let Err(code) = checked.map_err(mapped)? {
+                return Ok(ClosureSettlement::Held(code));
+            }
         }
     } else {
         // Sampled under the locks Started and renewal take: both refuse an expired grant, so
@@ -136,54 +150,14 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
             return Ok(ClosureSettlement::Unchanged);
         }
     }
-    let history: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM source_transfers WHERE attempt_id=$1)",
-    )
-    .bind(attempt)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(database)?;
-    if history {
-        return Ok(ClosureSettlement::Held("closure_has_execution_history"));
+    // Neither execution history nor any AQ-mediated effect may exist for a never-started launch.
+    let used = closed_launch::used(&mut tx, attempt).await;
+    if let Some(code) = used.map_err(mapped)? {
+        return Ok(ClosureSettlement::Held(code));
     }
-    // Effects: no AQ-mediated effect may exist at all for a never-started launch.
-    if agent_effects_present(&mut tx, attempt).await? {
-        return Ok(ClosureSettlement::Held("closure_effects_present"));
-    }
-    // Retention: the attempt's own verified central export (its whole input).
-    let linked =
-        crate::profiled_execution::source_exports::load_linked_locked(&mut tx, attempt).await?;
-    let export = linked.token().request().operation_id;
-    let manifest = linked.manifest();
-    let source_receipt = reference(
-        format!("aq.source-export/{export}"),
-        &json!({"operation_id": export, "manifest_digest": manifest.manifest_digest, "bundle_digest": manifest.bundle_digest, "checkpoint": manifest.checkpoint}),
-    )?;
-    let (operation, stop_receipt) = match &closure {
-        Some(closure) => {
-            let operation: Uuid = closure.get("operation_id");
-            let stop = ArtifactRef {
-                id: Text::new(format!("aq.launch-closure/{operation}"))
-                    .map_err(|_| AppError::Internal)?,
-                version: Text::new("1").map_err(|_| AppError::Internal)?,
-                digest: serde_json::from_value(json!(closure.get::<String, _>("receipt_digest")))
-                    .map_err(|_| AppError::Internal)?,
-            };
-            (operation, stop)
-        }
-        None => {
-            tracing::warn!(%attempt, reason = lapse::REASON, "granted attempt never started and its grant expired; closed by the server");
-            crate::profiled_execution::journal::revoke(&mut tx, attempt).await?;
-            hot.revoked = true;
-            let record =
-                json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant});
-            let stop = reference(format!("{}{attempt}", lapse::RECEIPT), &record)?;
-            (attempt, stop)
-        }
-    };
+    let source_receipt = source_receipt_locked(&mut tx, attempt).await?;
+    let (operation, stop_receipt) =
+        stop_receipt_locked(&mut tx, attempt, closure.as_ref(), &mut hot).await?;
     let effects_receipt = reference(
         format!("aq.closure-effects/{operation}"),
         &json!({"attempt_id": attempt, "graph_operations": 0, "mailbox_operations": 0, "closure": stop_receipt}),
@@ -210,39 +184,48 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     Ok(ClosureSettlement::Settled)
 }
 
-/// Whether the attempt's agent made any AQ-mediated effect: a graph operation, or mail sent
-/// from its session (a retry or closure would leave or repeat it).
-pub(crate) async fn agent_effects_present(
-    conn: &mut sqlx::PgConnection,
+async fn source_receipt_locked(
+    tx: &mut Transaction<'_, Postgres>,
     attempt: Uuid,
-) -> Result<bool, AppError> {
-    let operations: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(database)?;
-    let agent: Option<Value> =
-        sqlx::query_scalar("SELECT binding FROM agent_launch_bindings WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(database)?;
-    let mailed = match &agent {
-        None => false,
-        Some(binding) => {
-            let key = aq_agent_api::digest(&json!({"kind":"session","binding":binding}))
-                .map_err(|_| AppError::Internal)?;
-            sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM mailbox_operations WHERE sender_key=$1)",
-            )
-            .bind(key)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(database)?
+) -> Result<ArtifactRef, AppError> {
+    // Retention: the attempt's own verified central export (its whole input).
+    let linked = crate::profiled_execution::source_exports::load_linked_locked(tx, attempt).await?;
+    let export = linked.token().request().operation_id;
+    let manifest = linked.manifest();
+    reference(
+        format!("aq.source-export/{export}"),
+        &json!({"operation_id": export, "manifest_digest": manifest.manifest_digest, "bundle_digest": manifest.bundle_digest, "checkpoint": manifest.checkpoint}),
+    )
+}
+
+async fn stop_receipt_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    closure: Option<&PgRow>,
+    hot: &mut HotState,
+) -> Result<(Uuid, ArtifactRef), AppError> {
+    match closure {
+        Some(closure) => {
+            let operation: Uuid = closure.get("operation_id");
+            let stop = ArtifactRef {
+                id: Text::new(format!("aq.launch-closure/{operation}"))
+                    .map_err(|_| AppError::Internal)?,
+                version: Text::new("1").map_err(|_| AppError::Internal)?,
+                digest: serde_json::from_value(json!(closure.get::<String, _>("receipt_digest")))
+                    .map_err(|_| AppError::Internal)?,
+            };
+            Ok((operation, stop))
         }
-    };
-    Ok(operations != 0 || mailed)
+        None => {
+            tracing::warn!(%attempt, reason = lapse::REASON, "granted attempt never started and its grant expired; closed by the server");
+            crate::profiled_execution::journal::revoke(tx, attempt).await?;
+            hot.revoked = true;
+            let record =
+                json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant});
+            let stop = reference(format!("{}{attempt}", lapse::RECEIPT), &record)?;
+            Ok((attempt, stop))
+        }
+    }
 }
 
 /// Settles a closed launch, then releases its task claim through B4 when B4
@@ -254,14 +237,17 @@ pub(crate) async fn agent_effects_present(
 pub async fn settle_and_release(
     state: &AppState,
     attempt: Uuid,
+    attest: Option<&closed_launch::Attestation>,
 ) -> Result<ClosureSettlement, AppError> {
     use crate::profiled_execution::replacement::{self, Assessment};
-    let settled = settle(state, attempt).await?;
+    let settled = settle(state, attempt, attest).await?;
     if matches!(settled, ClosureSettlement::Held(_)) {
         return Ok(settled);
     }
     let row: Option<(Uuid, bool, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT a.task_id,a.holds_task,h.state#>>'{stop,kind}',h.state#>>'{stop,receipt,id}' FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1",
+        "SELECT a.task_id,a.holds_task,h.state#>>'{stop,kind}',h.state#>>'{stop,receipt,id}' \
+         FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE \
+         a.attempt_id=$1",
     )
     .bind(attempt)
     .fetch_optional(&state.store.pool)

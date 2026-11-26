@@ -135,7 +135,7 @@ fn credential_restricted_backend_is_ineligible() {
 }
 
 #[test]
-fn credential_backend_denial_obeys_explicit_fallback_policy() {
+fn credential_backend_denial_keeps_that_account_ineligible_without_blocking_another() {
     let (catalog, mut input) = fixture();
     input.credentials[0].allowed_backends = vec![BackendKind::DockerLocal];
     input.node.backend_kind = Some(BackendKind::Boat);
@@ -148,8 +148,8 @@ fn credential_backend_denial_obeys_explicit_fallback_policy() {
         .retain(|r| *r != FallbackReason::PolicyDenied);
     let catalog = change_policy(&catalog, policy, &mut input);
     let out = select(&catalog, &input).unwrap();
-    assert!(out.resolved.is_none());
-    assert!(out.reason_codes.contains(&"no_permitted_fallback".into()));
+    assert_eq!(out.traces[0].state, CandidateState::PolicyDenied);
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
 }
 
 #[test]

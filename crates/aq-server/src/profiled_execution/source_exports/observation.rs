@@ -30,14 +30,18 @@ pub(super) async fn is_handoff(
     value: &Value,
 ) -> Result<bool, AppError> {
     // Spec 0007 S7 (D5): a handoff successor exports its predecessor's recorded
-    // handoff candidate, held by the candidate handle, as an immutable source.
-    let predecessor = value["evidence"]["handoff"]["predecessor"].as_str();
+    // handoff candidate, held by the candidate handle, as an immutable source;
+    // a successor after a placement-only binding change, its retained source.
+    let predecessor = |k: &str| Uuid::parse_str(value["evidence"][k]["predecessor"].as_str()?).ok();
+    if let Some(p) = predecessor("retained") {
+        return Ok(aq_profiled_state::replacement_sql::repins_retained(tx, p, request).await?);
+    }
     let scope = (
         request.project_id,
         request.repository_id,
         request.binding_generation,
     );
-    Ok(match predecessor.and_then(|p| Uuid::parse_str(p).ok()) {
+    Ok(match predecessor("handoff") {
         Some(p) => {
             handoff::export_is_handoff(tx, p, request).await?
                 && aq_machine_control::export_scope(tx, p).await? == Some(scope)

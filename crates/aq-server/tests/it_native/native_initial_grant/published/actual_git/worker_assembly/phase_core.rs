@@ -58,39 +58,11 @@ pub(super) async fn configure(case: &mut Case, execution: bool) -> (Value, Optio
     };
     p.definition_bodies
         .push(Definition::new(pin.clone(), ArtifactKind::Definition, body).unwrap());
-    let mut inventory_qualification = None;
-    if execution {
-        let execution_body =
-            json!({"schema_version":1,"contract":wire::contract_artifact().unwrap(),
-            "runtime":runtime.runtime,"runtime_qualification":runtime.qualification,
-            "proposal_policy":pin,
-            "adapters":ADAPTER_SET})
-            .to_string();
-        p.definition_bodies
-            .push(definition(EXECUTION_ID, execution_body));
-        let adapter = definition(
-            "aq.presence-adapter/actual-worker-fixture",
-            "Synthetic server fixture adapter, not physical presence qualification".into(),
-        );
-        let evidence = definition(
-            "aq.presence-evidence/actual-worker-fixture",
-            "Synthetic server owner evidence, no physical worker presence claim".into(),
-        );
-        let q = aq_admission::scoped_presence::Qualification {
-            schema_version:1, protocol:aq_admission::scoped_presence::Protocol::ScopedMaterialPresenceV1,
-            runtime:runtime.runtime.clone(), runtime_qualification:runtime.qualification.clone(),
-            adapter:adapter.artifact().clone(), adapter_qualification:evidence.artifact().clone(),
-            inventory_semantics:aq_admission::scoped_presence::InventorySemantics::ProvisionableOnlyAndScopedPresenceV1,
-            observation_protocol:aq_admission::scoped_presence::ObservationProtocol::GrantIssuanceBoundedBoottimeV1,
-            maximum_age_ms:30_000, maximum_ttl_ms:30_000,
-        };
-        let q = definition(
-            "aq.scoped-material-presence-qualification/actual-worker-fixture",
-            serde_json::to_string(&q).unwrap(),
-        );
-        inventory_qualification = Some(q.artifact().clone());
-        p.definition_bodies.extend([adapter, evidence, q]);
-    }
+    let inventory_qualification = if execution {
+        Some(install_execution_definitions(&mut p, &runtime, &pin))
+    } else {
+        None
+    };
     p.revision += 1;
     p.validate().unwrap();
     config.profiled_execution = Some(Arc::new(p));
@@ -103,6 +75,49 @@ pub(super) async fn configure(case: &mut Case, execution: bool) -> (Value, Optio
         inventory_qualification,
     )
 }
+fn install_execution_definitions(
+    p: &mut aq_server::profiled_execution::config::ProfiledConfig,
+    runtime: &aq_server::profiled_execution::config::QualifiedRuntime,
+    pin: &ArtifactRef,
+) -> ArtifactRef {
+    let execution_body = json!({"schema_version":1,"contract":wire::contract_artifact().unwrap(),
+        "runtime":runtime.runtime,"runtime_qualification":runtime.qualification,
+        "proposal_policy":pin,
+        "adapters":ADAPTER_SET})
+    .to_string();
+    p.definition_bodies
+        .push(definition(EXECUTION_ID, execution_body));
+    let adapter = definition(
+        "aq.presence-adapter/actual-worker-fixture",
+        "Synthetic server fixture adapter, not physical presence qualification".into(),
+    );
+    let evidence = definition(
+        "aq.presence-evidence/actual-worker-fixture",
+        "Synthetic server owner evidence, no physical worker presence claim".into(),
+    );
+    let q = aq_admission::scoped_presence::Qualification {
+        schema_version: 1,
+        protocol: aq_admission::scoped_presence::Protocol::ScopedMaterialPresenceV1,
+        runtime: runtime.runtime.clone(),
+        runtime_qualification: runtime.qualification.clone(),
+        adapter: adapter.artifact().clone(),
+        adapter_qualification: evidence.artifact().clone(),
+        inventory_semantics:
+            aq_admission::scoped_presence::InventorySemantics::ProvisionableOnlyAndScopedPresenceV1,
+        observation_protocol:
+            aq_admission::scoped_presence::ObservationProtocol::GrantIssuanceBoundedBoottimeV1,
+        maximum_age_ms: 30_000,
+        maximum_ttl_ms: 30_000,
+    };
+    let q = definition(
+        "aq.scoped-material-presence-qualification/actual-worker-fixture",
+        serde_json::to_string(&q).unwrap(),
+    );
+    let inventory_qualification = q.artifact().clone();
+    p.definition_bodies.extend([adapter, evidence, q]);
+    inventory_qualification
+}
+
 pub(super) async fn verify(
     case: &Case,
     root: &std::path::Path,
@@ -437,34 +452,7 @@ async fn execution_request(
         phase_owner::prepare(&state, &auth, &q, nonce).await?,
     ))))
 }
-async fn verify_execution(
-    case: &Case,
-    result: &Value,
-    acceptance: &AcceptRequest,
-    proposal: &Proposal,
-    accepted: &AcceptedDelivery,
-    snapshot: &Value,
-    hot: &Value,
-) {
-    let attempt = &snapshot["state"]["attempts"][acceptance
-        .original
-        .acceptance
-        .binding
-        .attempt_id
-        .to_string()];
-    let prepare: wire::PrepareRequest =
-        serde_json::from_value(result["prepare_request"].clone()).unwrap();
-    let delivery: wire::ExecutionDelivery =
-        serde_json::from_value(result["execution_delivery"].clone()).unwrap();
-    delivery
-        .validate_for(
-            &prepare,
-            &accepted.receipt,
-            acceptance,
-            proposal,
-            delivery.delivery.nonce,
-        )
-        .unwrap();
+fn verify_first_inventory(delivery: &wire::ExecutionDelivery) {
     let inventory_sequence = delivery
         .receipt
         .confirmation
@@ -491,6 +479,15 @@ async fn verify_execution(
         inventory_sequence, 1,
         "actual first V2 operation for this new worker boot"
     );
+}
+
+fn verify_execution_journal(
+    result: &Value,
+    attempt: &Value,
+    snapshot: &Value,
+    prepare: &wire::PrepareRequest,
+    accepted: &AcceptedDelivery,
+) {
     let record = &attempt[EXECUTION];
     assert_eq!(record["delivery"], result["execution_delivery"]);
     assert_eq!(record["request_digest"], json!(prepare.digest().unwrap()));
@@ -540,6 +537,38 @@ async fn verify_execution(
         result["execution_deadline_ns"].as_u64().unwrap()
             <= result["execution_hard_deadline_ns"].as_u64().unwrap()
     );
+}
+
+async fn verify_execution(
+    case: &Case,
+    result: &Value,
+    acceptance: &AcceptRequest,
+    proposal: &Proposal,
+    accepted: &AcceptedDelivery,
+    snapshot: &Value,
+    hot: &Value,
+) {
+    let attempt = &snapshot["state"]["attempts"][acceptance
+        .original
+        .acceptance
+        .binding
+        .attempt_id
+        .to_string()];
+    let prepare: wire::PrepareRequest =
+        serde_json::from_value(result["prepare_request"].clone()).unwrap();
+    let delivery: wire::ExecutionDelivery =
+        serde_json::from_value(result["execution_delivery"].clone()).unwrap();
+    delivery
+        .validate_for(
+            &prepare,
+            &accepted.receipt,
+            acceptance,
+            proposal,
+            delivery.delivery.nonce,
+        )
+        .unwrap();
+    verify_first_inventory(&delivery);
+    verify_execution_journal(result, attempt, snapshot, &prepare, accepted);
     assert_eq!(
         hot["status"],
         if result.get("phase_stopped_ack").is_some() {

@@ -421,22 +421,7 @@ pub async fn receive(
     let cid = continuation.continuation_id;
     let disposition = match &packet.body.message {
         Message::Checkpoint(c) => {
-            if &row.intent.binding != binding {
-                return Err(AppError::Forbidden("not the suspended binding".into()));
-            }
-            if row.phase != "directed" || row.checkpoint.is_some() {
-                return Err(conflict("checkpoint already recorded"));
-            }
-            if let CheckpointClaim::Supplied { summary, .. } = &c.claim
-                && summary.text.as_str().len() > row.intent.max_summary_bytes as usize
-            {
-                return Err(AppError::BadRequest(
-                    "checkpoint summary exceeds budget".into(),
-                ));
-            }
-            sqlx::query("UPDATE hibernation_suspensions SET checkpoint=$2,checkpoint_message_id=$3,updated_at_ms=$4 WHERE continuation_id=$1")
-                .bind(cid).bind(to_json(c)?).bind(message_id).bind(time)
-                .execute(&mut *tx).await.map_err(db)?;
+            record_checkpoint(&mut tx, &row, c, message_id, time).await?;
             ReceiptDisposition::CheckpointRecorded
         }
         Message::Parking(p) => {
@@ -447,35 +432,7 @@ pub async fn receive(
             ReceiptDisposition::ParkingRecorded
         }
         Message::BootstrapAck(a) => {
-            let (Some(attachment), Some(digest)) = (&row.attachment, &row.attachment_digest) else {
-                return Err(conflict("no continuation attachment issued"));
-            };
-            if row.phase != "continued" {
-                return Err(conflict("bootstrap already acknowledged"));
-            }
-            if a.admission_id != attachment.admission_id
-                || a.continuation != attachment.continuation
-                || a.successor != attachment.successor
-                || a.outcome != attachment.outcome
-                || a.attachment_digest.as_str() != digest
-            {
-                return Err(conflict("acknowledgment does not match the attachment"));
-            }
-            let recorded: Option<Value> = sqlx::query_scalar(
-                "SELECT response#>'{body,body,acknowledgment_receipt}' FROM agent_wait_acks WHERE admission_id=$1",
-            )
-            .bind(a.admission_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db)?
-            .flatten();
-            let recorded: Option<ArtifactRef> = recorded.map(from_json).transpose()?;
-            if recorded.as_ref() != Some(&a.acknowledgment_receipt) {
-                return Err(conflict("acknowledgment receipt not recorded by AQ"));
-            }
-            sqlx::query("UPDATE hibernation_suspensions SET phase='acknowledged',ack=$2,ack_message_id=$3,updated_at_ms=$4 WHERE continuation_id=$1")
-                .bind(cid).bind(to_json(a)?).bind(message_id).bind(time)
-                .execute(&mut *tx).await.map_err(db)?;
+            record_bootstrap_ack(&mut tx, &row, a, message_id, time).await?;
             ReceiptDisposition::BootstrapAcknowledgmentRecorded
         }
         _ => unreachable!("filtered above"),
@@ -502,6 +459,73 @@ pub async fn receive(
         .map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(receipt)
+}
+
+async fn record_checkpoint(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Row5,
+    c: &lc::Checkpoint,
+    message_id: Uuid,
+    time: i64,
+) -> Result<()> {
+    let cid = row.intent.continuation.continuation_id;
+    if row.intent.binding != c.binding {
+        return Err(AppError::Forbidden("not the suspended binding".into()));
+    }
+    if row.phase != "directed" || row.checkpoint.is_some() {
+        return Err(conflict("checkpoint already recorded"));
+    }
+    if let CheckpointClaim::Supplied { summary, .. } = &c.claim
+        && summary.text.as_str().len() > row.intent.max_summary_bytes as usize
+    {
+        return Err(AppError::BadRequest(
+            "checkpoint summary exceeds budget".into(),
+        ));
+    }
+    sqlx::query("UPDATE hibernation_suspensions SET checkpoint=$2,checkpoint_message_id=$3,updated_at_ms=$4 WHERE continuation_id=$1")
+        .bind(cid).bind(to_json(c)?).bind(message_id).bind(time)
+        .execute(&mut **tx).await.map_err(db)?;
+    Ok(())
+}
+
+async fn record_bootstrap_ack(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Row5,
+    a: &lc::BootstrapAck,
+    message_id: Uuid,
+    time: i64,
+) -> Result<()> {
+    let cid = row.intent.continuation.continuation_id;
+    let (Some(attachment), Some(digest)) = (&row.attachment, &row.attachment_digest) else {
+        return Err(conflict("no continuation attachment issued"));
+    };
+    if row.phase != "continued" {
+        return Err(conflict("bootstrap already acknowledged"));
+    }
+    if a.admission_id != attachment.admission_id
+        || a.continuation != attachment.continuation
+        || a.successor != attachment.successor
+        || a.outcome != attachment.outcome
+        || a.attachment_digest.as_str() != digest
+    {
+        return Err(conflict("acknowledgment does not match the attachment"));
+    }
+    let recorded: Option<Value> = sqlx::query_scalar(
+        "SELECT response#>'{body,body,acknowledgment_receipt}' FROM agent_wait_acks WHERE admission_id=$1",
+    )
+    .bind(a.admission_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db)?
+    .flatten();
+    let recorded: Option<ArtifactRef> = recorded.map(from_json).transpose()?;
+    if recorded.as_ref() != Some(&a.acknowledgment_receipt) {
+        return Err(conflict("acknowledgment receipt not recorded by AQ"));
+    }
+    sqlx::query("UPDATE hibernation_suspensions SET phase='acknowledged',ack=$2,ack_message_id=$3,updated_at_ms=$4 WHERE continuation_id=$1")
+        .bind(cid).bind(to_json(a)?).bind(message_id).bind(time)
+        .execute(&mut **tx).await.map_err(db)?;
+    Ok(())
 }
 
 async fn record_parking(

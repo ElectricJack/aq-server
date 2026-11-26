@@ -7,6 +7,30 @@ use crate::{FallbackReason, IntelligenceBudgetPolicy, SelectionPolicy, UnknownCo
 use aq_session_protocol::{Capability, Text};
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// Delay before replacing an attempt after repeated verified nonstarts.
+/// The first verified nonstart can be retried immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchRetryBackoff {
+    pub initial_delay_ms: u64,
+    pub max_delay_ms: u64,
+}
+
+impl LaunchRetryBackoff {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl Default for LaunchRetryBackoff {
+    fn default() -> Self {
+        Self {
+            initial_delay_ms: 30_000,
+            max_delay_ms: 300_000,
+        }
+    }
+}
+
 /// The selection policy every intelligence profile starts from. A Settings
 /// value: the store keeps it and passes it to `compile`, and it is part of
 /// the snapshot, so a launch resolves from its snapshot alone.
@@ -39,6 +63,11 @@ pub struct SelectionDefaults {
     /// task is held.
     #[serde(default = "initial_never_granted")]
     pub max_never_granted_offers: u32,
+    /// Current Settings control the wait after a verified launch failure;
+    /// the time budget and attempt limit remain pinned to the launch.
+    /// Omitting the default preserves existing snapshot and request digests.
+    #[serde(default, skip_serializing_if = "LaunchRetryBackoff::is_default")]
+    pub launch_retry_backoff: LaunchRetryBackoff,
 }
 fn initial_never_granted() -> u32 {
     SelectionDefaults::default().max_never_granted_offers
@@ -76,6 +105,7 @@ impl Default for SelectionDefaults {
             max_wake_attempts: 3,
             max_wake_lineage_elapsed_ms: 24 * 3_600_000,
             max_never_granted_offers: 8,
+            launch_retry_backoff: LaunchRetryBackoff::default(),
         }
     }
 }
@@ -205,6 +235,7 @@ impl SelectionDefaults {
             max_wake_attempts: d.max_wake_attempts,
             max_wake_lineage_elapsed_ms: d.max_wake_lineage_elapsed_ms,
             max_never_granted_offers: d.max_never_granted_offers,
+            launch_retry_backoff: d.launch_retry_backoff,
         }
     }
     /// The full policy: these values, and from the execution profile the
@@ -235,6 +266,12 @@ impl SelectionDefaults {
     /// The rules of [`SelectionPolicy::validate`] that do not depend on an
     /// execution profile.
     pub fn check(&self) -> Result<(), String> {
+        let backoff = self.launch_retry_backoff;
+        if backoff.initial_delay_ms == 0 || backoff.max_delay_ms < backoff.initial_delay_ms {
+            return Err(
+                "launch retry backoff must have 0 < initial_delay_ms <= max_delay_ms".into(),
+            );
+        }
         let wake_allowed = self.max_wake_attempts > 0 && self.max_wake_lineage_elapsed_ms > 0;
         if !wake_allowed || self.max_never_granted_offers == 0 {
             return Err("wake and never-granted limits must be above zero".into());

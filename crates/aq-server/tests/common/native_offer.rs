@@ -31,12 +31,14 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
-    /// A second ready task of lower priority, listed only in mode 7 (and on a second page in mode 11). Mode 8 closes the task; mode 10 completes it.
+    /// A second ready task of lower priority, listed in modes 7 and 13 (and on a second page in mode 11). Mode 8 closes the task; mode 10 completes it.
     pub second_task: Uuid,
     /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
     pub metadata: Arc<std::sync::Mutex<Value>>,
     /// The synthetic Graph peer's base URL.
     pub graph_url: String,
+    /// Each `add_edge` the synthetic Graph peer committed.
+    pub edges: Arc<std::sync::Mutex<Vec<Value>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Case {
@@ -63,7 +65,15 @@ pub async fn setup() -> Case {
 
 /// Add one project with its own Graph workspace and task, sharing the fixture repository.
 pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Case {
-    let mut env = selection::selection_fixture().await;
+    setup_with(additional, false).await
+}
+
+pub async fn setup_with_secondary_provider() -> Case {
+    Box::pin(setup_with(None, true)).await
+}
+
+async fn setup_with(additional: Option<aq_selection::TaskLineage>, secondary: bool) -> Case {
+    let mut env = selection::selection_fixture_with_secondary(secondary).await;
     let pool = env.env.pool.clone();
     // This lane intentionally installs the frozen guard explicitly. Ordered
     // registration26/27 is independently owned/qualified by the schema lane.
@@ -90,7 +100,8 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     let mut second = node.clone();
     second["id"] = json!(second_task);
     second["title"] = json!("Second synthetic native task");
-    second["metadata"] = json!({"aq:priority": -1});
+    // A task AQ created carries its project, which a supervisor's task scope check reads.
+    second["metadata"] = json!({"aq:priority": -1, "aq:project_id": env.lineage.project_id});
     let other = additional.as_ref().map(|lineage| {
         let mut node = node.clone();
         node["id"] = json!(lineage.task_id);
@@ -108,9 +119,17 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     let peer_entered = observation_entered.clone();
     let peer_resume = observation_resume.clone();
     let updated = node.clone();
+    let edges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let added = edges.clone();
     let mutations = axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
         let mut node = updated.clone();
         let op = &body["operations"][0];
+        if op["op"] == "add_edge" {
+            let edge = json!({"id":op["id"],"workspace_id":workspace,"source":op["source"],"target":op["target"],"edge_type":op["edge_type"],"source_revision":null,"target_revision":null,"version":1,"deleted":false,"created_at":"2026-01-01T00:00:00Z","description":null});
+            added.lock().unwrap().push(edge.clone());
+            let result = json!({"change_set_id":Uuid::new_v4(),"results":[edge]});
+            return std::future::ready(([("X-AQ-Graph-API-Version", "1")], axum::Json(result)));
+        }
         assert_eq!(
             (&op["op"], &op["id"]),
             (&json!("update_node"), &json!(task))
@@ -118,7 +137,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
         *written.lock().unwrap() = op["patch"]["metadata"].clone();
         node["metadata"] = op["patch"]["metadata"].clone();
         let result = json!({"change_set_id":Uuid::new_v4(),"results":[node]});
-        async move { ([("X-AQ-Graph-API-Version", "1")], axum::Json(result)) }
+        std::future::ready(([("X-AQ-Graph-API-Version", "1")], axum::Json(result)))
     });
     let app = axum::Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
         let mut node = node.clone();
@@ -171,7 +190,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 let behind = uri.query().is_some_and(|q| q.contains("cursor=page-2"));
                 let items = match mode {
                     3 => vec![],
-                    7 => vec![node, second],
+                    7 | 13 => vec![node, second],
                     11 if behind => vec![second],
                     _ => vec![node],
                 };
@@ -182,7 +201,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                     None
                 } else if id == task.to_string() {
                     Some(node)
-                } else if id == second_task.to_string() && [7, 11].contains(&mode) {
+                } else if id == second_task.to_string() && [7, 11, 13].contains(&mode) {
                     Some(second)
                 } else {
                     None
@@ -194,6 +213,8 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 json!({"node":second,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false})
             } else if uri.path().ends_with(&format!("/nodes/{task}")) {
                 node
+            } else if uri.path().ends_with(&format!("/nodes/{second_task}")) {
+                second
             } else if uri.path().ends_with("/context") {
                 if mode == 1 {
                     node["version"] = json!(2);
@@ -280,6 +301,17 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
         (art("native-test-policy", policy_body), policy_body.into()),
     ] {
         definitions.push(Definition::new(r, ArtifactKind::Definition, body).unwrap());
+    }
+    if secondary {
+        let account = &env.input.credentials[1].profile;
+        definitions.push(
+            Definition::new(
+                account.clone(),
+                ArtifactKind::Definition,
+                account.id.as_str().to_owned(),
+            )
+            .unwrap(),
+        );
     }
     let handle = Uuid::new_v4();
     let mut config = (*env.env.state.config).clone();
@@ -405,8 +437,26 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     >::new()));
     let export_clock = env.env.time.clone();
     let export_mode = mode.clone();
-    tasks.push(tokio::spawn(async move{use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};loop{let (stream,_)=listener.accept().await.unwrap();let root=root.clone();let retained=retained.clone();let export_clock=export_clock.clone();let export_mode=export_mode.clone();tokio::spawn(async move{
+    let retention_inspections = Arc::new(AtomicU8::new(0));
+    let inspection_entered = observation_entered.clone();
+    let inspection_resume = observation_resume.clone();
+    tasks.push(tokio::spawn(async move{use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};loop{let (stream,_)=listener.accept().await.unwrap();let root=root.clone();let retained=retained.clone();let export_clock=export_clock.clone();let export_mode=export_mode.clone();
+        let retention_inspections = retention_inspections.clone();
+        let inspection_entered = inspection_entered.clone();
+        let inspection_resume = inspection_resume.clone();
+        tokio::spawn(async move{
         let mut reader=BufReader::new(stream);let mut line=vec![];reader.read_until(b'\n',&mut line).await.unwrap();let r:Value=serde_json::from_slice(&line).unwrap();
+        // The first observation verifies the export; the second fences the
+        // assembled offer after its final selection and before publication.
+        if export_mode.load(Ordering::SeqCst) == 13
+            && r["operation"] == "retention.inspect"
+            && r["request_id"].as_str().is_some_and(|id| id.starts_with("profiled-retention-"))
+            && retention_inspections.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            inspection_entered.add_permits(1);
+            tokio::time::timeout(std::time::Duration::from_secs(4), inspection_resume.acquire())
+                .await.expect("resume final publication inspection").unwrap().forget();
+        }
         let result=match r["operation"].as_str().unwrap(){
             "repo.show"=>json!({"repository_id":repository,"binding_generation":1,"identity":"synthetic-native-repository","mode":"central","object_format":"sha1"}),
             "repo.retain_ref"=>json!({"ref":r["params"]["ref"],"head":{"algorithm":"sha1","hex":"a".repeat(40)},"retention_handle":handle,"synced_at_ms":export_clock.load(Ordering::SeqCst)}),
@@ -470,6 +520,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
         second_task,
         metadata,
         graph_url: format!("http://{addr}"),
+        edges,
         tasks,
     }
 }

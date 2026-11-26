@@ -172,7 +172,7 @@ async fn a_pinned_profile_environment_wins_over_the_default() {
 }
 
 /// A replacement keeps its predecessor's environment. The task's metadata
-/// (written in Graph directly, not by `task.needs.set`, which refuses after a
+/// (written in Graph directly, not by `task.needs.set`, which refuses during a
 /// grant) comes to need `node`: a fresh choice would be `web` and wait for a
 /// node, while the replacement stays in `confined-worktree` and is held for
 /// lacking `node`. Needing nothing again, it runs there.
@@ -554,7 +554,7 @@ pub(crate) async fn ready(c: &Case, digests: Value) {
     assert_eq!(response.status(), 200);
 }
 /// The definition reference nodes are told for the admitted `example.web`.
-async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
+pub(super) async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
     let catalog =
         aq_server::profiled_execution::definitions::catalog(&c.env.env.state, &c.env.env.pool)
             .await
@@ -563,7 +563,7 @@ async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
     serde_json::from_value(nodes[0]["definition"].clone()).unwrap()
 }
 /// What the inventory writer stores for the node's installed `harnesses`.
-async fn republish(c: &Case) -> Vec<aq_selection::InstalledHarness> {
+pub(super) async fn republish(c: &Case) -> Vec<aq_selection::InstalledHarness> {
     let state = &c.env.env.state;
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let configured = c.env.input.node.harnesses.clone();
@@ -800,4 +800,71 @@ async fn a_pruned_environment_is_no_longer_listed_or_offered() {
     assert!(catalog.definition(&derived).is_none());
     let reason = refused(&mut c, "no_node_has_environment").await;
     assert_eq!(reason["environment"], "example.web", "{reason}");
+}
+
+/// Requalifying a ticket after environment admission uses the current binding
+/// and a worker that has pulled its image. The ticket keeps the exact branch
+/// checkpoint that its stopped attempt already pushed.
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn a_fresh_retry_in_a_newly_admitted_environment_keeps_the_task_branch_lease() {
+    use super::git_grant::granted_offer;
+    use super::holds::{owner_actions, retry_with};
+    use crate::common::native_offer::fail;
+    use aq_delivery::git_grant::fake::{FakeGitHttp, git};
+
+    let mut c = setup().await;
+    let repository = c.env.frozen.project.binding.repository_id;
+    let git_root = c
+        .env
+        .env
+        .state
+        .source_retention
+        .as_ref()
+        .unwrap()
+        .config
+        .git_root
+        .clone();
+    let fake = FakeGitHttp::start(&git_root, repository, "refs/heads/main").await;
+    let (original, grant) = granted_offer(&mut c, &fake).await;
+    let original = original.offered.lifecycle_binding;
+    assert_eq!(placed(&c, original.attempt_id).await, roles::ENVIRONMENT);
+    assert!(grant.lease.is_none());
+    let tree = git(&fake.repository, &["rev-parse", "HEAD^{tree}"]);
+    let checkpoint = git(
+        &fake.repository,
+        &["commit-tree", &tree, "-p", &fake.base, "-m", "saved work"],
+    );
+    git(
+        &fake.repository,
+        &["update-ref", &grant.task_ref, &checkpoint],
+    );
+    fail(&c, original.attempt_id).await;
+
+    on_web(&mut c).await;
+    owner_actions(&mut c).await;
+    let (status, body) = retry_with(&c, Uuid::new_v4(), Some("qualified environment"), false).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "replacement_project_revision_changed");
+    let (status, body) = retry_with(&c, Uuid::new_v4(), Some("qualified environment"), true).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed");
+
+    refused(&mut c, "no_node_has_environment").await;
+    ready(&c, json!([TEMPLATE])).await;
+    republish(&c).await;
+    c.request.operation_id = Uuid::new_v4();
+    let (successor, next) = granted_offer(&mut c, &fake).await;
+    let successor_binding = successor.offered.lifecycle_binding;
+    assert_eq!(successor_binding.task_id, original.task_id);
+    assert_ne!(successor_binding.attempt_id, original.attempt_id);
+    assert_eq!(
+        successor.offered.offer.manifest.harness.environment,
+        definition_of(&c).await
+    );
+    assert_eq!(
+        (next.repository_id, next.task_ref),
+        (repository, grant.task_ref)
+    );
+    assert_eq!(next.lease.as_deref(), Some(checkpoint.as_str()));
 }

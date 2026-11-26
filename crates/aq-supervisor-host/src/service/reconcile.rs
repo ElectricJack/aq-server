@@ -54,11 +54,11 @@ impl Service<'_> {
                 return Ok(false);
             }
             Phase::StoppedReported | Phase::CancelledBeforeStart => {
-                if !installed.can_continue(self, ctl, &state).await? {
-                    cursor.failed_revision = Some(ctl.revision);
-                    self.report("failed", "Turn ended without a confirmed reply; inspect task changes before continuing",Some(&state)).await?;
-                    return Ok(false);
-                }
+                clean_homes(self.config)?;
+                archive_turn(self.config, turn)?;
+                // A stopped generation with outstanding mail is checked by
+                // the reservation owner below, including after a restart.
+                cursor.failed_revision = None;
             }
             Phase::Prepared => {
                 self.report(
@@ -96,6 +96,14 @@ impl Installed {
             if !ctl.enabled {
                 return Ok(None);
             }
+            // Central never prepared this generation, so nothing refers to the turn:
+            // past its admission window it is set aside and re-planned from its dispatch.
+            if stale(turn) {
+                archive_turn(service.config, turn)?;
+                let stage = "Re-planning a turn whose start window passed";
+                service.report("waiting", stage, None).await?;
+                return Ok(None);
+            }
             if let Some(reason) =
                 crate::config::swarm_wait(pool, turn.swarm_profile.as_ref()).await?
             {
@@ -125,23 +133,12 @@ impl Installed {
         };
         Ok(Some(state))
     }
-    async fn can_continue(
-        &self,
-        service: &Service<'_>,
-        ctl: &Control,
-        state: &Snapshot,
-    ) -> Result<bool> {
-        clean_homes(service.config)?;
-        let replied: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM central_supervisor_replies WHERE dispatch_id=$1)",
-        )
-        .bind(self.turn.central.dispatch_id)
-        .fetch_one(service.pool)
-        .await?;
-        archive_turn(service.config, &self.turn)?;
-        if !ctl.enabled || replied {
-            return Ok(true);
-        }
-        retry_unstarted(service.pool, state).await
-    }
 }
+
+fn stale(turn: &Config) -> bool {
+    crate::admission_clock(&turn.host).is_err()
+}
+
+#[cfg(test)]
+#[path = "reconcile/qualification.rs"]
+mod qualification;

@@ -5,7 +5,7 @@
 use super::facts;
 use super::{completion, owner::*};
 use crate::execution::authority::{self, Policy};
-use crate::{AppState, profiled_execution::results};
+use crate::{AppState, error::AppError, profiled_execution::results};
 #[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
@@ -15,8 +15,11 @@ use aq_profiled_state::graph_completion::{
 pub use aq_profiled_state::graph_completion::{AutoDisposition, AutoSettlement};
 pub use aq_profiled_state::result_reads::ReplacementFacts;
 use serde_json::{Value, json};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
+
+#[cfg(feature = "delivery_playbook")]
+pub(super) mod publication_retry;
 
 const OWNER: &str = "aq.settlement-owner.auto.1";
 const ACTOR: &str = "aq.settlement.default-policy@1";
@@ -25,23 +28,38 @@ fn status(row: &sqlx::postgres::PgRow) -> Result<AutoSettlement> {
 }
 pub(super) async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>> {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    sqlx::query("SELECT set_config('lock_timeout','500ms',true),set_config('statement_timeout','2000ms',true),set_config('aq.settlement_owner',$1,true)")
-        .bind(OWNER)
-        .execute(&mut *tx)
+    graph_completion::fence_transaction(&mut tx, OWNER)
         .await
         .map_err(db)?;
     Ok(tx)
 }
-async fn lock_row(
-    tx: &mut Transaction<'_, Postgres>,
-    report_id: Uuid,
-) -> Result<Option<sqlx::postgres::PgRow>> {
-    sqlx::query("SELECT * FROM profiled_auto_settlements WHERE report_id=$1 FOR UPDATE")
-        .bind(report_id)
-        .fetch_optional(&mut **tx)
+// The stopped result remains immutable even when the harness naturally exits
+// before receiving the handoff. Record checkpoint rework in the same write.
+pub(crate) async fn settle_workspace_checkpoint_locked(
+    connection: &mut PgConnection,
+    receipt: &aq_admission::result_record::Receipt,
+) -> Result<bool> {
+    let attempt = receipt.binding.attempt_id;
+    if !crate::task_workspace_resume::checkpoint_required(connection, attempt).await? {
+        return Ok(false);
+    }
+    graph_completion::fence_transaction(connection, OWNER)
         .await
-        .map_err(db)
+        .map_err(db)?;
+    graph_completion::record_noncompletion(
+        connection,
+        receipt.report_id,
+        attempt,
+        (ACTOR, "rework_required", crate::task_workspace_resume::REQUESTED),
+        &serde_json::json!({"decided_by":"workspace_expansion","report_digest":receipt.report_digest}),
+        i64::try_from(receipt.recorded_at_ms).map_err(|_| AppError::Internal)?,
+    )
+    .await
+    .map_err(db)?
+    .ok_or(AppError::Internal)?;
+    Ok(true)
 }
+
 /// Only a Success report is acceptable (MS1 review B1). A native worker reports
 /// Success only for a harness exit it proved (exit 0 plus an explicit claim);
 /// Unknown, Failed, Expired and Cancelled go to rework, never to completion.
@@ -75,12 +93,12 @@ pub async fn settle_after_record(
     let Some(delivery) = applicable(state, &r) else {
         return Ok(None);
     };
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
-        .bind(format!("aq-auto-settlement:{report_id}"))
-        .execute(&mut *tx)
+    aq_profiled_state::result_reads::lock_settlement(&mut tx, report_id)
         .await
         .map_err(db)?;
-    let existing = lock_row(&mut tx, report_id).await?;
+    let existing = graph_completion::lock_row(&mut tx, report_id)
+        .await
+        .map_err(db)?;
     let mut conflict = None;
     if let Some(row) = &existing {
         let s = status(row)?;
@@ -111,8 +129,15 @@ pub async fn settle_after_record(
         Some((reason, evidence)) => (Verdict::Hold(reason), evidence),
         None => evaluate_locked(state, &mut tx, &r, delivery).await?,
     };
+    #[cfg(feature = "delivery_playbook")]
+    let verdict = if matches!(verdict, Verdict::Complete)
+        && !crate::task_workspace_delivery::gate(state, &mut tx, &r, true).await?
+    {
+        Verdict::Hold("workspace_delivery_pending")
+    } else {
+        verdict
+    };
     let time = now(state)?;
-    let held = |reason: &'static str| ("held", reason);
     let (disposition, reason) = match verdict {
         Verdict::Rework(reason) => ("rework_required", reason),
         // A version conflict re-evaluates but never re-dispatches the stale
@@ -120,19 +145,23 @@ pub async fn settle_after_record(
         Verdict::Hold(_) | Verdict::Complete if conflict.is_some() => {
             ("held", conflict.as_deref().ok_or_else(unavailable)?)
         }
-        Verdict::Hold(reason) => held(reason),
+        Verdict::Hold(reason) => ("held", reason),
         Verdict::Complete => {
             let row = prepare_locked(state, &mut tx, &r, evidence, time, "Default policy").await?;
             return dispatch(state, tx, &row, &r).await.map(Some);
         }
     };
-    sqlx::query("INSERT INTO profiled_auto_settlements(report_id,attempt_id,policy_actor,disposition,reason,evidence,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$7) ON CONFLICT(report_id) DO UPDATE SET disposition=EXCLUDED.disposition,reason=EXCLUDED.reason,evidence=EXCLUDED.evidence,updated_at_ms=EXCLUDED.updated_at_ms")
-        .bind(report_id).bind(r.report.binding.attempt_id).bind(ACTOR).bind(disposition).bind(reason).bind(evidence).bind(time)
-        .execute(&mut *tx).await.map_err(db)?;
-    let row = lock_row(&mut tx, report_id)
-        .await?
-        .ok_or(crate::error::AppError::Internal)?;
-    let s = status(&row)?;
+    let s = graph_completion::record_noncompletion(
+        &mut tx,
+        report_id,
+        r.report.binding.attempt_id,
+        (ACTOR, disposition, reason),
+        &evidence,
+        time,
+    )
+    .await
+    .map_err(db)?
+    .ok_or(crate::error::AppError::Internal)?;
     tx.commit().await.map_err(db)?;
     if s.disposition == AutoDisposition::ReworkRequired {
         Box::pin(replacement_facts_after_rework(state, report_id)).await;
@@ -154,40 +183,27 @@ async fn replacement_facts_after_rework(state: &AppState, report_id: Uuid) {
     }
 }
 
-/// B4 replacement facts for a report the default policy finally reworked
-/// (MS1 retry). Under the report lock and the common node/attempt/hot locks,
-/// the policy actor records only what the owning domains prove:
-///
-/// - `retention = retained`: a central aq-git import receipt pinned by the
-///   report is confirmed (`source_retention::load_confirmed_locked`);
-/// - `effects = quiescent`: every operation of the attempt's complete AQ effect
-///   ledger is final (`effects::inspect_aq_effects_locked`,
-///   `AqEffectsSnapshot::quiescent`), whatever its profile may write or mail.
-///   Anything else stays `unknown`.
-///
-/// Nothing else changes: no Graph write, no completion, no claim release. Only
-/// a stopped attempt that still holds its task, whose current report head was
-/// reworked and that has no owner acceptance or completion, qualifies. B4's
-/// replacement owner re-assesses these facts, the stop proof and the lineage
-/// budgets under its own locks before it releases the claim.
+/// Prove retained source and quiescent effects before replacement can release
+/// the claim, including after a verified platform interruption or a delivery hold.
 pub async fn record_replacement_facts(
     state: &AppState,
     report_id: Uuid,
 ) -> Result<ReplacementFacts> {
-    replacement_facts(state, report_id, false).await
+    replacement_facts(state, report_id, false, None).await
 }
 
 /// Reconcile the current delivery hold supported by its recorded worker and PR outcomes.
 /// Resolve the current report from the task so an earlier result cannot authorize a retry.
 #[cfg(feature = "delivery_playbook")]
 pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
-    recover_held_for_retry_exact(state, task, None).await
+    recover_held_for_retry_exact(state, task, None, None).await
 }
 #[cfg(feature = "delivery_playbook")]
 pub(crate) async fn recover_held_for_retry_exact(
     state: &AppState,
     task: Uuid,
     predecessor: Option<Uuid>,
+    owner_operation: Option<Uuid>,
 ) -> Result<()> {
     let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
         .await
@@ -198,12 +214,24 @@ pub(crate) async fn recover_held_for_retry_exact(
             .await
             .map_err(db)?,
     };
+    let report = match (report, predecessor, owner_operation) {
+        (None, Some(attempt), Some(_)) => sqlx::query_scalar(
+            "SELECT h.report_id FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
+             WHERE h.attempt_id=$1 AND a.task_id=$2 AND a.holds_task",
+        )
+        .bind(attempt)
+        .bind(task)
+        .fetch_optional(&state.store.pool)
+        .await
+        .map_err(db)?,
+        _ => report,
+    };
     if let Some(report) = report
         && aq_delivery::git_grant::is_retry_report(&state.store.pool, report, predecessor)
             .await
             .map_err(db)?
     {
-        Box::pin(replacement_facts(state, report, true)).await?;
+        Box::pin(replacement_facts(state, report, true, owner_operation)).await?;
     }
     Ok(())
 }
@@ -212,6 +240,7 @@ async fn replacement_facts(
     state: &AppState,
     report_id: Uuid,
     owner_retry: bool,
+    _owner_operation: Option<Uuid>,
 ) -> Result<ReplacementFacts> {
     use crate::execution::{
         authority::{self, hot::HotState},
@@ -219,9 +248,7 @@ async fn replacement_facts(
     };
     let mut tx = begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
-        .bind(format!("aq-auto-settlement:{report_id}"))
-        .execute(&mut *tx)
+    aq_profiled_state::result_reads::lock_settlement(&mut tx, report_id)
         .await
         .map_err(db)?;
     let view = authority::load_locked(
@@ -242,10 +269,25 @@ async fn replacement_facts(
             == Some(report_id);
     #[cfg(not(feature = "delivery_playbook"))]
     let cancelled_retry = false;
-    let reworked = match lock_row(&mut tx, report_id).await? {
-        Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
+    let settlement = graph_completion::lock_row(&mut tx, report_id)
+        .await
+        .map_err(db)?
+        .as_ref()
+        .map(status)
+        .transpose()?;
+    let platform_retry = r.report.platform_interrupted()
+        && !view.revoked
+        && view.cancellation_id.is_none()
+        && settlement
+            .as_ref()
+            .is_none_or(|s| s.disposition == AutoDisposition::Held && s.operation_id.is_none())
+        && crate::hibernation::suspended_hold(&mut tx, r.report.binding.attempt_id)
+            .await?
+            .is_none();
+    let reworked = match settlement {
+        Some(ref s) => s.disposition == AutoDisposition::ReworkRequired,
         #[cfg(feature = "delivery_playbook")]
-        None if owner_retry => {
+        None if owner_retry || (!view.revoked && view.cancellation_id.is_none()) => {
             cancelled_retry
                 || aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
                     .await
@@ -254,28 +296,28 @@ async fn replacement_facts(
         }
         None => false,
     };
+    #[cfg(feature = "delivery_playbook")]
+    let publication_retry = match _owner_operation {
+        Some(operation) if !reworked && !platform_retry && settlement.is_none() => {
+            publication_retry::evidence(&mut tx, &r, operation).await?
+        }
+        _ => None,
+    };
+    #[cfg(not(feature = "delivery_playbook"))]
+    let publication_retry: Option<Value> = None;
     let attempt = r.report.binding.attempt_id;
-    let owner_settled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition IN ('accepted','needs_reconciliation','stale')) OR EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1)")
-        .bind(attempt)
-        .fetch_one(&mut *tx)
+    let owner_settled = aq_profiled_state::result_reads::owner_settled(&mut tx, attempt)
         .await
         .map_err(db)?;
-    let mut hot: HotState = serde_json::from_value(
-        sqlx::query_scalar::<_, Value>(
-            "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
-        )
-        .bind(attempt)
-        .fetch_one(&mut *tx)
+    let mut hot = aq_profiled_state::result_reads::lock_hot_state(&mut tx, attempt)
         .await
-        .map_err(db)?,
-    )
-    .map_err(|_| crate::error::AppError::Internal)?;
+        .map_err(db)?;
     let current = |hot: &HotState| ReplacementFacts {
         source_retained: matches!(hot.retention, Retention::Retained { .. }),
         effects_quiescent: matches!(hot.effects, Effects::Quiescent { .. }),
         changed: false,
     };
-    if !reworked
+    if !(reworked || platform_retry || publication_retry.is_some())
         || !r.is_current_report_head
         || !view.holds_task
         || !view.stopped
@@ -287,61 +329,12 @@ async fn replacement_facts(
         tx.commit().await.map_err(db)?;
         return Ok(facts);
     }
-    let mut changed = false;
-    if !matches!(hot.retention, Retention::Retained { .. }) {
-        let enrolled = super::super::has_delivery_grant(&mut *tx, attempt).await?;
-        #[cfg(feature = "delivery_playbook")]
-        if enrolled
-            && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
-                .await
-                .map_err(db)?
-        {
-            let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
-            hot.retention = Retention::Retained { receipt: reference };
-            changed = true;
-        }
-        if !enrolled {
-            for op in &r.report.source_receipt_ids {
-                match crate::source_retention::load_confirmed_locked(&mut tx, *op, &r).await {
-                    Ok(confirmed) => {
-                        hot.retention = Retention::Retained {
-                            receipt: reference(
-                                format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
-                                &confirmed.acknowledgement,
-                            )?,
-                        };
-                        changed = true;
-                        break;
-                    }
-                    Err(crate::error::AppError::Conflict(_)) => {}
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-    }
-    if !matches!(hot.effects, Effects::Quiescent { .. }) {
-        let ledger = super::effects::inspect_aq_effects_locked(state, &mut tx, &r).await?;
-        // Quiescence (every operation final), not the read-only acceptance verdict: a
-        // messaging or write profile's finished, returned attempt is replaceable too.
-        if ledger.quiescent() {
-            let mut fact = json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR});
-            if ledger.disposition() != super::effects::LedgerDisposition::Settled {
-                fact["ledger_disposition"] = json!(ledger.disposition().name());
-            }
-            let id = format!("aq.replacement-effects/{report_id}");
-            hot.effects = Effects::Quiescent {
-                receipt: reference(id, &fact)?,
-            };
-            changed = true;
-        }
-    }
+    let mut changed = retain_replacement_source_locked(&mut tx, &r, &mut hot).await?;
+    changed |= settle_replacement_effects_locked(state, &mut tx, &r, &mut hot).await?;
     if changed {
         hot.validate_against(&r.report.binding)
             .map_err(|_| crate::error::AppError::Internal)?;
-        sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-            .bind(attempt)
-            .bind(serde_json::to_value(&hot).map_err(|_| crate::error::AppError::Internal)?)
-            .execute(&mut *tx)
+        aq_profiled_state::result_reads::save_hot_state(&mut tx, attempt, &hot)
             .await
             .map_err(db)?;
     }
@@ -349,10 +342,126 @@ async fn replacement_facts(
         changed,
         ..current(&hot)
     };
+    #[cfg(feature = "delivery_playbook")]
+    if let Some(evidence) = publication_retry
+        && facts.source_retained
+        && facts.effects_quiescent
+    {
+        graph_completion::record_noncompletion(
+            &mut tx,
+            report_id,
+            attempt,
+            (ACTOR, "rework_required", publication_retry::REASON),
+            &evidence,
+            now(state)?,
+        )
+        .await
+        .map_err(db)?
+        .ok_or(AppError::Internal)?;
+    }
+    if platform_retry && facts.source_retained && facts.effects_quiescent {
+        let reason = aq_machine_control::platform_retry::REASON;
+        let evidence =
+            json!({"policy_actor":ACTOR,"decided_by":"platform_retry","report":r.receipt_artifact});
+        let time = now(state)?;
+        let _ = graph_completion::record_noncompletion(
+            &mut tx,
+            report_id,
+            attempt,
+            (ACTOR, "rework_required", reason),
+            &evidence,
+            time,
+        )
+        .await
+        .map_err(db)?;
+        #[cfg(feature = "delivery_playbook")]
+        if super::super::has_delivery_grant(&mut *tx, attempt).await? {
+            aq_playbook_domain::delivery_decisions::record_platform_return(
+                &mut tx,
+                r.spec.task.task_id,
+                report_id,
+                time,
+            )
+            .await
+            .map_err(|_| crate::error::AppError::Internal)?;
+        }
+    }
     tx.commit().await.map_err(db)?;
     Ok(facts)
 }
 
+async fn retain_replacement_source_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    hot: &mut crate::execution::authority::hot::HotState,
+) -> Result<bool> {
+    use crate::execution::profiled::Retention;
+    let attempt = r.report.binding.attempt_id;
+    #[cfg(feature = "delivery_playbook")]
+    let report_id = r.report.report_id;
+    if matches!(hot.retention, Retention::Retained { .. }) {
+        return Ok(false);
+    }
+    let enrolled = super::super::has_delivery_grant(&mut **tx, attempt).await?;
+    #[cfg(feature = "delivery_playbook")]
+    if enrolled
+        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, report_id)
+            .await
+            .map_err(db)?
+    {
+        let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
+        hot.retention = Retention::Retained { receipt: reference };
+        return Ok(true);
+    }
+    if !enrolled {
+        for op in &r.report.source_receipt_ids {
+            match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
+                Ok(confirmed) => {
+                    hot.retention = Retention::Retained {
+                        receipt: reference(
+                            format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
+                            &confirmed.acknowledgement,
+                        )?,
+                    };
+                    return Ok(true);
+                }
+                Err(crate::error::AppError::Conflict(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(false)
+}
+async fn settle_replacement_effects_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    hot: &mut crate::execution::authority::hot::HotState,
+) -> Result<bool> {
+    use crate::execution::profiled::Effects;
+    let report_id = r.report.report_id;
+    if matches!(hot.effects, Effects::Quiescent { .. }) {
+        return Ok(false);
+    }
+    let ledger = super::effects::inspect_aq_effects_locked(state, tx, r).await?;
+    // Quiescence (every operation final), not the read-only acceptance verdict: a
+    // messaging or write profile's finished, returned attempt is replaceable too.
+    if !ledger.quiescent() {
+        return Ok(false);
+    }
+    let mut fact = json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR});
+    if ledger.disposition() != super::effects::LedgerDisposition::Settled {
+        fact["ledger_disposition"] = json!(ledger.disposition().name());
+    }
+    let id = format!("aq.replacement-effects/{report_id}");
+    hot.effects = Effects::Quiescent {
+        receipt: reference(id, &fact)?,
+    };
+    Ok(true)
+}
+
+/// Reworked attempts that still hold their task without both replacement
+/// facts, in report order after `after`. Bounded; the cursor is disposable.
 pub async fn reworked_without_facts(
     state: &AppState,
     after: Option<Uuid>,
@@ -373,18 +482,7 @@ async fn evaluate_locked(
 ) -> Result<(Verdict, Value)> {
     let g = facts::gather_locked(state, tx, r, false).await?;
     let v = &g.view;
-    let acceptance = if !r.is_current_report_head
-        || !outcome_acceptable(r.report.outcome)
-        || v.revoked
-        || v.cancellation_id.is_some()
-        || !v.holds_task
-    {
-        Acceptance::Refused
-    } else if !v.stopped {
-        Acceptance::NotStopped
-    } else {
-        Acceptance::Accepted
-    };
+    let acceptance = result_acceptance(r, v);
     let (source, lineage_unknown) = (&g.source, g.lineage_unknown);
     let unchanged = matches!(source, Some((_, _, false)));
     let conclusion = r.report.conclusion.as_str();
@@ -415,6 +513,24 @@ async fn evaluate_locked(
         "delivery": {"policy": delivery, "state": g.delivery_state},
     });
     Ok((verdict, evidence))
+}
+
+fn result_acceptance(
+    r: &results::RecordedResult,
+    v: &crate::execution::authority::AuthorityView,
+) -> Acceptance {
+    if !r.is_current_report_head
+        || !outcome_acceptable(r.report.outcome)
+        || v.revoked
+        || v.cancellation_id.is_some()
+        || !v.holds_task
+    {
+        Acceptance::Refused
+    } else if !v.stopped {
+        Acceptance::NotStopped
+    } else {
+        Acceptance::Accepted
+    }
 }
 
 async fn prepare_locked(
@@ -505,8 +621,9 @@ async fn dispatch(
         Policy::IdentityOnly,
     )
     .await?;
-    let current = lock_row(&mut tx, report_id)
-        .await?
+    let current = graph_completion::lock_row(&mut tx, report_id)
+        .await
+        .map_err(db)?
         .ok_or(crate::error::AppError::Internal)?;
     if current.get::<String, _>("disposition") != "possible"
         || current.get::<Option<i64>, _>("next_graph_check_at_ms") != Some(next)
@@ -518,19 +635,7 @@ async fn dispatch(
     let time = now(state)?;
     match outcome {
         Ok(Ok((http, raw))) if http.is_success() => {
-            if let Ok(receipt) = completion::confirmed(&raw, &current) {
-                let receipt =
-                    serde_json::to_value(receipt).map_err(|_| crate::error::AppError::Internal)?;
-                graph_completion::confirm(
-                    &mut tx,
-                    report_id,
-                    current.get("attempt_id"),
-                    time,
-                    receipt,
-                )
-                .await
-                .map_err(db)?;
-            }
+            confirm_dispatch_locked(&mut tx, report_id, &current, &raw, time).await?;
         }
         Ok(Ok((http, _))) if http == axum::http::StatusCode::CONFLICT => {
             let reason = if lookup {
@@ -553,12 +658,30 @@ async fn dispatch(
         // Lost or invalid response: stays possible for identical replay.
         _ => {}
     }
-    let row = lock_row(&mut tx, report_id)
-        .await?
+    let row = graph_completion::lock_row(&mut tx, report_id)
+        .await
+        .map_err(db)?
         .ok_or(crate::error::AppError::Internal)?;
     let s = status(&row)?;
     tx.commit().await.map_err(db)?;
     Ok(s)
+}
+
+async fn confirm_dispatch_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    report_id: Uuid,
+    current: &sqlx::postgres::PgRow,
+    raw: &Value,
+    time: i64,
+) -> Result<()> {
+    if let Ok(receipt) = completion::confirmed(raw, current) {
+        let receipt =
+            serde_json::to_value(receipt).map_err(|_| crate::error::AppError::Internal)?;
+        graph_completion::confirm(tx, report_id, current.get("attempt_id"), time, receipt)
+            .await
+            .map_err(db)?;
+    }
+    Ok(())
 }
 
 /// Epic 0 (spec 0016 section 6.2): the locked prelude of a playbook's
@@ -576,18 +699,17 @@ async fn playbook_locked<'a>(
     Option<sqlx::postgres::PgRow>,
     bool,
 )> {
-    use crate::execution::authority::hot::HotState;
     let mut tx = begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;
     if !super::super::has_delivery_grant(&mut *tx, r.report.binding.attempt_id).await? {
         return Err(conflict());
     }
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
-        .bind(format!("aq-auto-settlement:{report_id}"))
-        .execute(&mut *tx)
+    aq_profiled_state::result_reads::lock_settlement(&mut tx, report_id)
         .await
         .map_err(db)?;
-    let existing = lock_row(&mut tx, report_id).await?;
+    let existing = graph_completion::lock_row(&mut tx, report_id)
+        .await
+        .map_err(db)?;
     let v = authority::load_locked(
         state,
         &mut tx,
@@ -595,16 +717,11 @@ async fn playbook_locked<'a>(
         Policy::IdentityOnly,
     )
     .await?;
-    let hot = sqlx::query_scalar::<_, Value>(
-        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
-    )
-    .bind(r.report.binding.attempt_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(db)?;
-    let hot: HotState =
-        serde_json::from_value(hot).map_err(|_| crate::error::AppError::Internal)?;
+    let hot = aq_profiled_state::result_reads::lock_hot_state(&mut tx, r.report.binding.attempt_id)
+        .await
+        .map_err(db)?;
     let fenced = r.is_current_report_head
+        && !r.report.platform_interrupted()
         && v.holds_task
         && v.stopped
         && hot.stop.known_stopped()
@@ -626,6 +743,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
         AutoDisposition::Held | AutoDisposition::ReworkRequired => Settled::Stale,
     };
     let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    let fenced = fenced
+        && !crate::task_workspace_resume::checkpoint_required(&mut tx, r.report.binding.attempt_id)
+            .await?;
     let prior = existing.as_ref().map(status).transpose()?;
     match prior {
         Some(s)
@@ -648,6 +768,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
             return Ok(Settled::Stale);
         }
         _ => {}
+    }
+    if !crate::task_workspace_delivery::gate(state, &mut tx, &r, false).await? {
+        return Ok(Settled::Pending);
     }
     let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.complete", "report": r.receipt_artifact});
     let row = prepare_locked(state, &mut tx, &r, evidence, now(state)?, "Playbook").await?;

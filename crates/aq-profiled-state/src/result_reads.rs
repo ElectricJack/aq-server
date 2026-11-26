@@ -1,6 +1,6 @@
 //! The SQL and query validation behind the owner and project result reads
 //! (`human_results`): bounded keyset discovery of recorded result reports.
-//! Reads only; each function runs inside the caller's read transaction.
+//! Authority and settlement helpers run inside the caller's transaction.
 use aq_admission::{
     LaunchBinding, SessionIdentity,
     execution_spec::ProfiledExecutionSpec,
@@ -242,6 +242,25 @@ pub async fn head_report(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result
         .await
 }
 
+/// Lock the current report. After a platform continuation is settled, a
+/// different report can no longer own delivery for that attempt.
+pub async fn correction_head(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> sqlx::Result<(Option<Uuid>, bool)> {
+    sqlx::query_as(concat!(
+        "SELECT h.report_id, EXISTS(SELECT 1 FROM profiled_auto_settlements s \
+         JOIN profiled_result_reports r USING(report_id) WHERE s.report_id=h.report_id \
+         AND s.attempt_id=h.attempt_id AND s.disposition='rework_required' AND ",
+        aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+        ") FROM profiled_result_heads h WHERE h.attempt_id=$1 FOR UPDATE OF h",
+    ))
+    .bind(attempt)
+    .fetch_optional(db)
+    .await
+    .map(Option::unwrap_or_default)
+}
+
 /// What the policy actor could record for B4 after a final rework.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ReplacementFacts {
@@ -253,21 +272,74 @@ pub struct ReplacementFacts {
     pub changed: bool,
 }
 
-/// Reworked attempts that still hold their task without both replacement
-/// facts, in report order after `after`. Bounded; the cursor is disposable.
+/// Serializes settlement, result facts and automatic retry on one report.
+pub async fn lock_settlement(conn: &mut PgConnection, report: Uuid) -> sqlx::Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
+        .bind(format!("aq-auto-settlement:{report}"))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn lock_hot_state(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+) -> sqlx::Result<crate::hot::HotState> {
+    let state = sqlx::query_scalar(
+        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(attempt)
+    .fetch_one(conn)
+    .await?;
+    serde_json::from_value(state).map_err(|e| sqlx::Error::Decode(e.into()))
+}
+
+pub async fn save_hot_state(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+    state: &crate::hot::HotState,
+) -> sqlx::Result<()> {
+    let state = serde_json::to_value(state).map_err(|e| sqlx::Error::Encode(e.into()))?;
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(state)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn owner_settled(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition IN ('accepted','needs_reconciliation','stale')) OR EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1)")
+        .bind(attempt).fetch_one(conn).await
+}
+
+/// Reworked attempts, results the delivery playbook held (their facts never release them, see
+/// `aq_delivery::git_grant::held_gate`) or verified platform interruptions awaiting settlement,
+/// in report order after `after`. The cursor carries no authority.
 pub async fn reworked_without_facts(
     pool: &sqlx::PgPool,
     after: Option<Uuid>,
     limit: i64,
 ) -> sqlx::Result<Vec<Uuid>> {
-    sqlx::query_scalar(
-        "SELECT s.report_id FROM profiled_auto_settlements s \
-         JOIN execution_attempts a USING(attempt_id) JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE s.disposition='rework_required' AND a.kind='profiled_v1' AND a.holds_task \
+    sqlx::query_scalar(concat!(
+        "SELECT r.report_id FROM profiled_result_heads rh \
+         JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(rh.attempt_id,rh.report_id) \
+         JOIN execution_attempts a ON a.attempt_id=r.attempt_id \
+         JOIN profiled_authority_hot h ON h.attempt_id=a.attempt_id \
+         LEFT JOIN profiled_auto_settlements s ON s.report_id=r.report_id \
+         WHERE a.kind='profiled_v1' AND a.holds_task \
          AND h.state#>>'{stop,kind}' IN ('stopped','not_started') \
-         AND (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent') \
-         AND ($1::UUID IS NULL OR s.report_id>$1) ORDER BY s.report_id LIMIT $2",
-    )
+         AND ((s.disposition='rework_required' AND
+               (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent')) \
+              OR (s.disposition IS NULL AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL \
+                  AND (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent') \
+                  AND EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=r.report_id AND d.task_id=a.task_id \
+                             AND d.decision='held' AND d.reason IN ('policy','returns_exhausted'))) \
+              OR ((s.disposition IS NULL OR (s.disposition='held' AND s.operation_id IS NULL)) AND ",
+         aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+        " AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL)) \
+          AND ($1::UUID IS NULL OR r.report_id>$1) ORDER BY r.report_id LIMIT $2",
+    ))
     .bind(after)
     .bind(limit)
     .fetch_all(pool)

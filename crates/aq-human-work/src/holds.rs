@@ -403,18 +403,22 @@ pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Optio
     )
 }
 
-/// The scheduler releases a verified nonstart before waiting to reoffer.
+/// The derived wake for repeated worker interruptions or verified nonstarts.
 pub async fn launch_retry_wait(pool: &PgPool, task: Uuid, now_ms: i64) -> Option<Value> {
     use aq_profiled_state::{replacement, replacement_sql};
     let now = u64::try_from(now_ms).ok()?;
     let mut conn = pool.acquire().await.ok()?;
     let priors = replacement_sql::load(&mut conn, task).await.ok()?;
-    let (attempt, next) = replacement::launch_retry_after(&priors)?;
+    if priors.len() < 2 {
+        return None;
+    }
+    let settings = aq_role_settings::selection_defaults(&mut conn).await.ok()?;
+    let (attempt, next) = replacement::launch_retry_after(&priors, settings.launch_retry_backoff)?;
     (now < next).then(|| {
         json!({
             "code": replacement::LAUNCH_BACKOFF,
             "attempt_id": attempt,
-            "message": "Repeated verified launch failures released the task's previous claim. AQ will recheck worker placement after the backoff.",
+            "message": "Repeated verified worker failures delayed the next attempt. AQ will recheck worker placement after the backoff.",
             "blocker_owner": "aq_scheduler",
             "wake_condition": "launch_retry_backoff_elapsed",
             "next_check_at_ms": next,

@@ -92,7 +92,10 @@ const RESULT_LIMIT: QueryParam = opt(
     "limit",
     r#"{"type":"integer","minimum":1,"maximum":100,"default":20}"#,
 );
-const RESULT_PROFILE: QueryParam = opt("profile", r#"{"enum":["recorded_native_v2"]}"#);
+const RESULT_PROFILE: QueryParam = opt(
+    "profile",
+    r#"{"enum":["recorded_native_v2","recorded_legacy_native_only"]}"#,
+);
 
 const TASK_GRAPH: &[QueryParam] = &[opt(
     "limit",
@@ -380,8 +383,19 @@ fn operational_query(path: &str) -> Option<&'static [QueryParam]> {
         // agent_access/waits/routes.rs::owner_list (`ListQuery`), ::owner_show
         "/api/waits" => const { &[PROJECT] },
         "/api/waits/{wait_id}" => NONE,
+        "/api/settings/performance/delivery/{id}" => {
+            const {
+                &[opt(
+                    "work_class",
+                    r#"{"type":"string","minLength":1,"maxLength":128}"#,
+                )]
+            }
+        }
         // project_bindings.rs::inspect, ::history
-        "/api/projects/{id}" | "/api/projects/{id}/revisions/{revision}" => NONE,
+        "/api/projects/{id}"
+        | "/api/projects/{id}/revisions/{revision}"
+        | "/api/projects/{home}/tasks/{task}/workspace"
+        | "/api/projects/{target}/workspace-requests" => NONE,
         // admin_api.rs::workers, ::status; execution/api.rs::inspect
         "/api/workers" | "/api/status" | "/api/execution/attempts/{id}" => NONE,
         // aq-supervisor-control api.rs::list

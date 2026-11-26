@@ -12,15 +12,13 @@ pub mod owner;
 pub mod read;
 pub mod wire;
 mod zip;
-pub use api::{Auth, Service};
-pub use aq_manual_sessions::intelligence::resolve_stored;
+pub use api::{Auth, Service, resolve_stored, supports_profile, supports_settings};
 use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
 pub use wire::Conversation;
-/// The supervisor routes on the machine listener: `/v1/supervisor/projects`,
-/// and with supervisor_full_access the owner bridge to `owner_app`; without
-/// it, the read nest over `human` and the admin nest over `settings`.
+/// Both supervisor modes use the project discovery and scoped read routes.
+/// Full access adds the owner bridge; the limited mode adds the settings nest.
 pub fn machine_routes<S: Clone + Send + Sync + 'static>(
     human: axum::Router<S>,
     settings: axum::Router<S>,
@@ -29,19 +27,21 @@ pub fn machine_routes<S: Clone + Send + Sync + 'static>(
     clock: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 ) -> axum::Router<S> {
     let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
-    let projects = read::projects(pool.clone(), clock.clone());
+    let supervisor = read::projects(pool.clone(), clock.clone()).merge(read::routes(
+        human,
+        pool.clone(),
+        clock.clone(),
+    ));
     #[cfg(feature = "supervisor_full_access")]
     {
-        let _ = (human, settings);
+        let _ = settings;
         let bridge = owner_app.map(|app| owner::routes(app, pool, clock));
-        projects.merge(bridge.unwrap_or_default())
+        supervisor.merge(bridge.unwrap_or_default())
     }
     #[cfg(not(feature = "supervisor_full_access"))]
     {
         let _ = owner_app;
-        projects
-            .merge(read::routes(human, pool.clone(), clock.clone()))
-            .merge(admin::routes(settings, pool, clock))
+        supervisor.merge(admin::routes(settings, pool, clock))
     }
 }
 /// The supervisor git route `/v1/supervisor/git` on the machine listener,

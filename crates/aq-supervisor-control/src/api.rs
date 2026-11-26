@@ -44,6 +44,51 @@ fn conflict(message: &'static str) -> Error {
 fn missing() -> Error {
     Error(StatusCode::NOT_FOUND, "Supervisor not found")
 }
+/// Whether a profile's harness can launch the selected provider and effort.
+pub fn supports_profile(profile: &Value) -> bool {
+    supports_settings(
+        profile["provider"].as_str().unwrap_or_default(),
+        profile["harness"].as_str().unwrap_or_default(),
+        profile["reasoning"].as_str().unwrap_or_default(),
+    )
+}
+
+/// Whether a supervisor harness can launch the provider with the given effort.
+pub fn supports_settings(provider: &str, harness: &str, reasoning: &str) -> bool {
+    matches!(
+        (provider, harness, reasoning),
+        ("openai", "codex", "low" | "medium" | "high")
+            | (
+                "anthropic",
+                "claude",
+                "default" | "off" | "low" | "medium" | "high" | "xhigh" | "max"
+            )
+    )
+}
+
+/// Resolve a saved supervisor choice against the current role snapshot.
+pub async fn resolve_stored(
+    pool: &PgPool,
+    profile: &Value,
+) -> Result<std::result::Result<String, String>> {
+    let resolved = aq_manual_sessions::intelligence::resolve_stored(pool, profile).await?;
+    Ok(resolved.and_then(|digest| {
+        if supports_profile(profile) {
+            Ok(digest)
+        } else {
+            Err("its candidate is unsupported by the supervisor; choose a level".into())
+        }
+    }))
+}
+
+async fn choices(pool: &PgPool) -> Result<Vec<Value>> {
+    Ok(aq_manual_sessions::intelligence::choices(pool)
+        .await?
+        .into_iter()
+        .filter(supports_profile)
+        .collect())
+}
+
 /// What a control stores of a choice: the level and the candidate, and no
 /// snapshot. It is resolved against the active snapshot when read or started.
 fn stored(mut choice: Value) -> Value {
@@ -56,14 +101,7 @@ async fn list(State(s): State<Service>, headers: HeaderMap) -> Result<Json<Value
     (s.owner)(headers).await?;
     let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',c.conversation_id,'actor_id',c.actor_id,'project_id',i.project_id,'label',COALESCE(p.label,'Global supervisor'),'enabled',c.enabled,'revision',c.revision,'profile',c.profile,'phase',CASE WHEN r.observed_at_ms IS NULL OR r.observed_at_ms<$1 THEN 'unavailable' WHEN NOT c.enabled AND r.phase NOT IN ('working','stopping','uncertain') THEN 'stopped' ELSE r.phase END,'stage',CASE WHEN r.observed_at_ms IS NULL OR r.observed_at_ms<$1 THEN 'Supervisor service is unavailable' ELSE r.stage END,'observed_at_ms',r.observed_at_ms,'generation',r.generation,'session_id',r.session_id,'last_error',r.last_error) FROM supervisor_controls c JOIN supervisor_conversation_ids i USING(conversation_id) LEFT JOIN project_supervisor_conversations p USING(conversation_id) LEFT JOIN supervisor_service_reports r USING(conversation_id) ORDER BY i.project_id IS NOT NULL,p.label,c.conversation_id")
         .bind(chrono::Utc::now().timestamp_millis()-15000).fetch_all(&s.pool).await?;
-    let profiles = aq_manual_sessions::intelligence::choices(&s.pool)
-        .await?
-        .into_iter()
-        .filter(|p| {
-            p["harness"] == "codex"
-                && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
-        })
-        .collect::<Vec<_>>();
+    let profiles = choices(&s.pool).await?;
     // A stored choice is resolved against the active snapshot on every read:
     // a supervisor whose level is gone, or no longer lists its candidate,
     // keeps its control and says why it is not running.
@@ -72,8 +110,7 @@ async fn list(State(s): State<Service>, headers: HeaderMap) -> Result<Json<Value
         if row["profile"].is_null() {
             continue;
         }
-        let resolved =
-            aq_manual_sessions::intelligence::resolve_stored(&s.pool, &row["profile"]).await?;
+        let resolved = resolve_stored(&s.pool, &row["profile"]).await?;
         if let Err(reason) = resolved {
             row["unavailable_reason"] = json!(reason);
         }
@@ -184,14 +221,11 @@ async fn resolve_control_profile(
     current: &sqlx::postgres::PgRow,
 ) -> Result<Value> {
     Ok(if let Some(selected) = &control.intelligence_profile {
-        aq_manual_sessions::intelligence::choices(pool)
+        choices(pool)
             .await?
             .into_iter()
             .find(|p| {
-                p["harness"] == "codex"
-                    && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
-                    && p["profile_id"] == selected.profile_id
-                    && p["candidate_id"] == selected.candidate_id
+                p["profile_id"] == selected.profile_id && p["candidate_id"] == selected.candidate_id
             })
             .map(stored)
             .ok_or_else(|| {

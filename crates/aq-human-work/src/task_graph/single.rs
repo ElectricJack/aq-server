@@ -18,6 +18,9 @@ pub struct Create {
     #[schemars(length(max = 16))]
     pub labels: Vec<String>,
     pub task_state: TaskState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 17))]
+    pub workspace: Vec<aq_project_policy::workspace::Requirement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,7 +53,10 @@ pub enum TaskState {
 }
 impl Create {
     pub fn valid(&self) -> bool {
-        self.valid_identity() && self.valid_routing() && self.valid_content()
+        self.valid_identity()
+            && self.valid_routing()
+            && self.valid_content()
+            && aq_project_policy::workspace::valid_list(&self.workspace)
     }
     fn valid_identity(&self) -> bool {
         !self.operation_id.is_nil()

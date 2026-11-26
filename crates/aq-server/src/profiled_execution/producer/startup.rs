@@ -37,6 +37,7 @@ fn provenance(part: StartupPart, origin: &Origin<'_>) -> String {
         StartupPart::Task => origin.task.into(),
         StartupPart::TaskThread => origin.thread.unwrap_or("aq.task-thread").into(),
         StartupPart::Reporting => super::result_startup::STARTUP_ID.into(),
+        StartupPart::RetryEvidence => "aq.previous-delivery-check".into(),
     }
 }
 /// The names the context plan gives the parts that have an identity of

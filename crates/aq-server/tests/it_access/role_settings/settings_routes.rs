@@ -62,6 +62,74 @@ async fn the_routing_document_is_saved_replayed_and_fenced_over_http() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
+#[tokio::test]
+async fn the_supervisor_document_is_saved_replayed_and_fenced_over_http() {
+    const PATH: &str = "/api/settings/supervisor-document";
+    let f = started().await;
+    // Empty by default: project supervisors use the compiled role text.
+    let (status, body) = f.owner().get(PATH).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"markdown": "", "revision": "0"}));
+    let (status, _) = f.viewer_read().get(PATH).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer does not read it");
+
+    let put = json!({"markdown": "Keep {label} moving.",
+        "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    let (status, body) = f.viewer().put(PATH, put.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = f.owner().put(PATH, put.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "csrf_rejected");
+    let before = f.active().await;
+    let (status, saved) = f.owner_write().put(PATH, put.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(f.active().await.1, before.1, "it compiles nothing");
+    let (_, read) = f.owner().get(PATH).await;
+    assert_eq!(
+        read,
+        json!({"markdown": "Keep {label} moving.", "revision": saved["revision"]})
+    );
+    let (_, routing) = f.owner().get("/api/settings/routing-document").await;
+    assert_eq!(routing, json!({"markdown": "", "revision": "0"}));
+    // The same operation again answers as the first time; its id with another
+    // text, or a save from a stale read, is a conflict and changes nothing.
+    let (status, again) = f.owner_write().put(PATH, put.clone()).await;
+    assert_eq!((status, &again), (StatusCode::OK, &saved));
+    let mut other = put.clone();
+    other["markdown"] = json!("Something else.");
+    assert_eq!(
+        f.owner_write().put(PATH, other).await.0,
+        StatusCode::CONFLICT
+    );
+    let stale =
+        json!({"markdown": "Late.", "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    assert_eq!(
+        f.owner_write().put(PATH, stale).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(f.owner().get(PATH).await.1, read);
+    // What a supervisor turn reads is what the route saved.
+    let mut conn = f.pool.acquire().await.unwrap();
+    let (markdown, revision) = settings::supervisor_document(&mut conn).await.unwrap();
+    assert_eq!(
+        (markdown.as_str(), revision.to_string()),
+        (
+            "Keep {label} moving.",
+            saved["revision"].as_str().unwrap().to_owned()
+        )
+    );
+    // It goes into every installed turn, so it is bounded below the store's limit.
+    let big = json!({"markdown": "x".repeat(16_385), "expected_revision": saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.owner_write().put(PATH, big).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let next = json!({"markdown": "", "expected_revision": saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.owner_write().put(PATH, next).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(f.owner().get(PATH).await.1["markdown"], "");
+}
+
 #[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_delivery_document_is_saved_replayed_and_fenced_over_http() {
@@ -142,7 +210,8 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         "main_sync_interval_ms": 60000, "main_freshness_ms": 30000,
         "decision_repeat_ms": 120000, "longest_check_wait_ms": 3600000,
         "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456,
-        "require_landed_results": true, "check_log_bytes": 16384});
+        "require_landed_results": true, "check_log_bytes": 16384,
+        "hold_followup_interval_ms": 86400000});
     let (status, body) = f.owner().get(PATH).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
@@ -151,6 +220,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
 
     let mut changed = defaults.clone();
     changed["main_sync_interval_ms"] = json!(15000);
+    changed["hold_followup_interval_ms"] = json!(120000);
     let put = json!({"limits": changed, "expected_revision": "0",
         "operation_id": Uuid::new_v4()});
     let (status, body) = f.viewer().put(PATH, put.clone()).await;
@@ -168,6 +238,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     );
     let (limits, revision) = settings::delivery_limits(&f.pool).await.unwrap();
     assert_eq!(limits.main_sync_interval_ms, 15000);
+    assert_eq!(limits.hold_followup_interval_ms, 120000);
     assert_eq!(revision.to_string(), saved["revision"].as_str().unwrap());
     // The store's own limits keep their revision.
     let (_, own) = f.owner().get("/api/settings/profiles/limits").await;
@@ -198,6 +269,32 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     let (status, _) = f.owner_write().put(PATH, wrong).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(DeliveryLimits::default().validate(), Ok(()));
+
+    let mut old_client = changed.clone();
+    old_client
+        .as_object_mut()
+        .unwrap()
+        .remove("hold_followup_interval_ms");
+    old_client["main_sync_interval_ms"] = json!(16000);
+    let old_put = json!({"limits": old_client, "expected_revision": expected,
+        "operation_id": Uuid::new_v4()});
+    let (status, old_saved) = f.owner_write().put(PATH, old_put.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{old_saved}");
+    let (_, old_read) = f.owner().get(PATH).await;
+    assert_eq!(old_read["limits"]["main_sync_interval_ms"], 16000);
+    assert_eq!(old_read["limits"]["hold_followup_interval_ms"], 120000);
+
+    changed["hold_followup_interval_ms"] = json!(180000);
+    let new_put = json!({"limits": changed, "expected_revision": old_saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, new_saved) = f.owner_write().put(PATH, new_put).await;
+    assert_eq!(status, StatusCode::OK, "{new_saved}");
+    assert_eq!(
+        f.owner_write().put(PATH, old_put).await,
+        (StatusCode::OK, old_saved)
+    );
+    let (_, now) = f.owner().get(PATH).await;
+    assert_eq!(now["limits"]["hold_followup_interval_ms"], 180000);
 }
 
 #[cfg(feature = "delivery_playbook")]
@@ -214,7 +311,13 @@ fn invalid_delivery_limits(defaults: &Value) -> Vec<Value> {
         negative[field] = json!(-1);
         cases.push(negative);
         // A field Settings stored before it existed reads as its default.
-        if !["require_landed_results", "check_log_bytes"].contains(&field.as_str()) {
+        if ![
+            "require_landed_results",
+            "check_log_bytes",
+            "hold_followup_interval_ms",
+        ]
+        .contains(&field.as_str())
+        {
             let mut missing = defaults.clone();
             missing.as_object_mut().unwrap().remove(field);
             cases.push(missing);
@@ -341,4 +444,85 @@ async fn model_suggestions_are_read_from_the_discovery_cache_and_never_fail() {
     f.save(Kind::Intelligence, "standard-high", level)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn delivery_reporting_preferences_are_owner_only_revisioned_and_replayable() {
+    let f = started().await;
+    let project = Uuid::new_v4();
+    let repository = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO project_execution_bindings
+         (project_id,revision,binding,validated_at_ms,binding_observation)
+         VALUES($1,1,$2,$3,'{}')",
+    )
+    .bind(project)
+    .bind(json!({"repository_id": repository}))
+    .bind(NOW)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+
+    let path = format!("/api/settings/performance/delivery/{project}");
+    let class = format!("{path}?work_class=maintenance");
+    let initial = f.owner().get(&path).await;
+    assert_eq!(initial.0, StatusCode::OK, "{}", initial.1);
+    assert_eq!(initial.1["revision"], 0);
+    assert_eq!(initial.1["effective_definition"]["kind"], "not_tracked");
+    assert_eq!(f.viewer_read().get(&path).await.0, StatusCode::FORBIDDEN);
+
+    let request = json!({"operation_id": Uuid::new_v4(), "expected_revision": 0,
+        "definition": {"kind": "confirmed_completion"}});
+    assert_eq!(
+        f.owner().send("POST", &path, Some(request.clone())).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.viewer()
+            .send("POST", &path, Some(request.clone()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, saved) = f
+        .owner_write()
+        .send("POST", &path, Some(request.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(
+        f.owner().get(&class).await.1["effective_definition"]["kind"],
+        "confirmed_completion"
+    );
+    assert_eq!(
+        f.owner_write().send("POST", &path, Some(request)).await,
+        (StatusCode::OK, saved)
+    );
+
+    let merge = json!({"operation_id": Uuid::new_v4(), "expected_revision": 0, "work_class": "maintenance",
+        "definition": {"kind": "target_branch_merge", "repository_id": repository, "target_ref": "refs/heads/main"}});
+    let (status, body) = f
+        .owner_write()
+        .send("POST", &path, Some(merge.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["revision"], 1);
+    assert_eq!(
+        f.owner().get(&class).await.1["effective_definition"]["kind"],
+        "target_branch_merge"
+    );
+    let mut stale = merge;
+    stale["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        f.owner_write().send("POST", &path, Some(stale)).await.0,
+        StatusCode::CONFLICT
+    );
+    let restore = json!({"operation_id": Uuid::new_v4(), "expected_revision": 1,
+        "work_class": "maintenance", "definition": null});
+    let (status, body) = f.owner_write().send("POST", &path, Some(restore)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["definition"], Value::Null);
+    assert_eq!(body["revision"], 2);
+    assert_eq!(body["effective_definition"]["kind"], "confirmed_completion");
+    assert_eq!(f.owner().get(&class).await.1, body);
 }

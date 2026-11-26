@@ -154,54 +154,8 @@ pub async fn record(
     {
         return Err(changed());
     }
-    let accepted = storage::accepted(&mut tx, auth.id(), &request.inventory).await?;
-    if accepted.request.identity != request.identity
-        || accepted.request.runtime != request.runtime
-        || accepted.request.runtime_qualification != request.runtime_qualification
-        || accepted.request.negotiation.qualification != request.negotiation.qualification
-    {
-        return Err(changed());
-    }
-    let head = storage::head(&mut tx, auth.id())
-        .await?
-        .ok_or_else(changed)?;
-    if head.boot != request.identity.boot_id || request.inventory.revision > head.inventory_revision
-    {
-        return Err(changed());
-    }
-    if positive
-        && (head.mode != "scoped_v1"
-            || head.operation != Some(request.inventory.operation_id)
-            || head.epoch != accepted.epoch
-            || head.snapshot_digest != request.inventory.snapshot_digest)
-    {
-        return Err(changed());
-    }
-    // A fresh report must not supersede a newer actual same-boot sample. Negative
-    // dominance is retained even after its receipt deadline; no old-positive scan.
-    if let Some(previous) = storage::latest_fact(
-        &mut tx,
-        auth.id(),
-        request.binding.attempt_id,
-        request.lease_id,
-    )
-    .await?
-    {
-        if previous.request.binding != request.binding
-            || previous.request.grant_id != request.grant_id
-            || request.sequence <= previous.request.sequence
-        {
-            return Err(changed());
-        }
-        if previous.request.observation.kernel_boot_id == request.observation.kernel_boot_id {
-            if request.observation.read_started_ns < previous.request.observation.read_completed_ns
-            {
-                return Err(changed());
-            }
-        } else if positive {
-            return Err(changed());
-        }
-    }
+    let epoch = require_inventory_locked(&mut tx, auth, request, positive).await?;
+    require_new_sample_locked(&mut tx, auth, request, positive).await?;
     let recorded = now(state)?;
     if positive {
         view.active_at(recorded)?;
@@ -239,7 +193,7 @@ pub async fn record(
         expires_at_ms: expires,
         disposition: Disposition::Recorded,
     };
-    storage::retain_fact(&mut tx, request, &receipt, head.epoch).await?;
+    storage::retain_fact(&mut tx, request, &receipt, epoch).await?;
     let final_time = now(state)?;
     if final_time < recorded
         || final_time >= expires
@@ -251,4 +205,115 @@ pub async fn record(
     // No hot state, lease, journal, graph or source/effect/claim mutation occurs.
     tx.commit().await.map_err(|_| unavailable())?;
     Ok(receipt)
+}
+
+async fn require_inventory_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    auth: &AuthenticatedNode,
+    request: &PresenceReport,
+    positive: bool,
+) -> Result<u64, AppError> {
+    let accepted = storage::accepted(tx, auth.id(), &request.inventory).await?;
+    if accepted.request.identity != request.identity
+        || accepted.request.runtime != request.runtime
+        || accepted.request.runtime_qualification != request.runtime_qualification
+        || accepted.request.negotiation.qualification != request.negotiation.qualification
+    {
+        return Err(changed());
+    }
+    let head = storage::head(tx, auth.id()).await?.ok_or_else(changed)?;
+    if head.boot != request.identity.boot_id || request.inventory.revision > head.inventory_revision
+    {
+        return Err(changed());
+    }
+    if positive
+        && (head.mode != "scoped_v1"
+            || head.operation != Some(request.inventory.operation_id)
+            || head.epoch != accepted.epoch
+            || head.snapshot_digest != request.inventory.snapshot_digest)
+    {
+        return Err(changed());
+    }
+    Ok(head.epoch)
+}
+async fn require_new_sample_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    auth: &AuthenticatedNode,
+    request: &PresenceReport,
+    positive: bool,
+) -> Result<(), AppError> {
+    // A fresh report must not supersede a newer actual same-boot sample. Negative
+    // dominance is retained even after its receipt deadline; no old-positive scan.
+    if let Some(previous) =
+        storage::latest_fact(tx, auth.id(), request.binding.attempt_id, request.lease_id).await?
+    {
+        require_sample_order(&previous.request, request, positive)?;
+    }
+    Ok(())
+}
+
+fn require_sample_order(
+    previous: &PresenceReport,
+    request: &PresenceReport,
+    positive: bool,
+) -> Result<(), AppError> {
+    if previous.binding != request.binding
+        || previous.grant_id != request.grant_id
+        || request.sequence <= previous.sequence
+    {
+        return Err(changed());
+    }
+    if previous.observation.kernel_boot_id == request.observation.kernel_boot_id {
+        if request.observation.read_started_ns < previous.observation.read_completed_ns {
+            return Err(changed());
+        }
+    } else if positive {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn previous_report() -> PresenceReport {
+        serde_json::from_str(include_str!(
+            "../../../../aq-admission/artifacts/scoped-presence-report.fixture.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_sequence_cannot_hide_an_overlapping_observation() {
+        let previous = previous_report();
+        let mut next = previous.clone();
+        next.sequence += 1;
+        next.observation.read_started_ns = previous.observation.read_completed_ns - 1;
+        for positive in [false, true] {
+            assert!(require_sample_order(&previous, &next, positive).is_err());
+        }
+        next.observation.read_started_ns = previous.observation.read_completed_ns;
+        for positive in [false, true] {
+            assert!(require_sample_order(&previous, &next, positive).is_ok());
+            next.sequence = previous.sequence;
+            assert!(require_sample_order(&previous, &next, positive).is_err());
+            next.sequence += 1;
+        }
+    }
+
+    #[test]
+    fn a_kernel_reboot_allows_only_a_same_grant_negative_sample() {
+        let previous = previous_report();
+        let mut next = previous.clone();
+        next.sequence += 1;
+        next.observation.kernel_boot_id = uuid::Uuid::new_v4();
+        assert!(require_sample_order(&previous, &next, false).is_ok());
+        assert!(require_sample_order(&previous, &next, true).is_err());
+        next.grant_id = uuid::Uuid::new_v4();
+        assert!(require_sample_order(&previous, &next, false).is_err());
+        next.grant_id = previous.grant_id;
+        next.binding.attempt_id = uuid::Uuid::new_v4();
+        assert!(require_sample_order(&previous, &next, false).is_err());
+    }
 }

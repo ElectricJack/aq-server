@@ -90,6 +90,102 @@ async fn owner_message_reaches_supervisor_and_reply_is_recorded() {
     session.verify_stop(client, &credential.token).await;
 }
 
+/// A turn that handed off its mail and stopped without a reply holds it. The
+/// owner's stop and start releases the reservation (the supervisor service's
+/// release), and the same mail goes to exactly one new generation, also on a
+/// host whose local state directory was wiped in between.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn released_handed_off_mail_goes_to_exactly_one_new_turn() {
+    for wipe in [false, true] {
+        released_turn_restarts(wipe).await;
+    }
+}
+
+async fn released_turn_restarts(wipe: bool) {
+    let db = aq_server::test_support::TestDb::create().await;
+    let api = Api::new(&db).await;
+    let mail = api.enqueue().await;
+    let reserved = api.reserve(&mail).await;
+    let actor = reserved.actor;
+    let first = reserved.prepare(&db, &mail).await;
+    // Turn 1 starts, hands its mail off, and stops without a reply.
+    let case = Case::build(db, first.central.clone(), first.turn.input.clone()).await;
+    let host = case.controller_with(Dispatched);
+    assert_eq!(case.start(&host).await.run.phase(), Phase::RunningReported);
+    host.enable_replies(actor, 999_000).await.unwrap();
+    let stopped = host.stop(actor).await.unwrap();
+    assert_eq!(stopped.run.phase(), Phase::StoppedReported);
+    // The next turn is told the unfinished dispatch may already have changed tasks.
+    let note = aq_supervisor_host::service::recheck_note_for_testing(&case.pool, &stopped).await;
+    let note = note
+        .unwrap()
+        .expect("a re-check note for the unfinished turn");
+    assert!(
+        note.contains(&first.central.dispatch_id.to_string()),
+        "{note}"
+    );
+    let owner = ReservationOwner::new(&api.state);
+    let preview = |revision| PreviewRequest {
+        actor_id: actor,
+        expected_actor_revision: revision,
+        scan_after: 0,
+        through_cursor: None,
+    };
+    let held = owner.inspect_actor(&api.user, actor).await.unwrap();
+    let outstanding = owner
+        .preview_batch(&api.user, preview(held.revision))
+        .await
+        .unwrap();
+    assert_eq!(outstanding.status, PreviewStatus::ReservationOutstanding);
+    // The owner's stop and start: the service releases the stopped turn's reservation.
+    let current = held.current_reservation.unwrap();
+    assert_eq!(current.id, reserved.id);
+    let cancel = Cancel {
+        operation_id: Uuid::new_v4(),
+        actor_id: actor,
+        reservation_id: current.id,
+        expected_reservation_revision: current.revision,
+    };
+    let bytes = serde_json::to_vec(&cancel).unwrap();
+    let released = owner.cancel_reservation(&api.user, &bytes).await.unwrap();
+    assert_eq!(released.disposition, Disposition::CancelledBeforePlan);
+    // The same mail is reserved again, for generation 2 in a new session.
+    let again = api.reserve_for(actor).await;
+    let next = again.prepare_next(&case.pool, &first.central).await;
+    assert_eq!(next.central.batch, first.central.batch);
+    drop(host);
+    let Case { _db, root, .. } = case;
+    let mut case = Case::build(_db, next.central.clone(), next.turn.input.clone()).await;
+    if !wipe {
+        case.local.workspace = root.path().canonicalize().unwrap();
+        case.root = root;
+    }
+    let host = case.controller_with(Dispatched);
+    let started = case.start(&host).await;
+    assert_eq!(started.run.phase(), Phase::RunningReported, "wipe={wipe}");
+    assert_eq!(started.run.plan().generation, 2);
+    // Exactly one new turn: the batch is reserved once more and nothing else is eligible.
+    let actor_view = owner.inspect_actor(&api.user, actor).await.unwrap();
+    assert_eq!(actor_view.current_reservation.unwrap().id, again.id);
+    let outstanding = owner
+        .preview_batch(&api.user, preview(actor_view.revision))
+        .await
+        .unwrap();
+    assert_eq!(outstanding.status, PreviewStatus::ReservationOutstanding);
+    let reserved_turns: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM central_supervisor_mail_members m JOIN central_supervisor_reservations r USING (actor_id,reservation_id) WHERE m.message_id=$1 AND r.state<>'cancelled_before_plan'",
+    )
+    .bind(mail.message_id)
+    .fetch_one(&case.pool)
+    .await
+    .unwrap();
+    assert_eq!(reserved_turns, 1);
+    assert_eq!(
+        host.stop(actor).await.unwrap().run.phase(),
+        Phase::StoppedReported
+    );
+}
+
 impl Api {
     fn owner(&self) -> Client<'_> {
         Client {
@@ -184,6 +280,11 @@ impl Api {
             )
             .await
             .unwrap();
+        self.reserve_for(actor).await
+    }
+    /// Reserve the actor's eligible mail as its next batch.
+    async fn reserve_for(&self, actor: Uuid) -> Reservation {
+        let (user, owner) = (&self.user, ReservationOwner::new(&self.state));
         let revision = owner.inspect_actor(user, actor).await.unwrap().revision;
         let preview = owner
             .preview_batch(
@@ -316,6 +417,42 @@ impl Reservation {
             !plan_wire.contains("Please plan"),
             "plans carry refs, never bodies"
         );
+        Prepared {
+            central,
+            turn,
+            session_id,
+        }
+    }
+}
+
+impl Reservation {
+    /// The successor turn of `previous` for this reservation, in a new session.
+    async fn prepare_next(&self, pool: &sqlx::PgPool, previous: &CentralPlan) -> Prepared {
+        let mut central = previous.clone();
+        central.generation += 1;
+        let session_id = Uuid::new_v4();
+        let SessionIdentity::Central {
+            session_id: id,
+            generation,
+            ..
+        } = &mut central.session
+        else {
+            panic!("central session")
+        };
+        (*id, *generation) = (session_id, central.generation);
+        let turn = dispatch::prepare_turn(
+            pool,
+            self.actor,
+            self.id,
+            central.generation,
+            session_id,
+            1_000_100,
+        )
+        .await
+        .unwrap();
+        central.dispatch_id = turn.dispatch_id;
+        central.host_operation_id = turn.host_operation_id;
+        central.batch = turn.batch.clone();
         Prepared {
             central,
             turn,

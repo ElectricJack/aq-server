@@ -84,6 +84,10 @@ async fn build(scoped: bool) -> Owner {
     let (graph, server, dir) = graph_runtime(&mut f.state).await;
     let other = Uuid::new_v4();
     bind(&f, other, Uuid::new_v4()).await;
+    // Wired, so the owner routes can tell a supervisor (`supervisor.escalate`).
+    let clock = f.state.clock.clone();
+    f.state.internal_work =
+        aq_server::InternalWork::new(f.pool.clone(), clock, None, None).unwrap();
     let owner = aq_server::build_admin_router(f.state.clone());
     let machine = aq_server::build_worker_router_with_owner_app(f.state.clone(), owner.clone());
     Owner {
@@ -595,6 +599,56 @@ async fn project_supervisor_is_refused_outside_its_project() {
 }
 
 #[tokio::test]
+async fn project_supervisor_escalates_to_the_global_supervisor_for_its_own_project_only() {
+    let o = project_owner().await;
+    let who = As::Supervisor(&o.token);
+    let (_, listed) = call(&o.machine, "GET", "/api/v1/commands", who, None).await;
+    let listed = listed["commands"].as_array().unwrap();
+    let escalate = listed.iter().find(|c| c["name"] == "supervisor.escalate");
+    let summary = escalate.unwrap()["summary"].as_str().unwrap();
+    assert!(summary.starts_with("Escalate a decision"), "{summary}");
+    let task = Uuid::new_v4();
+    let decision = "Add PostgreSQL to the sandbox image? Thirteen tasks fail without it.";
+    let params = json!({"project_id":o.project,"task_id":task,"decision_needed":decision});
+    let (status, out) = o
+        .command("supervisor.escalate", json!({"params":params}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["disposition"], "confirmed", "{out}");
+    let message: Uuid = out["message_id"].as_str().unwrap().parse().unwrap();
+    let (thread, body): (Uuid, String) =
+        sqlx::query_as("SELECT thread_id,body FROM mailbox_messages WHERE message_id=$1")
+            .bind(message)
+            .fetch_one(&o.f.pool)
+            .await
+            .unwrap();
+    let global: Uuid = sqlx::query_scalar(
+        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id IS NULL",
+    )
+    .fetch_one(&o.f.pool)
+    .await
+    .unwrap();
+    assert_eq!(thread, global, "the global supervisor's conversation");
+    for want in [o.project.to_string(), task.to_string(), decision.into()] {
+        assert!(body.contains(&want), "{want} in {body}");
+    }
+    // Another project's id is refused, and nothing more is posted.
+    let count = "SELECT count(*) FROM mailbox_messages WHERE thread_id=$1";
+    let posted = async || -> i64 {
+        let query = sqlx::query_scalar(count).bind(global);
+        query.fetch_one(&o.f.pool).await.unwrap()
+    };
+    let before = posted().await;
+    let params = json!({"project_id":o.other,"decision_needed":decision});
+    let (status, out) = o
+        .command("supervisor.escalate", json!({"params":params}))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert_eq!(out["message"], REFUSAL, "{out}");
+    assert_eq!(posted().await, before);
+}
+
+#[tokio::test]
 async fn project_supervisor_action_body_bounds() {
     let o = project_owner().await;
     let path = format!("{PREFIX}/api/v1/actions");
@@ -788,6 +842,77 @@ mod git {
     }
 
     #[tokio::test]
+    async fn supervisor_git_refreshes_shallow_tips_over_smart_http() {
+        let g = serve(project_owner().await).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let machine = g.o.machine.clone();
+        let server = tokio::spawn(async move { axum::serve(listener, machine).await });
+        let remote = format!("http://{address}/v1/supervisor/git/{}", g.mine);
+        let auth = format!("http.extraHeader=Authorization: Bearer {}", g.o.token);
+        let repository = g.fake.repository.clone();
+        let base = g.fake.base.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let checkout = tempfile::tempdir().unwrap();
+            let checkout = checkout.path();
+            git(checkout, &["init", "--bare", "--template="]);
+            let tree = git(&repository, &["mktree"]);
+            let advance = |parent| {
+                let head = git(
+                    &repository,
+                    &["commit-tree", &tree, "-p", parent, "-m", "new tip"],
+                );
+                git(&repository, &["update-ref", "refs/heads/main", &head]);
+                head
+            };
+            let task_ref = format!("refs/heads/aq/{}", Uuid::new_v4());
+            let local_task_ref = task_ref.replacen("refs/heads/", "refs/remotes/origin/", 1);
+            let main_ref = "refs/remotes/origin/main";
+            let fetch = || {
+                git(
+                    checkout,
+                    &[
+                        "-c",
+                        &auth,
+                        "fetch",
+                        "--quiet",
+                        "--prune",
+                        "--depth=1",
+                        "--no-tags",
+                        "--no-auto-maintenance",
+                        "--",
+                        &remote,
+                        "+refs/heads/main:refs/remotes/origin/main",
+                        "+refs/heads/aq/*:refs/remotes/origin/aq/*",
+                    ],
+                );
+            };
+
+            let first = advance(&base);
+            git(&repository, &["update-ref", &task_ref, &first]);
+            fetch();
+            assert_eq!(
+                git(checkout, &["rev-parse", "--is-shallow-repository"]),
+                "true"
+            );
+            assert_eq!(git(checkout, &["rev-parse", main_ref]), first);
+            assert_eq!(git(checkout, &["rev-parse", &local_task_ref]), first);
+            assert_eq!(git(checkout, &["rev-list", "--count", main_ref]), "1");
+
+            let next = advance(&first);
+            git(&repository, &["update-ref", "-d", &task_ref]);
+            fetch();
+            assert_eq!(git(checkout, &["rev-parse", main_ref]), next);
+            assert_eq!(git(checkout, &["rev-list", "--count", main_ref]), "1");
+            assert!(git(checkout, &["for-each-ref", "refs/remotes/origin/aq"]).is_empty());
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn supervisor_git_passes_gzip_fetch_bodies() {
         use std::io::Write as _;
         let g = serve(owner().await).await;
@@ -827,4 +952,64 @@ mod git {
         assert_eq!(header("aq-max-push-bytes"), "1");
         assert!(!seen[0].contains_key("authorization"));
     }
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn project_supervisor_cannot_attest_or_publish_a_sibling_workspace() {
+    let o = project_owner().await;
+    let task = Uuid::new_v4();
+    let report = Uuid::new_v4();
+    let path = format!(
+        "/api/projects/{}/tasks/{task}/results/{report}/workspace-delivery",
+        o.project
+    );
+    let head = "a".repeat(40);
+    for action in [
+        json!({"kind":"integrated_checks","heads":{},"verdict":"passed","evidence":"checks"}),
+        json!({"kind":"owner_acceptance","target_project_id":o.other,"head":head,"evidence":"self"}),
+        json!({"kind":"external_delivery","target_project_id":o.other,"head":head,"evidence":"self"}),
+        json!({"kind":"publish","target_project_id":o.other,"head":head}),
+        json!({"kind":"verify_merge","target_project_id":o.other,"head":head,"pull_request":1}),
+    ] {
+        let command = json!({"operation_id":Uuid::new_v4(),"action":action});
+        let (status, body) = o.supervisor("POST", &path, Some(command)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(
+            body.to_string().contains("requires the human owner"),
+            "{body}"
+        );
+    }
+    let command = json!({"operation_id":Uuid::new_v4(),"action":{
+        "kind":"publish","target_project_id":o.other,"head":head
+    }});
+    let human = || {
+        call(
+            &o.owner,
+            "POST",
+            &path,
+            As::Owner { csrf: true },
+            Some(command.clone()),
+        )
+    };
+    assert_eq!(
+        human().await.0,
+        StatusCode::NOT_FOUND,
+        "the human reaches report lookup"
+    );
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(o.f.user.id)
+        .execute(&o.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        human().await.0,
+        StatusCode::FORBIDDEN,
+        "the same identity lost owner rights"
+    );
+    let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM task_workspace_target_acceptance")
+        .fetch_one(&o.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(actions, 0);
 }

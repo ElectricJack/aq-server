@@ -128,3 +128,87 @@ async fn exempt_handoffs_are_capped_at_five_per_lineage() {
     }
     panic!("the last owner stop leaves `max_attempts` charged attempts");
 }
+
+#[tokio::test]
+async fn launch_backoff_uses_saved_settings_for_scheduling_and_work() {
+    use crate::replacement_release::{finish_with_stop, granted_at};
+    use aq_profiles::roles::LaunchRetryBackoff;
+    use aq_server::{
+        execution::profiled::Stop,
+        profiled_execution::replacement::{self, Assessment},
+    };
+    use std::sync::atomic::Ordering;
+
+    let mut f = common::profiled::fixture().await;
+    let task = f.selection.lineage.task_id;
+    let pool = f.db.pool().await;
+    aq_role_settings::startup(&pool, NOW as i64).await.unwrap();
+    for generation in 1..=2 {
+        if generation > 1 {
+            next_attempt(&mut f, generation);
+        }
+        let (attempt, _, mut hot) = granted_at(&f, NOW + (generation - 1) * 1_000).await;
+        let stop = Stop::NotStarted {
+            receipt: common::profiled::artifact(
+                &format!("aq.launch-closure/{attempt}"),
+                b"nonstart",
+            ),
+        };
+        finish_with_stop(&pool, attempt, &mut hot, stop).await;
+        let at = NOW + generation * 1_000;
+        f.time.store(at as i64, Ordering::SeqCst);
+        let assessment = replacement::assess_task(&f.state, task, at).await.unwrap();
+        let r = assessment.replacement().expect("the nonstart can release");
+        assert!(r.waiting_for_launch_release());
+        assert_eq!(r.exempt_attempts, generation as u32);
+        replacement::release(&f.state, task, r).await.unwrap();
+        if generation == 1 {
+            assert!(
+                aq_human_work::launch_retry_wait(&pool, task, at as i64)
+                    .await
+                    .is_none()
+            );
+            let ready = replacement::assess_task(&f.state, task, at).await.unwrap();
+            assert!(!ready.replacement().unwrap().needs_release);
+        }
+    }
+    let last = f.profiled.offer.binding.attempt_id;
+    let released_at = NOW + 2_000;
+    let original = aq_human_work::launch_retry_wait(&pool, task, released_at as i64)
+        .await
+        .unwrap();
+    assert_eq!(original["next_check_at_ms"], released_at + 30_000);
+    let settings = aq_role_settings::settings(&pool).await.unwrap();
+    let mut defaults = settings.selection_defaults;
+    defaults.launch_retry_backoff = LaunchRetryBackoff {
+        initial_delay_ms: 10_000,
+        max_delay_ms: 15_000,
+    };
+    let edit = aq_role_settings::Writer::new(&pool, f.actor, released_at as i64)
+        .edit(settings.selection_defaults_revision, Uuid::new_v4());
+    aq_role_settings::save_selection_defaults(edit, &defaults)
+        .await
+        .unwrap();
+
+    let wake_at = released_at + 10_000;
+    let waiting = aq_human_work::launch_retry_wait(&pool, task, (wake_at - 1) as i64)
+        .await
+        .unwrap();
+    assert_eq!(waiting["attempt_id"], serde_json::json!(last));
+    assert_eq!(waiting["next_check_at_ms"], wake_at);
+    assert_eq!(
+        replacement::assess_task(&f.state, task, wake_at - 1)
+            .await
+            .unwrap(),
+        Assessment::Blocked(replacement::LAUNCH_BACKOFF)
+    );
+    assert!(
+        aq_human_work::launch_retry_wait(&pool, task, wake_at as i64)
+            .await
+            .is_none()
+    );
+    let ready = replacement::assess_task(&f.state, task, wake_at)
+        .await
+        .unwrap();
+    assert_eq!(ready.replacement().unwrap().predecessor, last);
+}

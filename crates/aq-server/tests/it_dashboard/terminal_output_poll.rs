@@ -384,29 +384,42 @@ async fn resize_is_accepted_only_from_the_current_controller_within_bounds() {
         .unwrap_err();
 }
 #[tokio::test]
-async fn output_poll_progresses_during_control_poll_and_limits_each_lane() {
+async fn output_polls_of_one_node_run_together_beside_control_and_node_row_locks() {
     let (f, _dir, r) = Box::pin(setup()).await;
     let subscription = watch(&f, &r, 15000).await;
     let runtime = &f.state.config.terminals.as_ref().unwrap().runtime;
     // Own the exact permit held by a sleeping control poll, without a real sleep.
     let control = runtime.poll(f.node.node_id).unwrap();
-    let (status, body) = http(&f, &request(&r)).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let envelope: Envelope = serde_json::from_value(body).unwrap();
-    assert!(
-        matches!(&envelope.effects[..], [Effect::Watch(w)] if w.subscription_id == subscription)
-    );
+    // A heartbeat or offer holding the node row exclusively does not delay output.
+    let mut held = f.db.pool().await.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(f.node.node_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    // Every agent of the node polls with the node credential at once: no 409/503.
+    let q = request(&r);
+    let polls = (0..4).map(|_| http(&f, &q));
+    for (status, body) in futures_util::future::join_all(polls).await {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let envelope: Envelope = serde_json::from_value(body).unwrap();
+        assert!(
+            matches!(&envelope.effects[..], [Effect::Watch(w)] if w.subscription_id == subscription)
+        );
+    }
+    held.rollback().await.unwrap();
+    drop(control);
+    // A node revoked after it authenticated is still refused.
+    let node = auth(&f).await;
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(f.node.node_id)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
     assert!(matches!(
-        runtime.poll(f.node.node_id),
-        Err(aq_server::error::AppError::Conflict(_))
+        terminal::peer::output_poll(&f.state, &node, &request(&r)).await,
+        Err(aq_server::error::AppError::CredentialRevoked)
     ));
-    let output = runtime.output_poll(f.node.node_id).unwrap();
-    assert_eq!(http(&f, &request(&r)).await.0, StatusCode::CONFLICT);
-    drop(control);
-    let control = runtime.poll(f.node.node_id).unwrap();
-    drop(output);
-    assert_eq!(http(&f, &request(&r)).await.0, StatusCode::OK);
-    drop(control);
 }
 
 #[tokio::test]
