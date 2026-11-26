@@ -49,13 +49,12 @@ pub async fn inventory(
     let receipt: InventoryReceipt =
         serde_json::from_slice(&row.get::<Vec<u8>, _>("receipt_bytes")).map_err(|_| changed())?;
     receipt.validate_for(&request).map_err(|_| changed())?;
-    if request.identity.node_id != node
-        || request.operation_id != operation
-        || request.digest().map_err(|_| changed())?.as_str()
-            != row.get::<String, _>("request_digest")
-    {
-        return Err(changed());
-    }
+    require_identity(
+        &row,
+        (node, operation),
+        (request.identity.node_id, request.operation_id),
+        || request.digest(),
+    )?;
     Ok(Some(Inventory {
         request,
         receipt,
@@ -91,34 +90,9 @@ pub async fn expected_epoch(
     let Some(old) = head(tx, request.identity.node_id).await? else {
         return Ok(1);
     };
-    let compatible = if old.boot == request.identity.boot_id && old.mode == "scoped_v1" {
-        let previous = inventory(
-            tx,
-            request.identity.node_id,
-            old.operation.ok_or_else(changed)?,
-        )
-        .await?
-        .ok_or_else(changed)?;
-        if previous.epoch != old.epoch
-            || previous.receipt.inventory.revision != old.inventory_revision
-            || previous.receipt.inventory.snapshot_digest != old.snapshot_digest
-        {
-            return Err(changed());
-        }
-        let binding_set: serde_json::Value =
-            sqlx::query_scalar("SELECT profiled_provisionable_binding_set($1)")
-                .bind(serde_json::to_value(snapshot).map_err(|_| changed())?)
-                .fetch_one(&mut **tx)
-                .await
-                .map_err(db)?;
-        old.binding_set.as_ref() == Some(&binding_set)
-            && previous.request.runtime == request.runtime
-            && previous.request.runtime_qualification == request.runtime_qualification
-            && previous.request.negotiation.qualification == request.negotiation.qualification
-            && previous.request.negotiation.protocol == request.negotiation.protocol
-    } else {
-        false
-    };
+    let compatible = old.boot == request.identity.boot_id
+        && old.mode == "scoped_v1"
+        && same_boot_compatible(tx, request, snapshot, &old).await?;
     if compatible {
         Ok(old.epoch)
     } else {
@@ -127,6 +101,40 @@ pub async fn expected_epoch(
             .filter(|n| *n <= i64::MAX as u64)
             .ok_or_else(unavailable)
     }
+}
+/// A same-boot scoped inventory keeps its epoch only when the provisionable
+/// binding set, runtime and negotiation are unchanged from the head's operation.
+async fn same_boot_compatible(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &InventoryV2,
+    snapshot: &aq_selection::CapabilitySnapshot,
+    old: &Head,
+) -> Result<bool, AppError> {
+    let previous = inventory(
+        tx,
+        request.identity.node_id,
+        old.operation.ok_or_else(changed)?,
+    )
+    .await?
+    .ok_or_else(changed)?;
+    if previous.epoch != old.epoch
+        || previous.receipt.inventory.revision != old.inventory_revision
+        || previous.receipt.inventory.snapshot_digest != old.snapshot_digest
+    {
+        return Err(changed());
+    }
+    let binding_set: serde_json::Value =
+        sqlx::query_scalar("SELECT profiled_provisionable_binding_set($1)")
+            .bind(serde_json::to_value(snapshot).map_err(|_| changed())?)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    let previous = &previous.request;
+    Ok(old.binding_set.as_ref() == Some(&binding_set)
+        && previous.runtime == request.runtime
+        && previous.runtime_qualification == request.runtime_qualification
+        && previous.negotiation.qualification == request.negotiation.qualification
+        && previous.negotiation.protocol == request.negotiation.protocol)
 }
 pub async fn retain_inventory(
     tx: &mut Transaction<'_, Postgres>,
@@ -177,13 +185,12 @@ pub async fn fact(
     let receipt: aq_admission::scoped_presence::PresenceReceipt =
         serde_json::from_slice(&row.get::<Vec<u8>, _>("receipt_bytes")).map_err(|_| changed())?;
     receipt.validate_for(&request).map_err(|_| changed())?;
-    if request.identity.node_id != node
-        || request.operation_id != operation
-        || request.digest().map_err(|_| changed())?.as_str()
-            != row.get::<String, _>("request_digest")
-    {
-        return Err(changed());
-    }
+    require_identity(
+        &row,
+        (node, operation),
+        (request.identity.node_id, request.operation_id),
+        || request.digest(),
+    )?;
     Ok(Some(Fact {
         request,
         receipt,
@@ -233,6 +240,21 @@ pub async fn accepted(
     Ok(accepted)
 }
 
+/// The decoded request must name the row's node and operation and hash to the
+/// retained request digest.
+fn require_identity<E>(
+    row: &sqlx::postgres::PgRow,
+    expected: (Uuid, Uuid),
+    reported: (Uuid, Uuid),
+    digest: impl FnOnce() -> Result<Digest, E>,
+) -> Result<(), AppError> {
+    if reported != expected
+        || digest().map_err(|_| changed())?.as_str() != row.get::<String, _>("request_digest")
+    {
+        return Err(changed());
+    }
+    Ok(())
+}
 async fn operation_locked(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,

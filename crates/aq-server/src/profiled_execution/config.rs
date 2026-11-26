@@ -33,6 +33,25 @@ pub struct ProjectPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_grants: Option<aq_agent_grants::resolve::ProjectGrants>,
 }
+impl ProjectPolicy {
+    /// The retained source-policy record for this project at one configuration.
+    pub(crate) fn record(
+        &self,
+        revision: u64,
+        configuration_digest: aq_admission::Digest,
+    ) -> ProjectPolicyRecord {
+        ProjectPolicyRecord {
+            schema_version: 1,
+            project_id: self.project_id,
+            revision,
+            configuration_digest,
+            enabled: self.enabled,
+            priority: self.priority,
+            source: self.source.clone(),
+            retention_handle: self.retention_handle,
+        }
+    }
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfiledConfig {
@@ -139,16 +158,7 @@ impl ProfiledConfig {
             .iter()
             .find(|policy| policy.project_id == project_id)
             .ok_or("project has no configured source policy")?;
-        Ok(ProjectPolicyRecord {
-            schema_version: 1,
-            project_id,
-            revision: self.revision,
-            configuration_digest: self.configuration_digest()?,
-            enabled: policy.enabled,
-            priority: policy.priority,
-            source: policy.source.clone(),
-            retention_handle: policy.retention_handle,
-        })
+        Ok(policy.record(self.revision, self.configuration_digest()?))
     }
     pub fn project_policy_ref(&self, project_id: Uuid) -> Result<ArtifactRef, String> {
         self.project_policy_record(project_id)?.artifact()
@@ -168,19 +178,16 @@ impl ProfiledConfig {
             .ok_or("runtime has no exact daemon-owned qualification")?;
         aq_session_protocol::require_capabilities(&runtime.capabilities, &request.capabilities)
             .map_err(|_| "qualified runtime capability mismatch")?;
-        if request
-            .features
-            .iter()
-            .any(|feature| !runtime.features.contains(feature))
-            || runtime
-                .features
-                .iter()
-                .any(|feature| !request.features.contains(feature))
-        {
+        if !same_features(&request.features, &runtime.features) {
             return Err("qualified runtime feature mismatch".into());
         }
         Ok(runtime)
     }
+}
+/// Both feature lists contain exactly the same features.
+fn same_features(requested: &[Feature], qualified: &[Feature]) -> bool {
+    requested.iter().all(|feature| qualified.contains(feature))
+        && qualified.iter().all(|feature| requested.contains(feature))
 }
 pub fn deserialize<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -206,12 +213,19 @@ fn validate_runtimes(items: &[QualifiedRuntime]) -> Result<(), String> {
         }
         aq_session_protocol::require_capabilities(&item.capabilities, &item.capabilities)
             .map_err(|_| "invalid qualified runtime capabilities")?;
-        if let Some(delivery) = &item.material_delivery {
-            artifact(&delivery.adapter)?;
-            if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
-                return Err("unsupported configured material delivery".into());
-            }
-        }
+        validate_material_delivery(item)?;
+    }
+    Ok(())
+}
+
+/// Configured material delivery is version 1 and requires server material.
+fn validate_material_delivery(item: &QualifiedRuntime) -> Result<(), String> {
+    let Some(delivery) = &item.material_delivery else {
+        return Ok(());
+    };
+    artifact(&delivery.adapter)?;
+    if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
+        return Err("unsupported configured material delivery".into());
     }
     Ok(())
 }

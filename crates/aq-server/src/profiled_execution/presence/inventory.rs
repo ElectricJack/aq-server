@@ -6,7 +6,8 @@ use crate::{
     AppState, error::AppError, profiled_execution::registration, worker_api::AuthenticatedNode,
 };
 use aq_admission::scoped_presence::{InventoryIdentity, InventoryReceipt, InventoryV2};
-use aq_selection::{CapabilitySnapshot, ExecutionTarget};
+use aq_intelligence_config::LoadedRegistry;
+use aq_selection::{CapabilitySnapshot, DeliveryCapability, ExecutionTarget, InstalledHarness};
 use sqlx::Row;
 fn exact_request(a: &InventoryV2, b: &InventoryV2) -> Result<(), AppError> {
     if a.digest().map_err(|_| changed())? != b.digest().map_err(|_| changed())? {
@@ -81,44 +82,14 @@ pub(super) async fn record_with_stage(
     }
     let admitted =
         registration::admitted_runtime_locked(&mut tx, auth.id(), request.identity.boot_id).await?;
-    let delivery = state
-        .config
-        .profiled_execution
-        .as_ref()
-        .ok_or_else(changed)?
-        .qualified(&admitted.request)
-        .map_err(|_| changed())?
-        .material_delivery
-        .clone()
-        .ok_or_else(changed)?;
+    let delivery = material_delivery(state, &admitted.request)?;
     let registry = state.config.intelligence.clone().ok_or_else(changed)?;
     *stage = "verify_harness_qualifications";
-    let mut harnesses = Vec::new();
-    for reference in &request.qualifications {
-        harnesses.push(
-            registry
-                .config
-                .qualified_harnesses
-                .iter()
-                .find(|h| h.qualification == *reference)
-                .cloned()
-                .ok_or_else(changed)?,
-        );
-    }
+    let harnesses = qualified_harnesses(&registry, request)?;
     *stage = "verify_credential_profiles";
     let enrolled = aq_machine_control::enrolled(&mut tx, auth.id()).await;
     let enrolled = enrolled.map_err(|_| unavailable())?;
-    for profile in &request.provisionable_only {
-        if !registry.config.credentials.iter().any(|c| {
-            c.credential.profile == profile.profile
-                && c.credential.revision == profile.revision
-                && c.credential.enabled
-                && c.delivery_mode.is_some()
-                && c.admits(auth.id(), enrolled)
-        }) {
-            return Err(changed());
-        }
-    }
+    require_admitted_profiles(&registry, auth.id(), enrolled, request)?;
     tx.commit().await.map_err(|_| unavailable())?;
     let observed = now(state)?;
     let expires = observed
@@ -167,29 +138,10 @@ pub(super) async fn record_with_stage(
         expires_at_ms: expires,
         harnesses,
         credential_bindings: bindings,
-        material_delivery: Some(
-            state
-                .config
-                .profiled_execution
-                .as_ref()
-                .ok_or_else(changed)?
-                .qualified(&admitted.request)
-                .map_err(|_| changed())?
-                .material_delivery
-                .clone()
-                .ok_or_else(changed)?,
-        ),
+        material_delivery: Some(material_delivery(state, &admitted.request)?),
     };
     let epoch = storage::expected_epoch(&mut tx, request, &snapshot).await?;
-    let bytes = canonical(&snapshot)?;
-    if bytes.len() > 131072 {
-        return Err(AppError::PayloadTooLarge(
-            "normalized inventory bound".into(),
-        ));
-    }
-    let digest = aq_admission::Digest::of(&bytes);
-    let value = serde_json::to_value(&snapshot).map_err(|_| AppError::Internal)?;
-    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(auth.id()).bind(request.identity.boot_id).bind(request.sequence as i64).bind(revision as i64).bind(&value).execute(&mut *tx).await.map_err(storage::db)?;
+    let digest = store_snapshot(&mut tx, auth.id(), request, &snapshot).await?;
     let recorded = now(state)?;
     require_fresh(recorded, observed, observed, expires)?;
     let receipt = InventoryReceipt {
@@ -212,6 +164,85 @@ pub(super) async fn record_with_stage(
     require_fresh(final_time, recorded, observed, expires)?;
     tx.commit().await.map_err(|_| unavailable())?;
     Ok(receipt)
+}
+
+/// The daemon-qualified material delivery for the admitted runtime registration.
+fn material_delivery(
+    state: &AppState,
+    admitted: &aq_admission::transport::Register,
+) -> Result<DeliveryCapability, AppError> {
+    state
+        .config
+        .profiled_execution
+        .as_ref()
+        .ok_or_else(changed)?
+        .qualified(admitted)
+        .map_err(|_| changed())?
+        .material_delivery
+        .clone()
+        .ok_or_else(changed)
+}
+
+/// Every reported harness qualification must name a registry-qualified harness.
+fn qualified_harnesses(
+    registry: &LoadedRegistry,
+    request: &InventoryV2,
+) -> Result<Vec<InstalledHarness>, AppError> {
+    request
+        .qualifications
+        .iter()
+        .map(|reference| {
+            registry
+                .config
+                .qualified_harnesses
+                .iter()
+                .find(|h| h.qualification == *reference)
+                .cloned()
+                .ok_or_else(changed)
+        })
+        .collect()
+}
+
+/// Every provisionable-only profile must be an enabled, deliverable credential
+/// this node is admitted to.
+fn require_admitted_profiles(
+    registry: &LoadedRegistry,
+    node: uuid::Uuid,
+    enrolled: bool,
+    request: &InventoryV2,
+) -> Result<(), AppError> {
+    let admitted = |profile: &aq_admission::scoped_presence::CredentialReference| {
+        registry.config.credentials.iter().any(|c| {
+            c.credential.profile == profile.profile
+                && c.credential.revision == profile.revision
+                && c.credential.enabled
+                && c.delivery_mode.is_some()
+                && c.admits(node, enrolled)
+        })
+    };
+    if !request.provisionable_only.iter().all(admitted) {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+/// Bounds and writes the normalized placement snapshot; returns its digest.
+async fn store_snapshot(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: uuid::Uuid,
+    request: &InventoryV2,
+    snapshot: &CapabilitySnapshot,
+) -> Result<aq_admission::Digest, AppError> {
+    let bytes = canonical(snapshot)?;
+    if bytes.len() > 131072 {
+        return Err(AppError::PayloadTooLarge(
+            "normalized inventory bound".into(),
+        ));
+    }
+    let digest = aq_admission::Digest::of(&bytes);
+    let value = serde_json::to_value(snapshot).map_err(|_| AppError::Internal)?;
+    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(node).bind(request.identity.boot_id).bind(request.sequence as i64).bind(snapshot.revision as i64).bind(&value).execute(&mut **tx).await.map_err(storage::db)?;
+    Ok(digest)
 }
 
 fn validate_bindings(

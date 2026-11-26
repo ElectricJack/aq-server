@@ -45,24 +45,39 @@ pub struct InstallReport {
     pub disabled: u32,
     pub unbound: u32,
 }
+impl InstallReport {
+    fn new(revision: Option<u64>) -> Self {
+        Self {
+            configured: revision.is_some(),
+            revision,
+            installed: 0,
+            disabled: 0,
+            unbound: 0,
+        }
+    }
+    fn count_written(&mut self, enabled: bool) {
+        if enabled {
+            self.installed += 1;
+        } else {
+            self.disabled += 1;
+        }
+    }
+}
 fn conflict(message: &str) -> AppError {
     AppError::Conflict(message.into())
 }
 use crate::error::db;
-fn record(
-    config: &ProfiledConfig,
+/// A policy omitted from a higher revision is kept as a disabled tombstone.
+fn retired(
+    prior: &ProjectPolicyRecord,
+    revision: u64,
     configuration_digest: &Digest,
-    project: &super::config::ProjectPolicy,
 ) -> ProjectPolicyRecord {
     ProjectPolicyRecord {
-        schema_version: 1,
-        project_id: project.project_id,
-        revision: config.revision,
+        revision,
         configuration_digest: configuration_digest.clone(),
-        enabled: project.enabled,
-        priority: project.priority,
-        source: project.source.clone(),
-        retention_handle: project.retention_handle,
+        enabled: false,
+        ..prior.clone()
     }
 }
 /// Call before dispatch and after newly configured projects become bound. Same
@@ -71,13 +86,7 @@ fn record(
 /// To retire all policies install a higher revision with an empty projects list.
 pub async fn install(state: &AppState) -> Result<InstallReport, AppError> {
     let Some(config) = state.config.profiled_execution.as_deref() else {
-        return Ok(InstallReport {
-            configured: false,
-            revision: None,
-            installed: 0,
-            disabled: 0,
-            unbound: 0,
-        });
+        return Ok(InstallReport::new(None));
     };
     config
         .validate()
@@ -88,8 +97,55 @@ pub async fn install(state: &AppState) -> Result<InstallReport, AppError> {
     let configured: BTreeMap<_, _> = config
         .projects
         .iter()
-        .map(|p| (p.project_id, record(config, &configuration_digest, p)))
+        .map(|p| {
+            let record = p.record(config.revision, configuration_digest.clone());
+            (p.project_id, record)
+        })
         .collect();
+    let mut tx = begin_install(state).await?;
+    require_installable_owner(&mut tx, config.revision, &configuration_digest).await?;
+    let old = load_policies(&mut tx, config.revision).await?;
+    let requested: BTreeSet<_> = old.keys().chain(configured.keys()).copied().collect();
+    let bound = bound_projects(&mut tx, &requested).await?;
+    let new_count = configured
+        .keys()
+        .filter(|id| bound.contains(id) && !old.contains_key(id))
+        .count();
+    if old.len() + new_count > MAX_RETAINED {
+        return Err(conflict("retained project policy quota exhausted"));
+    }
+    let mut report = InstallReport::new(Some(config.revision));
+    for project in requested {
+        let next = match configured.get(&project) {
+            Some(_) if !bound.contains(&project) => {
+                report.unbound += 1;
+                continue;
+            }
+            Some(next) => next.clone(),
+            None => retired(
+                old.get(&project).ok_or(AppError::Internal)?,
+                config.revision,
+                &configuration_digest,
+            ),
+        };
+        if store_policy(&mut tx, &next, old.get(&project)).await? {
+            report.count_written(next.enabled);
+        }
+    }
+    let owner = ConfigurationOwner {
+        schema_version: 1,
+        revision: config.revision,
+        configuration_digest,
+    };
+    store_owner(&mut tx, &owner).await?;
+    tx.commit().await.map_err(db)?;
+    Ok(report)
+}
+
+/// Bounded installer transaction holding the process-wide installer lock.
+async fn begin_install(
+    state: &AppState,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, AppError> {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     sqlx::query("SET LOCAL lock_timeout='2s'")
         .execute(&mut *tx)
@@ -105,70 +161,45 @@ pub async fn install(state: &AppState) -> Result<InstallReport, AppError> {
     .execute(&mut *tx)
     .await
     .map_err(db)?;
+    Ok(tx)
+}
+
+/// Locks the installed configuration owner and rejects stale or changed content.
+async fn require_installable_owner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    revision: u64,
+    configuration_digest: &Digest,
+) -> Result<(), AppError> {
     let previous: Option<String> =
         sqlx::query_scalar("SELECT value FROM meta WHERE key=$1 FOR UPDATE")
             .bind(OWNER_KEY)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(db)?;
     if let Some(previous) = previous {
         ConfigurationOwner::decode(&previous)?
-            .require_installable(config.revision, &configuration_digest)?;
+            .require_installable(revision, configuration_digest)?;
     }
-    let old = load_policies(&mut tx, config.revision).await?;
-    let requested: BTreeSet<_> = old.keys().chain(configured.keys()).copied().collect();
-    // Project predicates precede source rows in the admission lock order.
-    // Missing projects are reported ineligible; no project binding is fabricated.
+    Ok(())
+}
+
+/// Project predicates precede source rows in the admission lock order.
+/// Missing projects are reported ineligible; no project binding is fabricated.
+async fn bound_projects(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    requested: &BTreeSet<Uuid>,
+) -> Result<BTreeSet<Uuid>, AppError> {
     let ids: Vec<_> = requested.iter().copied().collect();
-    let bound:Vec<Uuid>=sqlx::query_scalar("SELECT project_id FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id FOR SHARE").bind(&ids).fetch_all(&mut *tx).await.map_err(db)?;
-    let bound: BTreeSet<_> = bound.into_iter().collect();
-    let new_count = configured
-        .keys()
-        .filter(|id| bound.contains(id) && !old.contains_key(id))
-        .count();
-    if old.len() + new_count > MAX_RETAINED {
-        return Err(conflict("retained project policy quota exhausted"));
-    }
-    let mut report = InstallReport {
-        configured: true,
-        revision: Some(config.revision),
-        installed: 0,
-        disabled: 0,
-        unbound: 0,
-    };
-    for project in requested {
-        let next = if let Some(next) = configured.get(&project) {
-            if !bound.contains(&project) {
-                report.unbound += 1;
-                continue;
-            }
-            next.clone()
-        } else {
-            let prior = old.get(&project).ok_or(AppError::Internal)?;
-            ProjectPolicyRecord {
-                revision: config.revision,
-                configuration_digest: configuration_digest.clone(),
-                enabled: false,
-                ..prior.clone()
-            }
-        };
-        if !store_policy(&mut tx, &next, old.get(&project)).await? {
-            continue;
-        }
-        if next.enabled {
-            report.installed += 1;
-        } else {
-            report.disabled += 1;
-        }
-    }
-    let owner = ConfigurationOwner {
-        schema_version: 1,
-        revision: config.revision,
-        configuration_digest,
-    };
-    sqlx::query("INSERT INTO meta(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value").bind(OWNER_KEY).bind(serde_json::to_string(&owner).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
-    tx.commit().await.map_err(db)?;
-    Ok(report)
+    let bound:Vec<Uuid>=sqlx::query_scalar("SELECT project_id FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id FOR SHARE").bind(&ids).fetch_all(&mut **tx).await.map_err(db)?;
+    Ok(bound.into_iter().collect())
+}
+
+async fn store_owner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner: &ConfigurationOwner,
+) -> Result<(), AppError> {
+    sqlx::query("INSERT INTO meta(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value").bind(OWNER_KEY).bind(serde_json::to_string(owner).map_err(|_|AppError::Internal)?).execute(&mut **tx).await.map_err(db)?;
+    Ok(())
 }
 
 /// Returns whether a policy was written; exact same-revision replay is a no-op.
