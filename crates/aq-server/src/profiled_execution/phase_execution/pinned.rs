@@ -43,12 +43,6 @@ impl<'a> LoadMode<'a> {
     }
 }
 
-struct PinnedSelection {
-    spec: aq_admission::execution_spec::ProfiledExecutionSpec,
-    decision: crate::intelligence::resolver::Decision,
-    selection: aq_selection::ResolvedSelection,
-}
-
 pub(super) async fn load_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
@@ -107,118 +101,11 @@ async fn load_for_locked(
     q: &PrepareRequest,
     mode: LoadMode<'_>,
 ) -> Result<Pinned, AppError> {
-    // Each locked helper is boxed so its state stays off this future's stack
-    // frame; inline awaits overflow the stack of deep database callers.
-    let h = Box::pin(load_accepted_locked(state, tx, auth, q, mode)).await?;
-    let runtime =
-        registration::current_runtime_locked(state, tx, auth.id(), q.original.identity.boot_id)
-            .await?;
-    let qualification = policy::current(state, &h, &runtime)?;
-    let (current_registration, registration_id) =
-        Box::pin(load_registration_locked(tx, auth, q)).await?;
-    let (view, hot, versions) = Box::pin(load_authority_locked(state, tx, q, &h, mode)).await?;
-    let offer =
-        super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
-            .await?;
-    if !same(&offer, &h.proposal.original)? {
-        return Err(refused());
-    }
-    require_runtime_capabilities(state, &runtime, &current_registration, &offer)?;
-
-    let PinnedSelection {
-        spec,
-        decision,
-        selection,
-    } = Box::pin(load_selection_locked(tx, auth, q, &h, &view)).await?;
-    let material = h.receipt.lease.materials[0].clone();
-    if material.credential_profile != selection.choice.credential_profile
-        || material.credential_revision != selection.credential_revision
-        || material.provider.as_str() != selection.choice.provider
-        || material.account_reference.as_str() != selection.choice.account_reference
-        || material.endpoint_reference.as_str() != selection.choice.endpoint_reference
-    {
-        return Err(refused());
-    }
-    let source = source_exports::load_linked_locked(tx, q.original.binding.attempt_id).await?;
-    if source.manifest().attempt != view.attempt
-        || source.manifest().source != view.source.ok_or_else(|| refused())?
-        || source.manifest().resolved_spec_digest != view.execution_spec_digest
-        || source.token().request().project_revision != spec.project_revision
-        || source.token().request().project_id != view.project_id
-    {
-        return Err(refused());
-    }
-    let ceiling = match mode.issued() {
-        Some(h) => hot
-            .grant
-            .as_ref()
-            .ok_or_else(|| refused())?
-            .expires_at_ms
-            .min(h.receipt.execution_deadline_ms),
-        None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
-    };
-    let (context, ceiling) = Box::pin(load_artifacts_locked(
-        state, tx, q, &spec, &offer, &source, ceiling,
-    ))
-    .await?;
-    let policy = super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
-    require_supported_budget(&offer, &policy, &decision, &h)?;
-    let input = observations::Input {
-        full_context_digest: h.proposal.full_context_digest.clone(),
-        spec,
-        context: context.ok_or_else(|| refused())?,
-        decision,
-        selection,
-        offer,
-        source,
-        material,
-    };
-    let registry_at_load = super::registry_at_load(state, tx, &h).await?;
-    Ok(Pinned {
-        registry_at_load,
-        history: h,
-        input,
-        policy,
-        capabilities: current_registration.request.capabilities.clone(),
-        hot,
-        versions,
-        registration_id,
-        qualification,
-        issuance_ceiling: ceiling,
-    })
-}
-
-// Tie the current admitted runtime to the attempt's immutable registration
-// before loading execution authority under the authenticated node lock.
-async fn load_registration_locked(
-    tx: &mut Transaction<'_, Postgres>,
-    auth: &AuthenticatedNode,
-    q: &PrepareRequest,
-) -> Result<(registration::NativeRegistration, Uuid), AppError> {
-    let current =
-        registration::admitted_runtime_locked(tx, auth.id(), q.original.identity.boot_id).await?;
-    if current.request.identity != q.original.identity {
-        return Err(refused());
-    }
-    let retained =
-        super::super::closure::history::for_attempt_locked(tx, &q.original.binding).await?;
-    if retained.metadata.semantic_digest != current.semantic_digest
-        || retained.metadata.request.identity != q.original.identity
-    {
-        return Err(refused());
-    }
-    Ok((current, retained.id))
-}
-
-// Authenticate preparation or retained issuance before consulting current runtime
-// and authority. Keep these reads under the same node lock as the caller.
-async fn load_accepted_locked(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    auth: &AuthenticatedNode,
-    q: &PrepareRequest,
-    mode: LoadMode<'_>,
-) -> Result<AcceptedHistory, AppError> {
+    // Kept as one body on purpose: unoptimized builds give every nested async
+    // helper its own poll frame (boxing does not remove the caller's
+    // temporary), which overflowed the stack of deep database test callers.
+    // Authenticate preparation or retained issuance before consulting current
+    // runtime and authority, all under the same authenticated node lock.
     use aq_session_protocol::Validate;
     q.original.binding.validate().map_err(|_| refused())?;
     let session_matches = matches!(
@@ -233,7 +120,8 @@ async fn load_accepted_locked(
     let h = accepted_owner::load_accepted_history_locked(tx, &q.original.binding).await?;
     q.validate_for(&h.receipt, &h.request, &h.proposal)
         .map_err(|_| refused())?;
-    if let Some(issued) = mode.issued() {
+    let issued = mode.issued();
+    if let Some(issued) = issued {
         if !same(&issued.request, q)?
             || !same(&issued.accepted.receipt, &h.receipt)?
             || !same(&issued.accepted.request, &h.request)?
@@ -247,17 +135,25 @@ async fn load_accepted_locked(
     } else {
         accepted_owner::require_live_accepted_locked(state, tx, auth, &h).await?;
     }
-    Ok(h)
-}
-
-async fn load_authority_locked(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    q: &PrepareRequest,
-    h: &AcceptedHistory,
-    mode: LoadMode<'_>,
-) -> Result<(authority::AuthorityView, HotState, Versions), AppError> {
-    let issued = mode.issued();
+    let runtime =
+        registration::current_runtime_locked(state, tx, auth.id(), q.original.identity.boot_id)
+            .await?;
+    let qualification = policy::current(state, &h, &runtime)?;
+    // Tie the current admitted runtime to the attempt's immutable registration
+    // before loading execution authority under the authenticated node lock.
+    let current_registration =
+        registration::admitted_runtime_locked(tx, auth.id(), q.original.identity.boot_id).await?;
+    if current_registration.request.identity != q.original.identity {
+        return Err(refused());
+    }
+    let retained =
+        super::super::closure::history::for_attempt_locked(tx, &q.original.binding).await?;
+    if retained.metadata.semantic_digest != current_registration.semantic_digest
+        || retained.metadata.request.identity != q.original.identity
+    {
+        return Err(refused());
+    }
+    let registration_id = retained.id;
     let view = authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
         .await?;
     super::super::closure::ensure_launch_open_locked(tx, &q.original.binding).await?;
@@ -286,7 +182,132 @@ async fn load_authority_locked(
     if issued.is_some() {
         view.active_at(now(state)?)?;
     }
-    Ok((view, hot, versions))
+    let offer =
+        super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
+            .await?;
+    if !same(&offer, &h.proposal.original)? {
+        return Err(refused());
+    }
+    require_runtime_capabilities(state, &runtime, &current_registration, &offer)?;
+
+    let row = sqlx::query(
+        "SELECT l.execution_spec,l.execution_spec_digest,l.graph_task_observation,l.decision_id,d.decision,s.selection,s.selection_digest FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) JOIN intelligence_attempt_selections s USING(attempt_id) WHERE l.attempt_id=$1 FOR SHARE OF l,d,s",
+    )
+    .bind(q.original.binding.attempt_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db)?;
+    let spec = pinned_spec_from_row(&row, q, &h)?;
+    let decision: crate::intelligence::resolver::Decision =
+        serde_json::from_value(row.get("decision")).map_err(|_| refused())?;
+    let selection: aq_selection::ResolvedSelection =
+        serde_json::from_value(row.get("selection")).map_err(|_| refused())?;
+    if decision.decision_id != row.get::<Uuid, _>("decision_id")
+        || decision
+            .outcome
+            .resolved
+            .as_ref()
+            .is_none_or(|s| !same(s, &selection).unwrap_or(false))
+        || digest(&selection)? != spec.selection_digest
+        || spec.selection_digest != h.proposal.choice.selection_digest
+        || row.get::<String, _>("selection_digest") != spec.selection_digest.as_str()
+        || selection.target
+            != (aq_selection::ExecutionTarget::Worker {
+                node_id: auth.id(),
+                boot_id: q.original.identity.boot_id,
+            })
+        || selection.lineage.project_id != view.project_id
+        || selection.lineage.task_id != view.task_id
+        || selection.lineage.workspace_id != spec.task.workspace_id
+    {
+        return Err(refused());
+    }
+    let material = h.receipt.lease.materials[0].clone();
+    if material.credential_profile != selection.choice.credential_profile
+        || material.credential_revision != selection.credential_revision
+        || material.provider.as_str() != selection.choice.provider
+        || material.account_reference.as_str() != selection.choice.account_reference
+        || material.endpoint_reference.as_str() != selection.choice.endpoint_reference
+    {
+        return Err(refused());
+    }
+    let source = source_exports::load_linked_locked(tx, q.original.binding.attempt_id).await?;
+    if source.manifest().attempt != view.attempt
+        || source.manifest().source != view.source.ok_or_else(|| refused())?
+        || source.manifest().resolved_spec_digest != view.execution_spec_digest
+        || source.token().request().project_revision != spec.project_revision
+        || source.token().request().project_id != view.project_id
+    {
+        return Err(refused());
+    }
+    let ceiling = match issued {
+        Some(issued) => hot
+            .grant
+            .as_ref()
+            .ok_or_else(|| refused())?
+            .expires_at_ms
+            .min(issued.receipt.execution_deadline_ms),
+        None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
+    };
+    let mut pinned = PinnedArtifacts {
+        receipts: Vec::new(),
+        context: None,
+        ceiling,
+    };
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127",
+    )
+    .bind(q.original.binding.attempt_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(db)?;
+    if ids.len() != offer.offered.artifacts.len() || ids.len() > 126 {
+        return Err(refused());
+    }
+    let time = now(state)?;
+    for id in ids {
+        let a = artifacts::load_locked(tx, id).await?;
+        pinned.include(
+            a,
+            &offer.offered.artifacts,
+            source.token().request().project_id,
+            &spec.task_context,
+            time,
+        )?;
+    }
+    pinned.receipts.extend(
+        support::source_artifact_receipts(source.manifest()).map_err(history::helper_error)?,
+    );
+    support::require_artifact_receipts(&pinned.receipts, &q.original.artifacts)
+        .map_err(history::helper_error)?;
+    if time >= pinned.ceiling {
+        return Err(refused());
+    }
+    let policy = super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
+    require_supported_budget(&offer, &policy, &decision, &h)?;
+    let input = observations::Input {
+        full_context_digest: h.proposal.full_context_digest.clone(),
+        spec,
+        context: pinned.context.ok_or_else(|| refused())?,
+        decision,
+        selection,
+        offer,
+        source,
+        material,
+    };
+    let registry_at_load = super::registry_at_load(state, tx, &h).await?;
+    Ok(Pinned {
+        registry_at_load,
+        history: h,
+        input,
+        policy,
+        capabilities: current_registration.request.capabilities.clone(),
+        hot,
+        versions,
+        registration_id,
+        qualification,
+        issuance_ceiling: pinned.ceiling,
+    })
 }
 
 fn require_runtime_capabilities(
@@ -324,52 +345,6 @@ fn require_runtime_capabilities(
     .map_err(history::helper_error)
 }
 
-async fn load_selection_locked(
-    tx: &mut Transaction<'_, Postgres>,
-    auth: &AuthenticatedNode,
-    q: &PrepareRequest,
-    h: &AcceptedHistory,
-    view: &authority::AuthorityView,
-) -> Result<PinnedSelection, AppError> {
-    let row = sqlx::query(
-        "SELECT l.execution_spec,l.execution_spec_digest,l.graph_task_observation,l.decision_id,d.decision,s.selection,s.selection_digest FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) JOIN intelligence_attempt_selections s USING(attempt_id) WHERE l.attempt_id=$1 FOR SHARE OF l,d,s",
-    )
-    .bind(q.original.binding.attempt_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(db)?;
-    let spec = pinned_spec_from_row(&row, q, h)?;
-    let decision: crate::intelligence::resolver::Decision =
-        serde_json::from_value(row.get("decision")).map_err(|_| refused())?;
-    let selection: aq_selection::ResolvedSelection =
-        serde_json::from_value(row.get("selection")).map_err(|_| refused())?;
-    if decision.decision_id != row.get::<Uuid, _>("decision_id")
-        || decision
-            .outcome
-            .resolved
-            .as_ref()
-            .is_none_or(|s| !same(s, &selection).unwrap_or(false))
-        || digest(&selection)? != spec.selection_digest
-        || spec.selection_digest != h.proposal.choice.selection_digest
-        || row.get::<String, _>("selection_digest") != spec.selection_digest.as_str()
-        || selection.target
-            != (aq_selection::ExecutionTarget::Worker {
-                node_id: auth.id(),
-                boot_id: q.original.identity.boot_id,
-            })
-        || selection.lineage.project_id != view.project_id
-        || selection.lineage.task_id != view.task_id
-        || selection.lineage.workspace_id != spec.task.workspace_id
-    {
-        return Err(refused());
-    }
-    Ok(PinnedSelection {
-        spec,
-        decision,
-        selection,
-    })
-}
-
 // Validate the immutable spec and its stored offer provenance before decoding
 // the decision and selection from the same locked row.
 fn pinned_spec_from_row(
@@ -395,52 +370,6 @@ fn pinned_spec_from_row(
         return Err(refused());
     }
     Ok(spec)
-}
-
-async fn load_artifacts_locked(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    q: &PrepareRequest,
-    spec: &aq_admission::execution_spec::ProfiledExecutionSpec,
-    offer: &aq_admission::startup::NativeOffer,
-    source: &source_exports::LinkedExport,
-    ceiling: u64,
-) -> Result<(Option<serde_json::Value>, u64), AppError> {
-    let mut pinned = PinnedArtifacts {
-        receipts: Vec::new(),
-        context: None,
-        ceiling,
-    };
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127",
-    )
-    .bind(q.original.binding.attempt_id)
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(db)?;
-    if ids.len() != offer.offered.artifacts.len() || ids.len() > 126 {
-        return Err(refused());
-    }
-    let time = now(state)?;
-    for id in ids {
-        let a = artifacts::load_locked(tx, id).await?;
-        pinned.include(
-            a,
-            &offer.offered.artifacts,
-            source.token().request().project_id,
-            &spec.task_context,
-            time,
-        )?;
-    }
-    pinned.receipts.extend(
-        support::source_artifact_receipts(source.manifest()).map_err(history::helper_error)?,
-    );
-    support::require_artifact_receipts(&pinned.receipts, &q.original.artifacts)
-        .map_err(history::helper_error)?;
-    if time >= pinned.ceiling {
-        return Err(refused());
-    }
-    Ok((pinned.context, pinned.ceiling))
 }
 
 // Collect only this project's exact offered artifacts, retaining the earliest
