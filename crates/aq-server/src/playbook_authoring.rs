@@ -35,6 +35,36 @@ fn scope(driver: &Driver, capabilities: &BTreeSet<String>) -> GrantScope {
     }
 }
 
+async fn reactivate_binding(
+    state: &AppState,
+    driver: &Driver,
+    source: &str,
+    grant: Uuid,
+) -> Result<()> {
+    let binding: Option<String> =
+        sqlx::query_scalar("SELECT binding FROM playbook_sources WHERE id=$1")
+            .bind(source)
+            .fetch_optional(&state.store.pool)
+            .await?;
+    let Some(binding) = binding else {
+        return Ok(());
+    };
+    let current = driver
+        .binding_activation(binding.clone())
+        .await
+        .map_err(engine)?;
+    if let Some(current) = current
+        && let Err(error) = driver.activate(binding, current.artifact, grant, 1).await
+    {
+        tracing::warn!(
+            source,
+            ?error,
+            "the playbook in effect is not allowed by the new grant"
+        );
+    }
+    Ok(())
+}
+
 impl authoring::Host for AppState {
     async fn markdown(&self, source: &SourceRecord) -> Result<(String, u64)> {
         let stored = match source.kind {
@@ -96,27 +126,7 @@ impl authoring::Deployer for AppState {
             // What runs now moves to the new grant before the old one goes, so
             // a playbook in effect keeps working while its successor is
             // written. When the new abilities no longer cover it, it stops.
-            let binding: Option<String> =
-                sqlx::query_scalar("SELECT binding FROM playbook_sources WHERE id=$1")
-                    .bind(source)
-                    .fetch_optional(pool)
-                    .await?;
-            let current = match &binding {
-                Some(binding) => driver
-                    .binding_activation(binding.clone())
-                    .await
-                    .map_err(engine)?,
-                None => None,
-            };
-            if let (Some(binding), Some(current)) = (binding, current)
-                && let Err(error) = driver.activate(binding, current.artifact, id, 1).await
-            {
-                tracing::warn!(
-                    source,
-                    ?error,
-                    "the playbook in effect is not allowed by the new grant"
-                );
-            }
+            reactivate_binding(self, &driver, source, id).await?;
             service.revoke(owner, old).await.map_err(engine)?;
         }
         Ok((id, 1))
