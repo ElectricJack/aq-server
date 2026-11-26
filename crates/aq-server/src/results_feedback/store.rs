@@ -2,7 +2,7 @@ use super::contract::*;
 use crate::{
     AppState,
     dashboard_api::{
-        actions::{Disposition, Outcome, existing},
+        actions::{Disposition, EntityRef, Outcome, existing},
         errors::ApiError,
     },
     store::User,
@@ -359,6 +359,38 @@ async fn retain(
         .await?;
     Ok(())
 }
+/// Locks the result aggregate under short lock and statement timeouts
+/// and returns its version.
+async fn lock_aggregate(tx: &mut Transaction<'_, Postgres>, result: Uuid) -> Result<i64> {
+    sqlx::query("SET LOCAL lock_timeout='1s'")
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("SET LOCAL statement_timeout='2s'")
+        .execute(&mut **tx)
+        .await?;
+    let version =
+        sqlx::query_scalar("SELECT version FROM result_aggregates WHERE result_id=$1 FOR UPDATE")
+            .bind(result)
+            .fetch_one(&mut **tx)
+            .await?;
+    Ok(version)
+}
+fn same_version(current: i64, expected: i64) -> Result<()> {
+    if current != expected {
+        return Err(conflict());
+    }
+    Ok(())
+}
+/// The pinned inputs one feedback command writes with.
+struct Effect<'a> {
+    user: &'a User,
+    p: &'a Pin,
+    /// The addressed comment or thread (a correction or resolution).
+    id: Uuid,
+    /// The client's expected version of the guarded entity.
+    expected: i64,
+    now: i64,
+}
 pub(super) async fn apply(
     state: &AppState,
     user: &User,
@@ -367,123 +399,143 @@ pub(super) async fn apply(
 ) -> Result<Outcome> {
     let p = subject(state, user, id, cmd).await?;
     let mut tx = state.store.pool.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout='1s'")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("SET LOCAL statement_timeout='2s'")
-        .execute(&mut *tx)
-        .await?;
-    let version: i64 =
-        sqlx::query_scalar("SELECT version FROM result_aggregates WHERE result_id=$1 FOR UPDATE")
-            .bind(p.result)
-            .fetch_one(&mut *tx)
-            .await?;
+    let version = lock_aggregate(&mut tx, p.result).await?;
     fence(&mut tx, user).await?;
-    let expected = number(cmd.version())?;
-    let now = (state.clock)().timestamp_millis();
+    let effect = Effect {
+        user,
+        p: &p,
+        id,
+        expected: number(cmd.version())?,
+        now: (state.clock)().timestamp_millis(),
+    };
     let receipt = existing::entity("result_feedback_receipt", cmd.id(), Some("1".into()));
     let mut entities = vec![existing::entity(
         "result",
         p.result,
         Some((version + 1).to_string()),
     )];
+    entities.extend(write_command(state, &mut tx, &effect, version, cmd).await?);
+    bump_versions(&mut tx, &p).await?;
+    let out = Outcome::confirmed(vec![receipt], entities);
+    retain(&mut tx, user, &p, cmd.id(), &out).await?;
+    tx.commit().await?;
+    Ok(out)
+}
+/// Writes one command's rows under its version guard and returns the
+/// entities it changed besides the result.
+async fn write_command(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    aggregate_version: i64,
+    cmd: &Command,
+) -> Result<Vec<EntityRef>> {
     match cmd {
         Command::Follow(v) => {
-            if version != expected {
-                return Err(conflict());
-            }
-            sqlx::query("INSERT INTO result_follows VALUES($1,$2,$3) ON CONFLICT(result_id,actor_id) DO UPDATE SET following=excluded.following").bind(p.result).bind(user.id).bind(v.following).execute(&mut *tx).await?;
+            same_version(aggregate_version, e.expected)?;
+            sqlx::query("INSERT INTO result_follows VALUES($1,$2,$3) ON CONFLICT(result_id,actor_id) DO UPDATE SET following=excluded.following").bind(e.p.result).bind(e.user.id).bind(v.following).execute(&mut **tx).await?;
+            Ok(Vec::new())
         }
         Command::Comment(v) => {
-            if version != expected {
-                return Err(conflict());
-            }
-            let thread = add_comment(&mut tx, user, &p, v, now).await?;
-            entities.push(existing::entity(
-                "comment",
-                v.operation_id,
-                Some("1".into()),
-            ));
-            entities.push(existing::entity("thread", thread, None));
+            same_version(aggregate_version, e.expected)?;
+            let thread = add_comment(tx, e.user, e.p, v, e.now).await?;
+            Ok(vec![
+                existing::entity("comment", v.operation_id, Some("1".into())),
+                existing::entity("thread", thread, None),
+            ])
         }
-        Command::Correction(v) => {
-            let updated=sqlx::query("UPDATE result_comments SET revision=revision+1 WHERE id=$1 AND revision=$2 AND revision<16").bind(id).bind(expected).execute(&mut *tx).await?;
-            if updated.rows_affected() != 1 {
-                return Err(conflict());
-            }
-            sqlx::query("INSERT INTO result_comment_revisions VALUES($1,$2,$3,$4,$5)")
-                .bind(id)
-                .bind(expected + 1)
-                .bind(user.id)
-                .bind(&v.body)
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-            entities.push(existing::entity(
-                "comment",
-                id,
-                Some((expected + 1).to_string()),
-            ));
-        }
-        Command::Resolve(v) => {
-            let follow = pin(state, v.follow_up.result_id, Some(&v.follow_up.revision)).await?;
-            let updated=sqlx::query("UPDATE result_threads SET version=version+1,state='resolved',resolved_by=$3,reason=$4,follow_up_report=$5,follow_up_revision=$6 WHERE id=$1 AND version=$2 AND state='open'").bind(id).bind(expected).bind(user.id).bind(&v.reason).bind(follow.report).bind(&follow.revision).execute(&mut *tx).await?;
-            if updated.rows_affected() != 1 {
-                return Err(conflict());
-            }
-            entities.push(existing::entity(
-                "thread",
-                id,
-                Some((expected + 1).to_string()),
-            ));
-        }
-        Command::Waiver(v) => {
-            // Evidence decisions guard their own assessment version.
-            let av: i64 = sqlx::query_scalar(
-                "SELECT version FROM result_assessments WHERE report_id=$1 FOR UPDATE",
-            )
-            .bind(p.report)
-            .fetch_one(&mut *tx)
-            .await?;
-            if av != expected {
-                return Err(conflict());
-            }
-            let inserted=sqlx::query("INSERT INTO result_evidence_waivers VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(report_id,requirement_id,policy_revision) DO NOTHING")
-                .bind(v.operation_id)
-                .bind(p.report)
-                .bind(&p.revision)
-                .bind(&v.requirement_id)
-                .bind(&v.policy_revision)
-                .bind(user.id)
-                .bind(&v.reason)
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-            if inserted.rows_affected() != 1 {
-                return Err(conflict());
-            }
-        }
+        Command::Correction(v) => correct_comment(tx, e, v).await,
+        Command::Resolve(v) => resolve_thread(state, tx, e, v).await,
+        Command::Waiver(v) => record_waiver(tx, e, v).await.map(|()| Vec::new()),
         Command::Link(v) => {
-            guard_thread(&mut tx, v.thread_id, expected).await?;
-            link(&mut tx, &p, v.operation_id, v.task_id, json!(v)).await?;
-            entities.push(existing::entity("task", v.task_id, None));
+            guard_thread(tx, v.thread_id, e.expected).await?;
+            link(tx, e.p, v.operation_id, v.task_id, json!(v)).await?;
+            Ok(vec![existing::entity("task", v.task_id, None)])
         }
-        Command::Draft(_) => return Err(invalid()),
+        Command::Draft(_) => Err(invalid()),
     }
+}
+async fn correct_comment(
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    v: &Correction,
+) -> Result<Vec<EntityRef>> {
+    let updated=sqlx::query("UPDATE result_comments SET revision=revision+1 WHERE id=$1 AND revision=$2 AND revision<16").bind(e.id).bind(e.expected).execute(&mut **tx).await?;
+    if updated.rows_affected() != 1 {
+        return Err(conflict());
+    }
+    sqlx::query("INSERT INTO result_comment_revisions VALUES($1,$2,$3,$4,$5)")
+        .bind(e.id)
+        .bind(e.expected + 1)
+        .bind(e.user.id)
+        .bind(&v.body)
+        .bind(e.now)
+        .execute(&mut **tx)
+        .await?;
+    Ok(vec![existing::entity(
+        "comment",
+        e.id,
+        Some((e.expected + 1).to_string()),
+    )])
+}
+async fn resolve_thread(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    v: &Resolve,
+) -> Result<Vec<EntityRef>> {
+    let follow = pin(state, v.follow_up.result_id, Some(&v.follow_up.revision)).await?;
+    let updated=sqlx::query("UPDATE result_threads SET version=version+1,state='resolved',resolved_by=$3,reason=$4,follow_up_report=$5,follow_up_revision=$6 WHERE id=$1 AND version=$2 AND state='open'").bind(e.id).bind(e.expected).bind(e.user.id).bind(&v.reason).bind(follow.report).bind(&follow.revision).execute(&mut **tx).await?;
+    if updated.rows_affected() != 1 {
+        return Err(conflict());
+    }
+    Ok(vec![existing::entity(
+        "thread",
+        e.id,
+        Some((e.expected + 1).to_string()),
+    )])
+}
+async fn record_waiver(
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    v: &Waiver,
+) -> Result<()> {
+    // Evidence decisions guard their own assessment version.
+    let assessment_version: i64 =
+        sqlx::query_scalar("SELECT version FROM result_assessments WHERE report_id=$1 FOR UPDATE")
+            .bind(e.p.report)
+            .fetch_one(&mut **tx)
+            .await?;
+    same_version(assessment_version, e.expected)?;
+    let inserted=sqlx::query("INSERT INTO result_evidence_waivers VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(report_id,requirement_id,policy_revision) DO NOTHING")
+        .bind(v.operation_id)
+        .bind(e.p.report)
+        .bind(&e.p.revision)
+        .bind(&v.requirement_id)
+        .bind(&v.policy_revision)
+        .bind(e.user.id)
+        .bind(&v.reason)
+        .bind(e.now)
+        .execute(&mut **tx)
+        .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(conflict());
+    }
+    Ok(())
+}
+/// Every accepted command advances the result and assessment versions.
+async fn bump_versions(tx: &mut Transaction<'_, Postgres>, p: &Pin) -> Result<()> {
     sqlx::query("UPDATE result_aggregates SET version=version+1 WHERE result_id=$1")
         .bind(p.result)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query(
         "UPDATE result_assessments SET version=version+1,observed_state=NULL WHERE report_id=$1",
     )
     .bind(p.report)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    let out = Outcome::confirmed(vec![receipt], entities);
-    retain(&mut tx, user, &p, cmd.id(), &out).await?;
-    tx.commit().await?;
-    Ok(out)
+    Ok(())
 }
 async fn add_comment(
     tx: &mut Transaction<'_, Postgres>,

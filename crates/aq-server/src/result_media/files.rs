@@ -546,10 +546,20 @@ impl Drop for ActivityGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// `Root::open` refuses a root that is not 0700, and `tempdir()`
+    /// follows the umask (0755 on CI runners).
+    fn private_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
 
     #[test]
     fn activity_limits_keep_readers_and_writers_exclusive_per_generation() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_dir();
         let root = Root::open(dir.path(), Uuid::new_v4()).unwrap();
         let reading = Uuid::new_v4();
         let readers: Vec<_> = (0..4)
@@ -580,7 +590,7 @@ mod tests {
 
     #[test]
     fn cleanup_confirms_absence_but_refuses_a_symlink_generation() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_dir();
         let root = Root::open(dir.path(), Uuid::new_v4()).unwrap();
         let id = Uuid::new_v4();
         root.remove(id, false).unwrap();

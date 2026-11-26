@@ -534,16 +534,7 @@ pub(crate) async fn renew_after_reboot(
         .authorize(&context, RunnerOperation::Renew, time)
         .map_err(|_| refused())?;
     if pending {
-        let reply = RunnerRenewalResponse {
-            schema_version: 1,
-            revision: q.revision,
-            reply: RenewalReply::AwaitingNodeReadoption {
-                operation_id: q.operation_id,
-                binding: q.permit.binding.clone(),
-            },
-            delivery: None,
-        };
-        reply.validate().map_err(|_| refused())?;
+        let reply = awaiting_readoption(q)?;
         commit(tx).await?;
         return Ok(Some(reply));
     }
@@ -557,17 +548,8 @@ pub(crate) async fn renew_after_reboot(
         if context.grant_expires_at_ms != old.record.expires_at_ms {
             return Err(refused());
         }
-        let expiry = time
-            .checked_add(120_000)
-            .ok_or_else(refused)?
-            .min(old.record.hard_deadline_ms);
-        if expiry <= old.record.expires_at_ms {
-            return Err(refused());
-        }
-        let mut next = old.clone();
-        next.record.issued_at_ms = time;
-        next.record.expires_at_ms = expiry;
-        next.revision = next.revision.checked_add(1).ok_or_else(refused)?;
+        let next = extended(old, time)?;
+        let expiry = next.record.expires_at_ms;
         sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{grant,expires_at_ms}',$2) WHERE attempt_id=$1")
             .bind(old.record.binding.attempt_id).bind(json(&expiry)?).execute(&mut *tx).await.map_err(db)?;
         save(&mut tx, &next).await?;
@@ -590,9 +572,51 @@ pub(crate) async fn renew_after_reboot(
         .authorize(&context, RunnerOperation::Renew, time)
         .map_err(|_| refused())?;
     let permit = next.record.delivery(key(state)?).map_err(|_| refused())?;
+    let reply = renewed(q.operation_id, next.revision, permit, nonce, time)?;
+    commit(tx).await?;
+    Ok(Some(reply))
+}
+/// The reply while the node's new registration still awaits re-adoption;
+/// no deadline changes.
+fn awaiting_readoption(q: &RunnerRenewalRequest) -> Result<RunnerRenewalResponse, AppError> {
     let reply = RunnerRenewalResponse {
         schema_version: 1,
-        revision: next.revision,
+        revision: q.revision,
+        reply: RenewalReply::AwaitingNodeReadoption {
+            operation_id: q.operation_id,
+            binding: q.permit.binding.clone(),
+        },
+        delivery: None,
+    };
+    reply.validate().map_err(|_| refused())?;
+    Ok(reply)
+}
+/// Option A: the lease runs at most 120 s from `time`, never past the hard
+/// deadline, and a renewal that would not extend it is refused.
+fn extended(old: &Current, time: u64) -> Result<Current, AppError> {
+    let expiry = time
+        .checked_add(120_000)
+        .ok_or_else(refused)?
+        .min(old.record.hard_deadline_ms);
+    if expiry <= old.record.expires_at_ms {
+        return Err(refused());
+    }
+    let mut next = old.clone();
+    next.record.issued_at_ms = time;
+    next.record.expires_at_ms = expiry;
+    next.revision = next.revision.checked_add(1).ok_or_else(refused)?;
+    Ok(next)
+}
+fn renewed(
+    operation_id: Uuid,
+    revision: u64,
+    permit: DelegatedPermit,
+    nonce: Uuid,
+    time: u64,
+) -> Result<RunnerRenewalResponse, AppError> {
+    let reply = RunnerRenewalResponse {
+        schema_version: 1,
+        revision,
         delivery: Some(aq_admission_sandbox::control::DeliveryStamp {
             nonce,
             clock: aq_admission_sandbox::transport::DeliveryClock::new_interactive_session(
@@ -602,11 +626,10 @@ pub(crate) async fn renew_after_reboot(
             .map_err(|_| refused())?,
         }),
         reply: RenewalReply::Renewed {
-            operation_id: q.operation_id,
+            operation_id,
             permit,
         },
     };
     reply.validate().map_err(|_| refused())?;
-    commit(tx).await?;
-    Ok(Some(reply))
+    Ok(reply)
 }
