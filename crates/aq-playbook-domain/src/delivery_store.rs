@@ -51,6 +51,8 @@ pub struct Latest {
     pub head: String,
     /// The commit the lineage started from, or `""`.
     pub base: String,
+    /// The conclusion the agent reported with the result.
+    pub conclusion: String,
 }
 
 impl Latest {
@@ -174,6 +176,7 @@ impl DeliveryPort for PgDelivery {
             changed: source.changed(),
             head: source.head,
             base: source.base.unwrap_or_default(),
+            conclusion: report["conclusion"].as_str().unwrap_or("").to_owned(),
         }))
     }
 
