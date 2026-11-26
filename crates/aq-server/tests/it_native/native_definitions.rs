@@ -20,7 +20,7 @@ fn definition(id: &str, body: &str) -> Definition {
     .unwrap()
 }
 #[test]
-fn exact_bytes_kind_identity_bounds_and_configuration_roundtrip() {
+fn definition_requires_exact_bytes_kind_and_known_fields() {
     let valid = definition("synthetic-definition", "synthetic public evidence");
     let mut raw = serde_json::to_value(&valid).unwrap();
     raw["body"] = "changed bytes".into();
@@ -31,6 +31,10 @@ fn exact_bytes_kind_identity_bounds_and_configuration_roundtrip() {
     let mut raw = serde_json::to_value(&valid).unwrap();
     raw["private_path"] = "/not-accepted".into();
     assert!(serde_json::from_value::<Definition>(raw).is_err());
+}
+#[test]
+fn catalog_rejects_duplicate_identities_and_oversized_bodies() {
+    let valid = definition("synthetic-definition", "synthetic public evidence");
     assert!(definitions::validate_catalog(&[valid.clone(), valid.clone()]).is_err());
     let bodies = (0..5)
         .map(|n| {
@@ -49,6 +53,10 @@ fn exact_bytes_kind_identity_bounds_and_configuration_roundtrip() {
         )
         .is_err()
     );
+}
+#[test]
+fn configuration_roundtrip_preserves_authority_bytes() {
+    let valid = definition("synthetic-definition", "synthetic public evidence");
     let empty = ProfiledConfig {
         revision: 1,
         qualified_runtimes: vec![],

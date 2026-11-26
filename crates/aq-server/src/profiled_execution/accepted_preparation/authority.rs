@@ -53,7 +53,7 @@ pub(crate) async fn load_preparing_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     auth: &AuthenticatedNode,
-    b: &LaunchBinding,
+    binding: &LaunchBinding,
     hot: &HotState,
 ) -> Result<PreparationAuthority, AppError> {
     let operation = hot.preparation_operation_id.ok_or_else(|| refused())?;
@@ -61,17 +61,23 @@ pub(crate) async fn load_preparing_locked(
     if hot.status != Status::Preparing || hot.grant.is_some() {
         return Err(refused());
     }
-    if let Some(raw)=sqlx::query_scalar::<_,serde_json::Value>("SELECT response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 AND kind='accept' FOR SHARE").bind(auth.id()).bind(operation).fetch_optional(&mut **tx).await.map_err(db)?{
-  let doc:aq_admission::transport::TransportDocument=serde_json::from_value(raw.clone()).map_err(|_|refused())?;doc.validate().map_err(|_|refused())?;
-  let aq_admission::transport::TransportDocument::PreparationPlan(plan)=doc else{return Err(refused())};
-  if plan.binding!=*b||plan.operation_id!=operation||plan.guardian_id!=owner.guardian_id||plan.launch_id!=owner.launch_id||plan.reservation.reservation_id!=owner.reservation_id{return Err(refused())}
-  return Ok(PreparationAuthority{original:OriginalPreparation::Legacy{plan:Box::new(plan),receipt_digest:aq_selection::digest(&raw).map_err(|_|AppError::Internal)?}})
- }
-    if super::super::phase_profile::for_attempt_locked(tx, b.attempt_id).await?
+    if let Some(raw) = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 AND kind='accept' FOR SHARE",
+    )
+        .bind(auth.id())
+        .bind(operation)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?
+    {
+        return legacy_authority(raw, binding, operation, owner);
+    }
+    if super::super::phase_profile::for_attempt_locked(tx, binding.attempt_id).await?
         == Some(super::super::phase_profile::Profile::Refresh)
     {
         let refresh =
-            super::super::accepted_refresh::load_preparing_locked(state, tx, auth, b, hot).await?;
+            super::super::accepted_refresh::load_preparing_locked(state, tx, auth, binding, hot)
+                .await?;
         return Ok(PreparationAuthority {
             original: OriginalPreparation::Refresh(Box::new(refresh)),
         });
@@ -79,18 +85,55 @@ pub(crate) async fn load_preparing_locked(
     if !super::policy::enabled(state) {
         return Err(refused());
     }
-    let p = proposal_locked(tx, b).await?;
-    let raw:serde_json::Value=sqlx::query_scalar("SELECT request FROM profiled_v2_accepts WHERE attempt_id=$1 AND node_id=$2 AND operation_id=$3 FOR SHARE").bind(b.attempt_id).bind(auth.id()).bind(operation).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(|| refused())?;
-    let q: AcceptRequest = serde_json::from_value(raw).map_err(|_| refused())?;
-    let a = accepted_locked(tx, &p, &q)
+    let proposal = proposal_locked(tx, binding).await?;
+    let raw: serde_json::Value = sqlx::query_scalar(
+        "SELECT request FROM profiled_v2_accepts WHERE attempt_id=$1 AND node_id=$2 AND operation_id=$3 FOR SHARE",
+    )
+        .bind(binding.attempt_id)
+        .bind(auth.id())
+        .bind(operation)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?
+        .ok_or_else(|| refused())?;
+    let request: AcceptRequest = serde_json::from_value(raw).map_err(|_| refused())?;
+    let receipt = accepted_locked(tx, &proposal, &request)
         .await?
         .ok_or_else(|| refused())?;
-    live_locked(state, tx, auth, &p, &q, &a).await?;
-    let digest = a.digest().map_err(|_| refused())?;
+    live_locked(state, tx, auth, &proposal, &request, &receipt).await?;
+    let digest = receipt.digest().map_err(|_| refused())?;
     Ok(PreparationAuthority {
         original: OriginalPreparation::AcceptedV2 {
-            receipt: Box::new(a),
+            receipt: Box::new(receipt),
             receipt_digest: digest,
+        },
+    })
+}
+
+fn legacy_authority(
+    raw: serde_json::Value,
+    binding: &LaunchBinding,
+    operation: uuid::Uuid,
+    owner: &crate::execution::authority::hot::LaunchOwner,
+) -> Result<PreparationAuthority, AppError> {
+    use aq_admission::transport::TransportDocument;
+    let document: TransportDocument = serde_json::from_value(raw.clone()).map_err(|_| refused())?;
+    document.validate().map_err(|_| refused())?;
+    let TransportDocument::PreparationPlan(plan) = document else {
+        return Err(refused());
+    };
+    if plan.binding != *binding
+        || plan.operation_id != operation
+        || plan.guardian_id != owner.guardian_id
+        || plan.launch_id != owner.launch_id
+        || plan.reservation.reservation_id != owner.reservation_id
+    {
+        return Err(refused());
+    }
+    Ok(PreparationAuthority {
+        original: OriginalPreparation::Legacy {
+            plan: Box::new(plan),
+            receipt_digest: aq_selection::digest(&raw).map_err(|_| AppError::Internal)?,
         },
     })
 }

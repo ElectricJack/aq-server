@@ -1,6 +1,7 @@
 //! Opt-in real protected engine + owner + compiled dashboard browser fixture.
 //! The labelled development workflow is admitted through normal typed owners.
 use super::*;
+use aq_server::playbooks::{driver::Driver, inspection::RunDetail};
 
 fn parent(child: &Artifact) -> Artifact {
     let mut content = child.content.clone();
@@ -8,14 +9,9 @@ fn parent(child: &Artifact) -> Artifact {
     content.playbook.id = "dev-playbook-inspection".into();
     content.playbook.purpose =
         "Labelled development browser workflow with an actual child run".into();
-    content.playbook.entries.get_mut("main").unwrap().start = "call".into();
-    content
-        .playbook
-        .entries
-        .get_mut("main")
-        .unwrap()
-        .outcomes
-        .insert("error".into(), Schema::Null);
+    let main = content.playbook.entries.get_mut("main").unwrap();
+    main.start = "call".into();
+    main.outcomes.insert("error".into(), Schema::Null);
     content.playbook.steps.remove("send");
     content.playbook.steps.insert(
         "failed".into(),
@@ -61,6 +57,23 @@ fn parent(child: &Artifact) -> Artifact {
     artifact
 }
 
+async fn completed_parent(driver: &Driver, actor: Uuid, request_id: Uuid) -> RunDetail {
+    for _ in 0..100 {
+        let status = driver.service.admission(actor, request_id).await.unwrap();
+        if let Some(receipt) = status.status.receipt {
+            let detail = driver
+                .inspect_run_timeline(actor, receipt.run_id.clone(), Default::default())
+                .await
+                .unwrap();
+            if detail.run.status == "completed" && !detail.run.children.is_empty() {
+                return detail;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("actual completed parent and child required");
+}
+
 #[tokio::test]
 #[ignore = "requires explicit compiled dashboard and actual browser probe; no provider"]
 async fn actual_protected_run_and_child_reach_compiled_playbooks_page() {
@@ -104,28 +117,7 @@ async fn actual_protected_run_and_child_reach_compiled_playbooks_page() {
         .prepare(s.f.actor, request.clone())
         .await
         .unwrap();
-    let mut admitted = None;
-    for _ in 0..100 {
-        let status = runtime
-            .driver
-            .service
-            .admission(s.f.actor, request.request_id)
-            .await
-            .unwrap();
-        if let Some(receipt) = status.status.receipt {
-            let detail = runtime
-                .driver
-                .inspect_run_timeline(s.f.actor, receipt.run_id.clone(), Default::default())
-                .await
-                .unwrap();
-            if detail.run.status == "completed" && !detail.run.children.is_empty() {
-                admitted = Some(detail);
-                break;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    let actual = admitted.expect("actual completed parent and child required");
+    let actual = completed_parent(&runtime.driver, s.f.actor, request.request_id).await;
     assert_eq!(actual.run.artifact, caller.digest);
     assert_eq!(actual.run.outcome.as_deref(), Some("ok"));
     assert_eq!(actual.run.children.len(), 1);

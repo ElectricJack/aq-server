@@ -156,109 +156,93 @@ fn ack(submission: &[u8], phase: Phase) -> Vec<u8> {
     .unwrap()
 }
 
-/// The full claim lifecycle through the binary, pinned by the golden file:
-/// ready, a new claim (pending after the bounded wait), the same claim again,
-/// a changed claim (conflict, original kept), the worker's accepted and
-/// recorded acknowledgments, `--json`, and an absent channel (exit 15).
-#[test]
-fn result_submit_and_status_match_the_golden_and_aq_agent() {
-    let binding = binding();
-    let binding_bytes = wire::encode(&binding).unwrap();
-    let outbox = Outbox::new(&binding_bytes, &binding);
-    let request = input("Changed scoped file; cargo test -p example exit0; limits none");
-    let other = input("different claim");
-    outbox.write("submissions/request.json", &request);
-    outbox.write("submissions/other.json", &other);
-    let mut steps = vec![];
-    let mut step = |name: &str, write: Value, args: &[&str], aq_only: bool, o: Option<&Outbox>| {
-        for (file, bytes) in write.as_object().into_iter().flatten() {
-            outbox.write(file, bytes.as_str().unwrap().as_bytes());
-        }
-        let (exit, stdout, stderr) = aq(o, args);
-        steps.push(
-            json!({"name":name,"write":write,"args":args,"aq_only":aq_only,
-            "exit":exit,"stdout":stdout,"stderr":stderr}),
+#[derive(Default)]
+struct Transcript {
+    steps: Vec<Value>,
+}
+
+fn capture_step(name: &str, args: &[&str], outbox: Option<&Outbox>, write: Value) -> Value {
+    let (exit, stdout, stderr) = aq(outbox, args);
+    json!({
+        "name":name, "write":write, "args":args, "aq_only":args.contains(&"--json"),
+        "exit":exit, "stdout":stdout, "stderr":stderr
+    })
+}
+
+impl Transcript {
+    fn claim(&mut self, outbox: &Outbox) -> Vec<u8> {
+        let submit = &["result", "submit", "--request-file", "$REQUEST"];
+        self.steps.push(capture_step(
+            "ready",
+            &["result", "status"],
+            Some(outbox),
+            json!({}),
+        ));
+        self.steps
+            .push(capture_step("submit", submit, Some(outbox), json!({})));
+        let submission = outbox.submission();
+        self.steps.push(capture_step(
+            "submit_again",
+            submit,
+            Some(outbox),
+            json!({}),
+        ));
+        self.steps.push(capture_step(
+            "changed_claim",
+            &["result", "submit", "--request-file", "$OTHER"],
+            Some(outbox),
+            json!({}),
+        ));
+        assert_eq!(outbox.submission(), submission, "the original is kept");
+        submission
+    }
+
+    fn acknowledge(&mut self, name: &str, outbox: &Outbox, bytes: Vec<u8>) {
+        outbox.write("ack.json", &bytes);
+        self.steps.push(capture_step(
+            name,
+            &["result", "status"],
+            Some(outbox),
+            json!({"ack.json":String::from_utf8(bytes).unwrap()}),
+        ));
+    }
+
+    fn statuses(&mut self, binding: &Binding, outbox: &Outbox, submission: &[u8]) {
+        self.acknowledge("accepted", outbox, ack(submission, Phase::Accepted));
+        let report = binding.report_id;
+        let receipt = ArtifactRef {
+            id: Text::new(format!("aq.result-record/{report}")).unwrap(),
+            version: Text::new("1").unwrap(),
+            digest: Digest::of(b"fixture receipt"),
+        };
+        self.acknowledge(
+            "recorded",
+            outbox,
+            ack(submission, Phase::Recorded { receipt }),
         );
-    };
-    step(
-        "ready",
-        json!({}),
-        &["result", "status"],
-        false,
-        Some(&outbox),
-    );
-    step(
-        "submit",
-        json!({}),
-        &["result", "submit", "--request-file", "$REQUEST"],
-        false,
-        Some(&outbox),
-    );
-    let submission = outbox.submission();
-    step(
-        "submit_again",
-        json!({}),
-        &["result", "submit", "--request-file", "$REQUEST"],
-        false,
-        Some(&outbox),
-    );
-    step(
-        "changed_claim",
-        json!({}),
-        &["result", "submit", "--request-file", "$OTHER"],
-        false,
-        Some(&outbox),
-    );
-    assert_eq!(outbox.submission(), submission, "the original is kept");
-    let accepted = ack(&submission, Phase::Accepted);
-    let write = json!({"ack.json":String::from_utf8(accepted).unwrap()});
-    step(
-        "accepted",
-        write,
-        &["result", "status"],
-        false,
-        Some(&outbox),
-    );
-    let report = binding.report_id;
-    let receipt = ArtifactRef {
-        id: Text::new(format!("aq.result-record/{report}")).unwrap(),
-        version: Text::new("1").unwrap(),
-        digest: Digest::of(b"fixture receipt"),
-    };
-    let recorded = ack(&submission, Phase::Recorded { receipt });
-    let write = json!({"ack.json":String::from_utf8(recorded).unwrap()});
-    step(
-        "recorded",
-        write,
-        &["result", "status"],
-        false,
-        Some(&outbox),
-    );
-    step(
-        "recorded_json",
-        json!({}),
-        &["--json", "result", "status"],
-        true,
-        Some(&outbox),
-    );
-    step("no_channel", json!({}), &["result", "status"], false, None);
-    step(
-        "no_channel_json",
-        json!({}),
-        &["result", "status", "--json"],
-        true,
-        None,
-    );
-    let doc = json!({
-        "contract": wire::CONTRACT,
-        "note": "Generated by aqv2 tests/cli/result.rs; aq-worker checks aq-agent result against it.",
-        "binding": String::from_utf8(binding_bytes).unwrap(),
-        "request": String::from_utf8(request).unwrap(),
-        "other": String::from_utf8(other).unwrap(),
-        "submission": String::from_utf8(submission).unwrap(),
-        "steps": steps,
-    });
-    let actual = serde_json::to_string_pretty(&doc).unwrap() + "\n";
+        self.steps.push(capture_step(
+            "recorded_json",
+            &["--json", "result", "status"],
+            Some(outbox),
+            json!({}),
+        ));
+        self.steps.push(capture_step(
+            "no_channel",
+            &["result", "status"],
+            None,
+            json!({}),
+        ));
+        self.steps.push(capture_step(
+            "no_channel_json",
+            &["result", "status", "--json"],
+            None,
+            json!({}),
+        ));
+    }
+}
+
+fn check_transcript(doc: &Value, binding: &Binding, outbox: &Outbox) {
+    let actual = serde_json::to_string_pretty(doc).unwrap() + "\n";
     if std::env::var_os("AQ_REGENERATE_GOLDEN").is_some() {
         std::fs::write(golden_path(), &actual).unwrap();
     }
@@ -300,6 +284,34 @@ fn result_submit_and_status_match_the_golden_and_aq_agent() {
     assert!(!printed.contains(&binding.nonce.to_string()));
     assert!(!printed.contains(outbox.dir.path().to_str().unwrap()));
     assert!(!printed.contains("aqa_"));
+}
+
+/// The full claim lifecycle through the binary, pinned by the golden file:
+/// ready, a new claim (pending after the bounded wait), the same claim again,
+/// a changed claim (conflict, original kept), the worker's accepted and
+/// recorded acknowledgments, `--json`, and an absent channel (exit 15).
+#[test]
+fn result_submit_and_status_match_the_golden_and_aq_agent() {
+    let binding = binding();
+    let binding_bytes = wire::encode(&binding).unwrap();
+    let outbox = Outbox::new(&binding_bytes, &binding);
+    let request = input("Changed scoped file; cargo test -p example exit0; limits none");
+    let other = input("different claim");
+    outbox.write("submissions/request.json", &request);
+    outbox.write("submissions/other.json", &other);
+    let mut transcript = Transcript::default();
+    let submission = transcript.claim(&outbox);
+    transcript.statuses(&binding, &outbox, &submission);
+    let doc = json!({
+        "contract": wire::CONTRACT,
+        "note": "Generated by aqv2 tests/cli/result.rs; aq-worker checks aq-agent result against it.",
+        "binding": String::from_utf8(binding_bytes).unwrap(),
+        "request": String::from_utf8(request).unwrap(),
+        "other": String::from_utf8(other).unwrap(),
+        "submission": String::from_utf8(submission).unwrap(),
+        "steps": transcript.steps,
+    });
+    check_transcript(&doc, &binding, &outbox);
 }
 
 /// The channel is the worker's: a group- or world-accessible root, a symlinked

@@ -85,7 +85,7 @@ You implement the change your task describes, in the workspace you are given.
 | Part | Rule |
 |---|---|
 | `execution` | Required. The id of an execution profile in the same set. |
-| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::effective_permissions` gives each the task's project (`project:<id>`), for `source.*` the project's repository (`repository:<id>`), or for `wait.*` the attempt itself (`attempt:self`), and keeps it only when the project's ceilings and the caller both hold it. |
+| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::requested_permissions` gives each the task's project (`project:<id>`), for `source.*` the project's repository (`repository:<id>`), or for `wait.*` the attempt itself (`attempt:self`), and `roles::RequestedPermissions::effective` keeps it only when the project's ceilings and the caller both hold it. |
 | `enabled` | Optional, `true` when absent. At least one role in a set must be enabled. |
 | `## Role` | Required and not empty. |
 | `## Rules` | Optional. |
@@ -138,7 +138,7 @@ The selection policy has one set of defaults for all profiles
 | Key | Default |
 |---|---|
 | `max_attempts` | `2` |
-| `fallback_on` | `[missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]` |
+| `fallback_on` | `[missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]` (retained for compatibility; queued tasks always consider the other eligible candidates) |
 | `observation_max_age_ms` | `30000` |
 | `allow_unknown_availability` | `false` |
 | `unknown_cost` | `allow_bounded` (or `deny`) |
@@ -149,6 +149,7 @@ The selection policy has one set of defaults for all profiles
 | `max_wake_attempts` | `3`: launches a task may have spent for a waiting session to still be woken (defaults only) |
 | `max_wake_lineage_elapsed_ms` | `86400000`: time since a task's first offer within which a waiting session is still woken (defaults only) |
 | `max_never_granted_offers` | `8`: offers of a task that may expire without ever being granted before the task is held (defaults only) |
+| `launch_retry_backoff` | `{"initial_delay_ms": 30000, "max_delay_ms": 300000}` (defaults only) |
 
 `max_attempts` and `max_uncharged_continuations` are a task's retry budget.
 Each attempt has its own time window, the execution profile's `wall_time_ms`;
@@ -156,7 +157,12 @@ earlier attempts' time never counts against a retry. A launch pins them
 with its policy, and the server reads them from the last attempt's pinned
 policy when it decides on a replacement; it has no limits of its own. An
 owner retry of a task a limit holds starts every budget again, the
-never-granted count and the cost budget included.
+never-granted count and the cost budget included. The first verified nonstart
+can be retried as soon as its claim is released. The second consecutive
+nonstart waits `initial_delay_ms`, then each further one doubles the delay
+up to `max_delay_ms`. Both values are positive, and the maximum must be at
+least the initial delay. The scheduler uses the current Selection defaults
+and measures each delay from the latest claim release.
 
 A save of the Selection defaults over HTTP keeps every key the request does
 not state.
@@ -167,7 +173,7 @@ list of `- key: value` items:
 ```markdown
 ## Selection
 - max_attempts: 3
-- fallback_on: [unavailable]
+- observation_max_age_ms: 30000
 ```
 
 Every key is optional, and a key the table does not list is refused.

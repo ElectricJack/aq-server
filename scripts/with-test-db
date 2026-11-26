@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run one command with a disposable, socket-only PostgreSQL cluster.
+set -euo pipefail
+
+if (( $# == 0 )); then
+  echo 'usage: scripts/with-test-db COMMAND [ARG ...]' >&2
+  exit 2
+fi
+if (( EUID == 0 )); then
+  echo 'Run the test as the unprivileged workspace user (initdb requires this).' >&2
+  exit 1
+fi
+bindir=$(pg_config --bindir) || { echo 'Test environment requires PostgreSQL server and client tools.' >&2; exit 1; }
+for tool in initdb pg_ctl psql; do
+  [[ -x "$bindir/$tool" ]] || { echo "Test environment is missing $bindir/$tool." >&2; exit 1; }
+done
+
+# /tmp is private to the sandbox; mktemp's 0700 directory also isolates local runs.
+umask 077
+root=$(mktemp -d /tmp/aq-test-pg.XXXXXXXXXX)
+cleanup() {
+  if [[ -f "$root/data/postmaster.pid" ]]; then
+    "$bindir/pg_ctl" -D "$root/data" -m immediate -w stop >/dev/null || return 1
+  fi
+  rm -rf -- "$root"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Ignore libpq settings inherited from the developer's shell. Use the same
+# private socket for the readiness query and for every child connection.
+unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
+"$bindir/initdb" -D "$root/data" --no-locale --encoding=UTF8 -U postgres \
+  --auth-local=trust --auth-host=reject >"$root/init.log" || { cat "$root/init.log" >&2; exit 1; }
+"$bindir/pg_ctl" -D "$root/data" -l "$root/postgres.log" \
+  -o "-c listen_addresses='' -c unix_socket_directories='$root' -c unix_socket_permissions=0700" \
+  -w -t 30 start >/dev/null || { cat "$root/postgres.log" >&2; exit 1; }
+export PGHOST="$root" PGUSER=postgres PGDATABASE=postgres PGPORT=5432
+export DATABASE_URL="postgresql://postgres@localhost/postgres?host=$root&port=5432"
+"$bindir/psql" "$DATABASE_URL" -XqAtc 'SELECT 1' >/dev/null
+"$@"

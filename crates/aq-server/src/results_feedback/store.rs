@@ -2,7 +2,7 @@ use super::contract::*;
 use crate::{
     AppState,
     dashboard_api::{
-        actions::{Disposition, Outcome, existing},
+        actions::{Disposition, EntityRef, Outcome, existing},
         errors::ApiError,
     },
     store::User,
@@ -90,41 +90,7 @@ pub(super) async fn subject(state: &AppState, user: &User, id: Uuid, cmd: &Comma
     if cmd.id().is_nil() {
         return Err(invalid());
     }
-    let p = match cmd {
-        Command::Comment(v) => {
-            if v.result_id != id {
-                return Err(invalid());
-            }
-            pin(state, id, Some(&v.revision)).await?
-        }
-        Command::Draft(v) => {
-            if v.result_id != id {
-                return Err(invalid());
-            }
-            pin(state, id, Some(&v.revision)).await?
-        }
-        Command::Link(v) => {
-            if v.result_id != id {
-                return Err(invalid());
-            }
-            pin(state, id, Some(&v.revision)).await?
-        }
-        Command::Waiver(v) => pin(state, id, Some(&v.revision)).await?,
-        Command::Follow(_) => pin(state, id, None).await?,
-        Command::Correction(_) => {
-            let report:Uuid=sqlx::query_scalar("SELECT t.report_id FROM result_comments c JOIN result_threads t ON t.id=c.thread_id WHERE c.id=$1").bind(id).fetch_optional(&state.store.pool).await?.ok_or_else(missing)?;
-            pin(state, report, None).await?
-        }
-        Command::Resolve(_) => {
-            let report: Uuid =
-                sqlx::query_scalar("SELECT report_id FROM result_threads WHERE id=$1")
-                    .bind(id)
-                    .fetch_optional(&state.store.pool)
-                    .await?
-                    .ok_or_else(missing)?;
-            pin(state, report, None).await?
-        }
-    };
+    let p = command_pin(state, id, cmd).await?;
     // Reuse the retained native report validator, including its current principal fence.
     crate::profiled_execution::human_results::read_as(
         state,
@@ -136,10 +102,51 @@ pub(super) async fn subject(state: &AppState, user: &User, id: Uuid, cmd: &Comma
         Some((p.report, &p.revision)),
     )
     .await?;
+    validate_command(state, &p, cmd).await?;
+    Ok(p)
+}
+async fn command_pin(state: &AppState, id: Uuid, cmd: &Command) -> Result<Pin> {
+    match cmd {
+        Command::Comment(v) => {
+            if v.result_id != id {
+                return Err(invalid());
+            }
+            pin(state, id, Some(&v.revision)).await
+        }
+        Command::Draft(v) => {
+            if v.result_id != id {
+                return Err(invalid());
+            }
+            pin(state, id, Some(&v.revision)).await
+        }
+        Command::Link(v) => {
+            if v.result_id != id {
+                return Err(invalid());
+            }
+            pin(state, id, Some(&v.revision)).await
+        }
+        Command::Waiver(v) => pin(state, id, Some(&v.revision)).await,
+        Command::Follow(_) => pin(state, id, None).await,
+        Command::Correction(_) => {
+            let report:Uuid=sqlx::query_scalar("SELECT t.report_id FROM result_comments c JOIN result_threads t ON t.id=c.thread_id WHERE c.id=$1").bind(id).fetch_optional(&state.store.pool).await?.ok_or_else(missing)?;
+            pin(state, report, None).await
+        }
+        Command::Resolve(_) => {
+            let report: Uuid =
+                sqlx::query_scalar("SELECT report_id FROM result_threads WHERE id=$1")
+                    .bind(id)
+                    .fetch_optional(&state.store.pool)
+                    .await?
+                    .ok_or_else(missing)?;
+            pin(state, report, None).await
+        }
+    }
+}
+async fn validate_command(state: &AppState, p: &Pin, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Comment(v) => {
             text(&v.body, 16384)?;
-            anchor(state, &p, &v.anchor).await?;
+            anchor(state, p, &v.anchor).await?;
             if let Some(thread) = v.thread_id {
                 let r =
                     sqlx::query("SELECT report_id,anchor,state FROM result_threads WHERE id=$1")
@@ -173,7 +180,7 @@ pub(super) async fn subject(state: &AppState, user: &User, id: Uuid, cmd: &Comma
             number(&v.expected_project_revision)?;
             origin(
                 state,
-                &p,
+                p,
                 v.thread_id,
                 v.comment_id,
                 &v.comment_revision,
@@ -188,7 +195,7 @@ pub(super) async fn subject(state: &AppState, user: &User, id: Uuid, cmd: &Comma
             }
             origin(
                 state,
-                &p,
+                p,
                 v.thread_id,
                 v.comment_id,
                 &v.comment_revision,
@@ -211,8 +218,9 @@ pub(super) async fn subject(state: &AppState, user: &User, id: Uuid, cmd: &Comma
         }
         _ => {}
     }
-    Ok(p)
+    Ok(())
 }
+
 async fn origin(
     state: &AppState,
     p: &Pin,
@@ -351,6 +359,38 @@ async fn retain(
         .await?;
     Ok(())
 }
+/// Locks the result aggregate under short lock and statement timeouts
+/// and returns its version.
+async fn lock_aggregate(tx: &mut Transaction<'_, Postgres>, result: Uuid) -> Result<i64> {
+    sqlx::query("SET LOCAL lock_timeout='1s'")
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("SET LOCAL statement_timeout='2s'")
+        .execute(&mut **tx)
+        .await?;
+    let version =
+        sqlx::query_scalar("SELECT version FROM result_aggregates WHERE result_id=$1 FOR UPDATE")
+            .bind(result)
+            .fetch_one(&mut **tx)
+            .await?;
+    Ok(version)
+}
+fn same_version(current: i64, expected: i64) -> Result<()> {
+    if current != expected {
+        return Err(conflict());
+    }
+    Ok(())
+}
+/// The pinned inputs one feedback command writes with.
+struct Effect<'a> {
+    user: &'a User,
+    p: &'a Pin,
+    /// The addressed comment or thread (a correction or resolution).
+    id: Uuid,
+    /// The client's expected version of the guarded entity.
+    expected: i64,
+    now: i64,
+}
 pub(super) async fn apply(
     state: &AppState,
     user: &User,
@@ -359,146 +399,185 @@ pub(super) async fn apply(
 ) -> Result<Outcome> {
     let p = subject(state, user, id, cmd).await?;
     let mut tx = state.store.pool.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout='1s'")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("SET LOCAL statement_timeout='2s'")
-        .execute(&mut *tx)
-        .await?;
-    let version: i64 =
-        sqlx::query_scalar("SELECT version FROM result_aggregates WHERE result_id=$1 FOR UPDATE")
-            .bind(p.result)
-            .fetch_one(&mut *tx)
-            .await?;
+    let version = lock_aggregate(&mut tx, p.result).await?;
     fence(&mut tx, user).await?;
-    let expected = number(cmd.version())?;
-    let now = (state.clock)().timestamp_millis();
+    let effect = Effect {
+        user,
+        p: &p,
+        id,
+        expected: number(cmd.version())?,
+        now: (state.clock)().timestamp_millis(),
+    };
     let receipt = existing::entity("result_feedback_receipt", cmd.id(), Some("1".into()));
     let mut entities = vec![existing::entity(
         "result",
         p.result,
         Some((version + 1).to_string()),
     )];
-    match cmd {
-        Command::Follow(v) => {
-            if version != expected {
-                return Err(conflict());
-            }
-            sqlx::query("INSERT INTO result_follows VALUES($1,$2,$3) ON CONFLICT(result_id,actor_id) DO UPDATE SET following=excluded.following").bind(p.result).bind(user.id).bind(v.following).execute(&mut *tx).await?;
-        }
-        Command::Comment(v) => {
-            if version != expected {
-                return Err(conflict());
-            }
-            let thread = v.thread_id.unwrap_or(v.operation_id);
-            if v.thread_id.is_none() {
-                sqlx::query("INSERT INTO result_threads(id,report_id,report_revision,anchor) VALUES($1,$2,$3,$4)").bind(thread).bind(p.report).bind(&p.revision).bind(json!(v.anchor)).execute(&mut *tx).await?;
-            } else {
-                let updated=sqlx::query("UPDATE result_threads SET version=version+1 WHERE id=$1 AND state='open' AND report_id=$2 AND anchor=$3").bind(thread).bind(p.report).bind(json!(v.anchor)).execute(&mut *tx).await?;
-                if updated.rows_affected() != 1 {
-                    return Err(conflict());
-                }
-            }
-            sqlx::query("INSERT INTO result_comments(id,thread_id,created_at_ms) VALUES($1,$2,$3)")
-                .bind(v.operation_id)
-                .bind(thread)
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("INSERT INTO result_comment_revisions VALUES($1,1,$2,$3,$4)")
-                .bind(v.operation_id)
-                .bind(user.id)
-                .bind(&v.body)
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("INSERT INTO result_thread_follows VALUES($1,$2,$3) ON CONFLICT(thread_id,actor_id) DO UPDATE SET following=result_thread_follows.following OR excluded.following").bind(thread).bind(user.id).bind(v.follow).execute(&mut *tx).await?;
-            entities.push(existing::entity(
-                "comment",
-                v.operation_id,
-                Some("1".into()),
-            ));
-            entities.push(existing::entity("thread", thread, None));
-        }
-        Command::Correction(v) => {
-            let updated=sqlx::query("UPDATE result_comments SET revision=revision+1 WHERE id=$1 AND revision=$2 AND revision<16").bind(id).bind(expected).execute(&mut *tx).await?;
-            if updated.rows_affected() != 1 {
-                return Err(conflict());
-            }
-            sqlx::query("INSERT INTO result_comment_revisions VALUES($1,$2,$3,$4,$5)")
-                .bind(id)
-                .bind(expected + 1)
-                .bind(user.id)
-                .bind(&v.body)
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-            entities.push(existing::entity(
-                "comment",
-                id,
-                Some((expected + 1).to_string()),
-            ));
-        }
-        Command::Resolve(v) => {
-            let follow = pin(state, v.follow_up.result_id, Some(&v.follow_up.revision)).await?;
-            let updated=sqlx::query("UPDATE result_threads SET version=version+1,state='resolved',resolved_by=$3,reason=$4,follow_up_report=$5,follow_up_revision=$6 WHERE id=$1 AND version=$2 AND state='open'").bind(id).bind(expected).bind(user.id).bind(&v.reason).bind(follow.report).bind(&follow.revision).execute(&mut *tx).await?;
-            if updated.rows_affected() != 1 {
-                return Err(conflict());
-            }
-            entities.push(existing::entity(
-                "thread",
-                id,
-                Some((expected + 1).to_string()),
-            ));
-        }
-        Command::Waiver(v) => {
-            // Evidence decisions guard their own assessment version.
-            let av: i64 = sqlx::query_scalar(
-                "SELECT version FROM result_assessments WHERE report_id=$1 FOR UPDATE",
-            )
-            .bind(p.report)
-            .fetch_one(&mut *tx)
-            .await?;
-            if av != expected {
-                return Err(conflict());
-            }
-            let inserted=sqlx::query("INSERT INTO result_evidence_waivers VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(report_id,requirement_id,policy_revision) DO NOTHING")
-                .bind(v.operation_id)
-                .bind(p.report)
-                .bind(&p.revision)
-                .bind(&v.requirement_id)
-                .bind(&v.policy_revision)
-                .bind(user.id)
-                .bind(&v.reason)
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-            if inserted.rows_affected() != 1 {
-                return Err(conflict());
-            }
-        }
-        Command::Link(v) => {
-            guard_thread(&mut tx, v.thread_id, expected).await?;
-            link(&mut tx, &p, v.operation_id, v.task_id, json!(v)).await?;
-            entities.push(existing::entity("task", v.task_id, None));
-        }
-        Command::Draft(_) => return Err(invalid()),
-    }
-    sqlx::query("UPDATE result_aggregates SET version=version+1 WHERE result_id=$1")
-        .bind(p.result)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE result_assessments SET version=version+1,observed_state=NULL WHERE report_id=$1",
-    )
-    .bind(p.report)
-    .execute(&mut *tx)
-    .await?;
+    entities.extend(write_command(state, &mut tx, &effect, version, cmd).await?);
+    bump_versions(&mut tx, &p).await?;
     let out = Outcome::confirmed(vec![receipt], entities);
     retain(&mut tx, user, &p, cmd.id(), &out).await?;
     tx.commit().await?;
     Ok(out)
 }
+/// Writes one command's rows under its version guard and returns the
+/// entities it changed besides the result.
+async fn write_command(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    aggregate_version: i64,
+    cmd: &Command,
+) -> Result<Vec<EntityRef>> {
+    match cmd {
+        Command::Follow(v) => {
+            same_version(aggregate_version, e.expected)?;
+            sqlx::query("INSERT INTO result_follows VALUES($1,$2,$3) ON CONFLICT(result_id,actor_id) DO UPDATE SET following=excluded.following").bind(e.p.result).bind(e.user.id).bind(v.following).execute(&mut **tx).await?;
+            Ok(Vec::new())
+        }
+        Command::Comment(v) => {
+            same_version(aggregate_version, e.expected)?;
+            let thread = add_comment(tx, e.user, e.p, v, e.now).await?;
+            Ok(vec![
+                existing::entity("comment", v.operation_id, Some("1".into())),
+                existing::entity("thread", thread, None),
+            ])
+        }
+        Command::Correction(v) => correct_comment(tx, e, v).await,
+        Command::Resolve(v) => resolve_thread(state, tx, e, v).await,
+        Command::Waiver(v) => record_waiver(tx, e, v).await.map(|()| Vec::new()),
+        Command::Link(v) => {
+            guard_thread(tx, v.thread_id, e.expected).await?;
+            link(tx, e.p, v.operation_id, v.task_id, json!(v)).await?;
+            Ok(vec![existing::entity("task", v.task_id, None)])
+        }
+        Command::Draft(_) => Err(invalid()),
+    }
+}
+async fn correct_comment(
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    v: &Correction,
+) -> Result<Vec<EntityRef>> {
+    let updated=sqlx::query("UPDATE result_comments SET revision=revision+1 WHERE id=$1 AND revision=$2 AND revision<16").bind(e.id).bind(e.expected).execute(&mut **tx).await?;
+    if updated.rows_affected() != 1 {
+        return Err(conflict());
+    }
+    sqlx::query("INSERT INTO result_comment_revisions VALUES($1,$2,$3,$4,$5)")
+        .bind(e.id)
+        .bind(e.expected + 1)
+        .bind(e.user.id)
+        .bind(&v.body)
+        .bind(e.now)
+        .execute(&mut **tx)
+        .await?;
+    Ok(vec![existing::entity(
+        "comment",
+        e.id,
+        Some((e.expected + 1).to_string()),
+    )])
+}
+async fn resolve_thread(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    v: &Resolve,
+) -> Result<Vec<EntityRef>> {
+    let follow = pin(state, v.follow_up.result_id, Some(&v.follow_up.revision)).await?;
+    let updated=sqlx::query("UPDATE result_threads SET version=version+1,state='resolved',resolved_by=$3,reason=$4,follow_up_report=$5,follow_up_revision=$6 WHERE id=$1 AND version=$2 AND state='open'").bind(e.id).bind(e.expected).bind(e.user.id).bind(&v.reason).bind(follow.report).bind(&follow.revision).execute(&mut **tx).await?;
+    if updated.rows_affected() != 1 {
+        return Err(conflict());
+    }
+    Ok(vec![existing::entity(
+        "thread",
+        e.id,
+        Some((e.expected + 1).to_string()),
+    )])
+}
+async fn record_waiver(
+    tx: &mut Transaction<'_, Postgres>,
+    e: &Effect<'_>,
+    v: &Waiver,
+) -> Result<()> {
+    // Evidence decisions guard their own assessment version.
+    let assessment_version: i64 =
+        sqlx::query_scalar("SELECT version FROM result_assessments WHERE report_id=$1 FOR UPDATE")
+            .bind(e.p.report)
+            .fetch_one(&mut **tx)
+            .await?;
+    same_version(assessment_version, e.expected)?;
+    let inserted=sqlx::query("INSERT INTO result_evidence_waivers VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(report_id,requirement_id,policy_revision) DO NOTHING")
+        .bind(v.operation_id)
+        .bind(e.p.report)
+        .bind(&e.p.revision)
+        .bind(&v.requirement_id)
+        .bind(&v.policy_revision)
+        .bind(e.user.id)
+        .bind(&v.reason)
+        .bind(e.now)
+        .execute(&mut **tx)
+        .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(conflict());
+    }
+    Ok(())
+}
+/// Every accepted command advances the result and assessment versions.
+async fn bump_versions(tx: &mut Transaction<'_, Postgres>, p: &Pin) -> Result<()> {
+    sqlx::query("UPDATE result_aggregates SET version=version+1 WHERE result_id=$1")
+        .bind(p.result)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "UPDATE result_assessments SET version=version+1,observed_state=NULL WHERE report_id=$1",
+    )
+    .bind(p.report)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+async fn add_comment(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &User,
+    p: &Pin,
+    v: &Comment,
+    now: i64,
+) -> Result<Uuid> {
+    let thread = v.thread_id.unwrap_or(v.operation_id);
+    if v.thread_id.is_none() {
+        sqlx::query(
+            "INSERT INTO result_threads(id,report_id,report_revision,anchor) VALUES($1,$2,$3,$4)",
+        )
+        .bind(thread)
+        .bind(p.report)
+        .bind(&p.revision)
+        .bind(json!(v.anchor))
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        let updated=sqlx::query("UPDATE result_threads SET version=version+1 WHERE id=$1 AND state='open' AND report_id=$2 AND anchor=$3").bind(thread).bind(p.report).bind(json!(v.anchor)).execute(&mut **tx).await?;
+        if updated.rows_affected() != 1 {
+            return Err(conflict());
+        }
+    }
+    sqlx::query("INSERT INTO result_comments(id,thread_id,created_at_ms) VALUES($1,$2,$3)")
+        .bind(v.operation_id)
+        .bind(thread)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO result_comment_revisions VALUES($1,1,$2,$3,$4)")
+        .bind(v.operation_id)
+        .bind(user.id)
+        .bind(&v.body)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO result_thread_follows VALUES($1,$2,$3) ON CONFLICT(thread_id,actor_id) DO UPDATE SET following=result_thread_follows.following OR excluded.following").bind(thread).bind(user.id).bind(v.follow).execute(&mut **tx).await?;
+    Ok(thread)
+}
+
 async fn link(
     tx: &mut Transaction<'_, Postgres>,
     p: &Pin,
@@ -544,48 +623,7 @@ pub(super) async fn detail(state: &AppState, user: &User, p: &Pin) -> Result<Det
     .await?;
     let now = (state.clock)().timestamp_millis();
     let artifacts=sqlx::query("SELECT operation_id,input_digest,capture,rendering_policy FROM result_media_intents WHERE report_id=$1 AND report_revision=$2 AND state='retained' AND cleanup_state='none' AND withheld_at_ms IS NULL AND retain_until_ms>$3 ORDER BY operation_id").bind(p.report).bind(&p.revision).bind(now).fetch_all(&state.store.pool).await?;
-    let mut requirements = Vec::new();
-    for r in &p.policy.requirements {
-        let waiver:Option<Uuid>=sqlx::query_scalar("SELECT operation_id FROM result_evidence_waivers WHERE report_id=$1 AND report_revision=$2 AND requirement_id=$3 AND policy_revision=$4").bind(p.report).bind(&p.revision).bind(&r.id).bind(&r.policy_revision).fetch_optional(&state.store.pool).await?;
-        let ids: Vec<Uuid> = artifacts
-            .iter()
-            .filter(|a| {
-                let c: Value = a.get("capture");
-                let policy: &str = a.get("rendering_policy");
-                matches!(
-                    (r.kind.as_str(), policy),
-                    ("image", "aq.png.rgba8-srgb-v1") | ("video", "aq.mp4.passthrough-v1")
-                ) && c["scenario"] == r.scenario
-                    && c["environment"] == r.environment
-                    && c["viewport"] == json!(r.viewport)
-                    && c["claimed_source"] == json!(m.source_base)
-            })
-            .map(|a| a.get("operation_id"))
-            .collect();
-        let state = if waiver.is_some() {
-            "waived"
-        } else if ids.len() >= usize::from(r.count) {
-            "retained"
-        } else if r.required {
-            "missing"
-        } else {
-            "optional"
-        };
-        requirements.push(RequirementEvaluation {
-            requirement_id: r.id.clone(),
-            policy_revision: r.policy_revision.clone(),
-            required: r.required,
-            state: state.into(),
-            artifact_ids: ids,
-            waiver_id: waiver,
-        });
-    }
-    let evidence = Evaluation {
-        satisfied: requirements
-            .iter()
-            .all(|r| !r.required || matches!(r.state.as_str(), "waived" | "retained")),
-        requirements,
-    };
+    let evidence = evaluate_evidence(state, p, &artifacts, &m.source_base).await?;
     let unresolved:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM result_threads t JOIN result_revision_pins p USING(report_id) WHERE p.result_id=(SELECT result_id FROM result_revision_pins WHERE report_id=$1) AND t.state='open') OR EXISTS(SELECT 1 FROM review_subjects s JOIN human_decision_requests d USING(subject_digest) WHERE s.report_id=$1 AND d.state='pending' AND d.expires_at_ms>$2)").bind(p.report).bind(now).fetch_one(&state.store.pool).await?;
     let observed = json!({"evidence":evidence,"unresolved_review":unresolved,"addressed_feedback":addressed_feedback,"artifacts":artifacts.iter().map(|a|a.get::<Uuid,_>("operation_id")).collect::<Vec<_>>()});
     let av:i64=sqlx::query_scalar("UPDATE result_assessments SET version=version+CASE WHEN observed_state IS NOT NULL AND observed_state IS DISTINCT FROM $2 THEN 1 ELSE 0 END,observed_state=$2 WHERE report_id=$1 RETURNING version").bind(p.report).bind(observed).fetch_one(&state.store.pool).await?;
@@ -642,6 +680,56 @@ pub(super) async fn detail(state: &AppState, user: &User, p: &Pin) -> Result<Det
             observed_at_ms: now as u64,
             unresolved_review: unresolved,
         },
+    })
+}
+
+async fn evaluate_evidence(
+    state: &AppState,
+    p: &Pin,
+    artifacts: &[sqlx::postgres::PgRow],
+    source_base: &aq_admission::ObjectId,
+) -> Result<Evaluation> {
+    let mut requirements = Vec::new();
+    for r in &p.policy.requirements {
+        let waiver:Option<Uuid>=sqlx::query_scalar("SELECT operation_id FROM result_evidence_waivers WHERE report_id=$1 AND report_revision=$2 AND requirement_id=$3 AND policy_revision=$4").bind(p.report).bind(&p.revision).bind(&r.id).bind(&r.policy_revision).fetch_optional(&state.store.pool).await?;
+        let ids: Vec<Uuid> = artifacts
+            .iter()
+            .filter(|a| {
+                let c: Value = a.get("capture");
+                let policy: &str = a.get("rendering_policy");
+                matches!(
+                    (r.kind.as_str(), policy),
+                    ("image", "aq.png.rgba8-srgb-v1") | ("video", "aq.mp4.passthrough-v1")
+                ) && c["scenario"] == r.scenario
+                    && c["environment"] == r.environment
+                    && c["viewport"] == json!(r.viewport)
+                    && c["claimed_source"] == json!(source_base)
+            })
+            .map(|a| a.get("operation_id"))
+            .collect();
+        let state = if waiver.is_some() {
+            "waived"
+        } else if ids.len() >= usize::from(r.count) {
+            "retained"
+        } else if r.required {
+            "missing"
+        } else {
+            "optional"
+        };
+        requirements.push(RequirementEvaluation {
+            requirement_id: r.id.clone(),
+            policy_revision: r.policy_revision.clone(),
+            required: r.required,
+            state: state.into(),
+            artifact_ids: ids,
+            waiver_id: waiver,
+        });
+    }
+    Ok(Evaluation {
+        satisfied: requirements
+            .iter()
+            .all(|r| !r.required || matches!(r.state.as_str(), "waived" | "retained")),
+        requirements,
     })
 }
 

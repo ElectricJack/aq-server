@@ -32,73 +32,76 @@ fn draft_operations_match(expected: &Value, actual: &Value) -> bool {
     if expected.len() != actual.len() {
         return false;
     }
-    for (wanted, got) in expected.iter().zip(actual) {
-        let (Some(wanted_object), Some(_)) = (wanted.as_object(), got.as_object()) else {
+    expected
+        .iter()
+        .zip(actual)
+        .all(|(wanted, got)| draft_operation_matches(wanted, got))
+}
+
+fn draft_operation_matches(wanted: &Value, got: &Value) -> bool {
+    let (Some(wanted_object), Some(actual_object)) = (wanted.as_object(), got.as_object()) else {
+        return false;
+    };
+    let mut normalized = actual_object.clone();
+    if wanted["op"] == "update_node" {
+        let Some(patch) = normalized.get_mut("patch").and_then(Value::as_object_mut) else {
             return false;
         };
-        let mut normalized = got.clone();
-        if wanted["op"] == "update_node" {
-            let Some(patch) = normalized["patch"].as_object_mut() else {
-                return false;
-            };
-            patch.retain(|key, value| wanted["patch"].get(key).is_some() || !value.is_null());
-        }
-        let extra: Vec<String> = normalized
-            .as_object()
-            .unwrap()
-            .keys()
-            .filter(|key| !wanted_object.contains_key(*key))
-            .cloned()
-            .collect();
-        for key in extra {
-            let value = &normalized[&key];
-            let default = match wanted["op"].as_str() {
-                Some("create_node") => match key.as_str() {
-                    "labels" => value == &json!([]),
-                    "metadata" => value == &json!({}),
-                    "content_type" | "knowledge_type" => value.is_null() || value == "note",
-                    "verification" => value.is_null() || value == "unverified",
-                    "valid_from" | "valid_until" | "review_at" => value.is_null(),
-                    _ => false,
-                },
-                Some("add_edge") => {
-                    matches!(
-                        key.as_str(),
-                        "description" | "source_revision" | "target_revision"
-                    ) && value.is_null()
-                }
-                _ => false,
-            };
-            if !default {
-                return false;
-            }
-            normalized.as_object_mut().unwrap().remove(&key);
-        }
-        if normalized != *wanted {
-            return false;
-        }
+        patch.retain(|key, value| wanted["patch"].get(key).is_some() || !value.is_null());
     }
-    true
+    normalized.retain(|key, value| {
+        wanted_object.contains_key(key) || !draft_default(wanted["op"].as_str(), key, value)
+    });
+    normalized == *wanted_object
 }
-fn receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
-    let workspace = &request["binding"]["workspace_id"];
-    if mapped["class"] == "draft_create" {
-        if !contract::upstream_valid("Draft", raw)
-            || raw["workspace_id"] != *workspace
-            || raw["actor_id"] != mapped["service"]["actor"]
-            || raw["status"] != "draft"
-            || !draft_operations_match(&mapped["payload"]["operations"], &raw["operations"])
-            || raw["name"] != mapped["payload"]["name"]
-            || !raw["result"].is_null()
-            || !raw["applied_at"].is_null()
-            || raw["reason"] != request["reason"]
-        {
-            return Err(Error("overloaded"));
+
+fn draft_default(operation: Option<&str>, field: &str, value: &Value) -> bool {
+    match operation {
+        Some("create_node") => match field {
+            "labels" => value == &json!([]),
+            "metadata" => value == &json!({}),
+            "content_type" | "knowledge_type" => value.is_null() || value == "note",
+            "verification" => value.is_null() || value == "unverified",
+            "valid_from" | "valid_until" | "review_at" => value.is_null(),
+            _ => false,
+        },
+        Some("add_edge") => {
+            matches!(field, "description" | "source_revision" | "target_revision")
+                && value.is_null()
         }
-        return Ok(
-            json!({"kind":"graph_draft","workspace_id":workspace,"draft_id":raw["id"],"proposal_digest":digest(&mapped["payload"])? ,"applied":false,"task_completion":false}),
-        );
+        _ => false,
     }
+}
+
+fn receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
+    if mapped["class"] == "draft_create" {
+        draft_receipt(request, mapped, raw)
+    } else {
+        mutation_receipt(request, mapped, raw)
+    }
+}
+
+fn draft_receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
+    let workspace = &request["binding"]["workspace_id"];
+    if !contract::upstream_valid("Draft", raw)
+        || raw["workspace_id"] != *workspace
+        || raw["actor_id"] != mapped["service"]["actor"]
+        || raw["status"] != "draft"
+        || !draft_operations_match(&mapped["payload"]["operations"], &raw["operations"])
+        || raw["name"] != mapped["payload"]["name"]
+        || !raw["result"].is_null()
+        || !raw["applied_at"].is_null()
+        || raw["reason"] != request["reason"]
+    {
+        return Err(Error("overloaded"));
+    }
+    Ok(
+        json!({"kind":"graph_draft","workspace_id":workspace,"draft_id":raw["id"],"proposal_digest":digest(&mapped["payload"])? ,"applied":false,"task_completion":false}),
+    )
+}
+
+fn mutation_receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
+    let workspace = &request["binding"]["workspace_id"];
     if !contract::upstream_valid("MutationResult", raw) {
         return Err(Error("overloaded"));
     }
@@ -177,35 +180,43 @@ async fn post(rt: &Runtime, mapped: &Value) -> Result<(StatusCode, Value)> {
         _ => return Err(Error("internal")),
     };
     let bytes = canonical(&mapped["payload"])?;
-    post_body(rt, workspace, route, bytes).await
+    post_body(rt, workspace, route, bytes, None).await
 }
 pub(super) async fn post_mutation_bytes(
     rt: &Runtime,
     workspace: Uuid,
     bytes: Vec<u8>,
+    lookup: bool,
 ) -> Result<(StatusCode, Value)> {
-    post_body(rt, workspace, "mutations", bytes).await
+    let route = if lookup {
+        "mutations/receipt"
+    } else {
+        "mutations"
+    };
+    post_body(rt, workspace, route, bytes, rt.mutation_actor.as_deref()).await
 }
 async fn post_body(
     rt: &Runtime,
     workspace: Uuid,
     route: &str,
     bytes: Vec<u8>,
+    expected_actor: Option<&str>,
 ) -> Result<(StatusCode, Value)> {
     let url = rt
         .url
         .join(&format!("/v1/workspaces/{workspace}/{route}"))
         .map_err(|_| Error("internal"))?;
-    let mut response = rt
+    let mut request = rt
         .client
         .post(url)
         .bearer_auth(&rt.token)
         .header("X-AQ-Graph-API-Version", "1")
         .header("content-type", "application/json")
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|_| Error("overloaded"))?;
+        .body(bytes);
+    if let Some(actor) = expected_actor {
+        request = request.header("X-AQ-Graph-Expected-Actor", actor);
+    }
+    let mut response = request.send().await.map_err(|_| Error("overloaded"))?;
     if response
         .headers()
         .get("X-AQ-Graph-API-Version")
@@ -227,6 +238,47 @@ async fn post_body(
     let value = super::super::scheduling::parse::parse(&body).map_err(|_| Error("overloaded"))?;
     Ok((status, value))
 }
+fn dispatch_status(
+    request: &Value,
+    mapped: &Value,
+    count: u64,
+    outcome: Result<(StatusCode, Value)>,
+    mut next: Value,
+) -> Result<(&'static str, Value)> {
+    let mut next_phase = "unknown";
+    if let Ok((code, raw)) = outcome {
+        if code.is_success() {
+            if let Ok(receipt) = receipt(request, mapped, &raw) {
+                next = common(request)?;
+                next["state"] = json!("confirmed");
+                next["effect"] = json!("confirmed");
+                next["receipt"] = receipt;
+                next_phase = "confirmed";
+            }
+        } else if code == StatusCode::CONFLICT && raw["error"]["code"] == "conflict" {
+            next = common(request)?;
+            next["state"] = json!("conflict");
+            next["effect"] = json!("not_applied");
+            next["conflicts"] =
+                json!([{"kind":"version","subject_id":null,"expected":null,"current":null}]);
+            next["retryable"] = json!(false);
+            next_phase = "conflict";
+        } else if matches!(code.as_u16(), 400 | 401 | 403 | 404 | 422)
+            && raw["error"]["code"].is_string()
+            && count == 0
+        {
+            // After an earlier unknown send, a new credential/configuration fault
+            // cannot prove the old request was not applied.
+            next = rejected(request, "graph_rejected")?;
+            next_phase = "rejected";
+        }
+    }
+    if !contract::valid("OperationStatus", &next) {
+        return Err(Error("internal"));
+    }
+    Ok((next_phase, next))
+}
+
 pub(super) async fn run(state: &AppState, op: Uuid) -> Result<Value> {
     let initial = operation(state, op).await?;
     let attempt: Uuid = initial.get("attempt_id");
@@ -329,7 +381,7 @@ pub(super) async fn run(state: &AppState, op: Uuid) -> Result<Value> {
     }
     tx.commit().await?;
     let outcome = post(runtime(state)?, &mapped).await;
-    let mut next = pending(
+    let next = pending(
         &request,
         &policy,
         true,
@@ -337,37 +389,7 @@ pub(super) async fn run(state: &AppState, op: Uuid) -> Result<Value> {
         now(state).saturating_sub(row.get::<i64, _>("created_at_ms") as u64),
         false,
     )?;
-    let mut next_phase = "unknown";
-    if let Ok((code, raw)) = outcome {
-        if code.is_success() {
-            if let Ok(receipt) = receipt(&request, &mapped, &raw) {
-                next = common(&request)?;
-                next["state"] = json!("confirmed");
-                next["effect"] = json!("confirmed");
-                next["receipt"] = receipt;
-                next_phase = "confirmed";
-            }
-        } else if code == StatusCode::CONFLICT && raw["error"]["code"] == "conflict" {
-            next = common(&request)?;
-            next["state"] = json!("conflict");
-            next["effect"] = json!("not_applied");
-            next["conflicts"] =
-                json!([{"kind":"version","subject_id":null,"expected":null,"current":null}]);
-            next["retryable"] = json!(false);
-            next_phase = "conflict";
-        } else if matches!(code.as_u16(), 400 | 401 | 403 | 404 | 422)
-            && raw["error"]["code"].is_string()
-            && count == 0
-        {
-            // After an earlier unknown send, a new credential/configuration fault
-            // cannot prove the old request was not applied.
-            next = rejected(&request, "graph_rejected")?;
-            next_phase = "rejected";
-        }
-    }
-    if !contract::valid("OperationStatus", &next) {
-        return Err(Error("internal"));
-    }
+    let (next_phase, next) = dispatch_status(&request, &mapped, count, outcome, next)?;
     let mut tx = state.store.pool.begin().await?;
     let winner = sqlx::query(
         "SELECT lease_id,status FROM agent_graph_operations WHERE operation_id=$1 FOR UPDATE",
@@ -417,6 +439,215 @@ pub(super) async fn recoverable_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draft_receipt_requires_the_exact_unapplied_intent() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/native-draft-normalization.json"
+        ))
+        .unwrap();
+        let raw = &fixture["response"];
+        let request = json!({
+            "binding":{"workspace_id":raw["workspace_id"]},
+            "reason":raw["reason"],
+        });
+        let mapped = json!({
+            "class":"draft_create",
+            "service":{"actor":raw["actor_id"]},
+            "payload":{"name":raw["name"],"operations":fixture["expected_operations"]},
+        });
+        assert_eq!(
+            receipt(&request, &mapped, raw).unwrap(),
+            json!({
+                "kind":"graph_draft","workspace_id":raw["workspace_id"],
+                "draft_id":raw["id"],"proposal_digest":digest(&mapped["payload"]).unwrap(),
+                "applied":false,"task_completion":false,
+            })
+        );
+        for (field, value) in [
+            ("id", Value::Null),
+            ("workspace_id", json!(Uuid::nil())),
+            ("actor_id", json!("another-actor")),
+            ("status", json!("applied")),
+            ("operations", json!([])),
+            ("name", json!("another-name")),
+            ("result", json!({"change_set_id":Uuid::nil(),"results":[]})),
+            ("applied_at", json!("2026-10-31T07:05:53Z")),
+            ("reason", json!("another-reason")),
+        ] {
+            let mut changed = raw.clone();
+            changed[field] = value;
+            assert_eq!(
+                receipt(&request, &mapped, &changed).unwrap_err().0,
+                "overloaded",
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_receipt_preserves_subjects_versions_and_result_correspondence() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/qualified-graph.json"
+        ))
+        .unwrap();
+        let raw = &fixture["mutation_receipt"];
+        let node = &raw["results"][0];
+        let edge = &raw["results"][1];
+        let request = json!({
+            "binding":{"workspace_id":node["workspace_id"]},
+            "commands":[
+                {"kind":"create_finding","id":node["id"]},
+                {"kind":"add_relationship","id":edge["id"],"source":node["id"]},
+            ],
+        });
+        let mapped = json!({
+            "class":"mutate",
+            "service":{"actor":node["created_by"]},
+            "payload":{"operations":[
+                {"op":"create_node","id":node["id"],"kind":node["kind"]},
+                {"op":"add_edge","id":edge["id"]},
+            ]},
+        });
+        assert_eq!(
+            receipt(&request, &mapped, raw).unwrap(),
+            json!({
+                "kind":"graph_mutation","workspace_id":node["workspace_id"],
+                "change_set_id":raw["change_set_id"],
+                "versions":[
+                    {"kind":"edge","id":edge["id"],"version":"1","content_revision":null},
+                    {"kind":"node","id":node["id"],"version":"1","content_revision":"1"},
+                ],
+                "affected_record_ids":[node["id"]],"task_completion":false,
+            })
+        );
+        for (field, value) in [
+            ("id", json!(Uuid::nil())),
+            ("workspace_id", json!(Uuid::nil())),
+            ("kind", json!("task")),
+            ("created_by", json!("another-actor")),
+            ("version", json!(0)),
+            ("content_revision", json!(0)),
+        ] {
+            let mut changed = raw.clone();
+            changed["results"][0][field] = value;
+            assert_eq!(
+                receipt(&request, &mapped, &changed).unwrap_err().0,
+                "overloaded",
+                "{field}"
+            );
+        }
+        let mut reordered = raw.clone();
+        reordered["results"].as_array_mut().unwrap().swap(0, 1);
+        assert_eq!(
+            receipt(&request, &mapped, &reordered).unwrap_err().0,
+            "overloaded"
+        );
+        let mut incomplete = raw.clone();
+        incomplete["results"].as_array_mut().unwrap().pop();
+        assert_eq!(
+            receipt(&request, &mapped, &incomplete).unwrap_err().0,
+            "overloaded"
+        );
+    }
+
+    #[test]
+    fn draft_normalization_preserves_explicit_fields_and_order() {
+        let expected = json!([
+            {"op":"update_node","id":"parent","patch":{"body":null}},
+            {"op":"create_node","id":"child","labels":[]},
+            {"op":"add_edge","id":"relationship"},
+        ]);
+        let mut actual = expected.clone();
+        actual[0]["patch"]["title"] = Value::Null;
+        actual[1]["metadata"] = json!({});
+        actual[2]["source_revision"] = Value::Null;
+        assert!(draft_operations_match(&expected, &actual));
+        for changed in [
+            {
+                let mut v = actual.clone();
+                v[0]["patch"].as_object_mut().unwrap().remove("body");
+                v
+            },
+            {
+                let mut v = actual.clone();
+                v[1].as_object_mut().unwrap().remove("labels");
+                v
+            },
+            {
+                let mut v = actual.clone();
+                v[2]["unknown"] = Value::Null;
+                v
+            },
+            {
+                let mut v = actual.clone();
+                v.as_array_mut().unwrap().swap(0, 1);
+                v
+            },
+            {
+                let mut v = actual.clone();
+                v.as_array_mut().unwrap().pop();
+                v
+            },
+            json!([null, null, null]),
+        ] {
+            assert!(!draft_operations_match(&expected, &changed), "{changed}");
+        }
+    }
+
+    #[test]
+    fn later_rejection_or_invalid_receipt_cannot_disprove_an_unknown_send() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/base.json"
+        ))
+        .unwrap();
+        let request = &fixture["command_requests"]["correct_record"];
+        let policy = &fixture["context"]["profile"]["retry_budget"];
+        let unknown = pending(request, policy, true, 1, 0, false).unwrap();
+        for code in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ] {
+            for count in [0, 1] {
+                let (phase, status) = dispatch_status(
+                    request,
+                    &Value::Null,
+                    count,
+                    Ok((code, json!({"error":{"code":"refused"}}))),
+                    unknown.clone(),
+                )
+                .unwrap();
+                assert_eq!(phase, if count == 0 { "rejected" } else { "unknown" });
+                if count > 0 {
+                    assert_eq!(status, unknown);
+                }
+            }
+        }
+        for outcome in [
+            Err(Error("overloaded")),
+            Ok((StatusCode::OK, json!({}))),
+            Ok((StatusCode::CONFLICT, json!({"error":{"code":"other"}}))),
+        ] {
+            let (phase, status) =
+                dispatch_status(request, &Value::Null, 1, outcome, unknown.clone()).unwrap();
+            assert_eq!(phase, "unknown");
+            assert_eq!(status, unknown);
+        }
+        let (phase, status) = dispatch_status(
+            request,
+            &Value::Null,
+            1,
+            Ok((StatusCode::CONFLICT, json!({"error":{"code":"conflict"}}))),
+            unknown,
+        )
+        .unwrap();
+        assert_eq!(phase, "conflict");
+        assert_eq!(status["effect"], "not_applied");
+    }
+
     #[tokio::test]
     async fn mutation_response_accepts_fractions_but_rejects_duplicate_keys() {
         use axum::{Router, routing::post};
@@ -449,7 +680,7 @@ mod tests {
                 token: "fixture-token".into(),
                 ttl: 1000,
             };
-            let result = post_mutation_bytes(&rt, Uuid::new_v4(), b"{}".to_vec()).await;
+            let result = post_mutation_bytes(&rt, Uuid::new_v4(), b"{}".to_vec(), false).await;
             assert_eq!(result.is_ok(), valid, "{body}");
             if valid {
                 assert_eq!(result.unwrap().1["results"][0]["metadata"]["weight"], 0.25);

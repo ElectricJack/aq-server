@@ -27,6 +27,57 @@ fn input() -> DecisionInput {
         expires_at_ms: 100000,
     }
 }
+fn decision_playbook(id: String, command: &CommandContract) -> Playbook {
+    Playbook {
+        id,
+        purpose: "synthetic finite decision command compilation; not an executed policy".into(),
+        scope: "project".into(),
+        entries: BTreeMap::from([(
+            "main".into(),
+            EntryPoint {
+                input: Schema::Null,
+                outcomes: BTreeMap::from([("done".into(), Schema::Null)]),
+                start: "question".into(),
+            },
+        )]),
+        steps: BTreeMap::from([
+            (
+                "question".into(),
+                Step {
+                    op: Operation::Invoke {
+                        command: ContractRef {
+                            name: command.name.clone(),
+                            fingerprint: command.fingerprint().unwrap(),
+                        },
+                        input: Expr::literal(json!(input())),
+                        bind: "question".into(),
+                        retry: None,
+                    },
+                    edges: command
+                        .outcomes
+                        .keys()
+                        .map(|key| (key.clone(), "done".into()))
+                        .collect(),
+                    on_error: Some("done".into()),
+                },
+            ),
+            (
+                "done".into(),
+                Step {
+                    op: Operation::Return {
+                        outcome: "done".into(),
+                        output: Expr::literal(Value::Null),
+                    },
+                    edges: BTreeMap::new(),
+                    on_error: None,
+                },
+            ),
+        ]),
+        triggers: vec![],
+        limits: Limits::default(),
+        required_capabilities: BTreeSet::from(["decision.request".into()]),
+    }
+}
 fn compile_input(registry: Registry) -> aq_playbooks_compiler::CompileInput {
     let command = decision_contract();
     let header = SourceHeader {
@@ -42,56 +93,7 @@ fn compile_input(registry: Registry) -> aq_playbooks_compiler::CompileInput {
             serde_json::to_string(&header).unwrap()
         ),
         proposal: aq_playbooks_compiler::Proposal {
-            playbook: Playbook {
-                id: header.id,
-                purpose: "synthetic finite decision command compilation; not an executed policy"
-                    .into(),
-                scope: "project".into(),
-                entries: BTreeMap::from([(
-                    "main".into(),
-                    EntryPoint {
-                        input: Schema::Null,
-                        outcomes: BTreeMap::from([("done".into(), Schema::Null)]),
-                        start: "question".into(),
-                    },
-                )]),
-                steps: BTreeMap::from([
-                    (
-                        "question".into(),
-                        Step {
-                            op: Operation::Invoke {
-                                command: ContractRef {
-                                    name: command.name.clone(),
-                                    fingerprint: command.fingerprint().unwrap(),
-                                },
-                                input: Expr::literal(json!(input())),
-                                bind: "question".into(),
-                                retry: None,
-                            },
-                            edges: command
-                                .outcomes
-                                .keys()
-                                .map(|key| (key.clone(), "done".into()))
-                                .collect(),
-                            on_error: Some("done".into()),
-                        },
-                    ),
-                    (
-                        "done".into(),
-                        Step {
-                            op: Operation::Return {
-                                outcome: "done".into(),
-                                output: Expr::literal(Value::Null),
-                            },
-                            edges: BTreeMap::new(),
-                            on_error: None,
-                        },
-                    ),
-                ]),
-                triggers: vec![],
-                limits: Limits::default(),
-                required_capabilities: BTreeSet::from(["decision.request".into()]),
-            },
+            playbook: decision_playbook(header.id, &command),
             source_map: BTreeMap::new(),
         },
         registry,

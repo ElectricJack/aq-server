@@ -81,14 +81,19 @@ async fn configure(c: &mut Case) {
     );
 }
 async fn auth(c: &Case) -> worker_api::AuthenticatedNode {
+    authenticate(&c.env.env.state, &c.env.env.credential).await
+}
+
+async fn authenticate(
+    state: &aq_server::AppState,
+    credential: &str,
+) -> worker_api::AuthenticatedNode {
     let mut h = axum::http::HeaderMap::new();
     h.insert(
         "authorization",
-        format!("Bearer {}", c.env.env.credential).parse().unwrap(),
+        format!("Bearer {credential}").parse().unwrap(),
     );
-    worker_api::authenticate_context(&c.env.env.state, &h)
-        .await
-        .unwrap()
+    worker_api::authenticate_context(state, &h).await.unwrap()
 }
 async fn setup() -> (Case, phase::Proposal, AcceptRequest) {
     setup_with_functional_clock(false).await
@@ -766,14 +771,7 @@ async fn reopened_store_and_reloaded_protected_policy_replay_exact_accepted_rece
         }),
         ..c.env.env.state.clone()
     };
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        "authorization",
-        format!("Bearer {}", c.env.env.credential).parse().unwrap(),
-    );
-    let auth = worker_api::authenticate_context(&reopened, &headers)
-        .await
-        .unwrap();
+    let auth = authenticate(&reopened, &c.env.env.credential).await;
     let second = owner::accept(&reopened, &auth, &q, Uuid::new_v4())
         .await
         .unwrap();

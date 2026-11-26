@@ -39,14 +39,44 @@ fn bounded<T: Serialize>(v: T) -> Result<Json<T>> {
     }
     Ok(Json(v))
 }
+struct InspectionRead<T> {
+    kind: InspectionKind,
+    run: Option<String>,
+    project: fn(Value) -> Result<T>,
+}
+impl InspectionRead<RunView> {
+    fn runs(run_id: Option<String>) -> Self {
+        Self {
+            kind: InspectionKind::Runs,
+            run: run_id,
+            project: run,
+        }
+    }
+}
+impl InspectionRead<EffectView> {
+    fn effects(run_id: String) -> Self {
+        Self {
+            kind: InspectionKind::Effects,
+            run: Some(run_id),
+            project: effect,
+        }
+    }
+}
+impl InspectionRead<ReceiptView> {
+    fn receipts(run_id: String) -> Self {
+        Self {
+            kind: InspectionKind::Receipts,
+            run: Some(run_id),
+            project: receipt,
+        }
+    }
+}
 impl Driver {
     async fn public_page<T>(
         &self,
         actor: Uuid,
-        kind: InspectionKind,
-        id: Option<String>,
+        read: InspectionRead<T>,
         query: PageQuery,
-        project: fn(Value) -> Result<T>,
     ) -> Result<Page<T>> {
         let limit = query.validate(&self.service.namespace)?;
         self.service.authorize_inspection(actor).await?;
@@ -55,8 +85,8 @@ impl Driver {
             .call(
                 Request::Inspect {
                     query: InspectionQuery {
-                        kind,
-                        run: id,
+                        kind: read.kind,
+                        run: read.run,
                         after: query.after,
                         limit,
                     },
@@ -70,7 +100,7 @@ impl Driver {
             raw,
             limit,
             self.service.current_time(),
-            project,
+            read.project,
         )?;
         self.service.authorize_inspection(actor).await?;
         Ok(page)
@@ -82,10 +112,8 @@ impl Driver {
         } else {
             self.public_page(
                 actor,
-                InspectionKind::Runs,
-                None,
+                InspectionRead::runs(None),
                 query.page(query.after.clone(), query.limit),
-                run,
             )
             .await?
         };
@@ -104,13 +132,7 @@ impl Driver {
         let mut header = None;
         for _ in 0..RANGE_SCAN_PAGES {
             let page = self
-                .public_page(
-                    actor,
-                    InspectionKind::Runs,
-                    None,
-                    query.page(after, None),
-                    run,
-                )
+                .public_page(actor, InspectionRead::runs(None), query.page(after, None))
                 .await?;
             after = page.next_cursor.clone();
             let mut matched = page
@@ -152,16 +174,14 @@ impl Driver {
         query: PageQuery,
     ) -> Result<RunDetail> {
         query.validate(&self.service.namespace)?;
-        if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        if !(1..=256).contains(&id.len()) || id.chars().any(char::is_control) {
             return Err(Error::Invalid);
         }
         let runs = self
             .public_page(
                 actor,
-                InspectionKind::Runs,
-                Some(id.clone()),
+                InspectionRead::runs(Some(id.clone())),
                 query.first(1),
-                run,
             )
             .await?;
         let mut found = runs.items;
@@ -169,16 +189,10 @@ impl Driver {
         let run = found.into_iter().next().ok_or(Error::Forbidden)?;
         let steps = self.step_timeline(&run).await?;
         let effects = self
-            .public_page(
-                actor,
-                InspectionKind::Effects,
-                Some(id.clone()),
-                query.first(25),
-                effect,
-            )
+            .public_page(actor, InspectionRead::effects(id.clone()), query.first(25))
             .await?;
         let receipts = self
-            .public_page(actor, InspectionKind::Receipts, Some(id), query, receipt)
+            .public_page(actor, InspectionRead::receipts(id), query)
             .await?;
         self.service.authorize_inspection(actor).await?;
         Ok(RunDetail {
@@ -204,11 +218,11 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         )
         .route(
             "/api/playbooks/inspection/catalog/definitions",
-            get(catalog::definitions),
+            catalog::read(catalog::Kind::Definitions),
         )
         .route(
             "/api/playbooks/inspection/catalog/activations",
-            get(catalog::activations),
+            catalog::read(catalog::Kind::Activations),
         )
         .route(
             "/api/playbooks/inspection/loaded-definitions",

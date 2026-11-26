@@ -14,197 +14,8 @@ const REPOS: [&str; 5] = [
     "Acme/git",
 ];
 
-#[derive(Clone, Default)]
-struct Graph {
-    nodes: BTreeMap<Uuid, Value>,
-    edges: BTreeMap<Uuid, Value>,
-    revisions: BTreeMap<(Uuid, i64), Value>,
-}
-
-impl Graph {
-    /// Live incident edges; every edge here is structural, so these are
-    /// also the owned links of a revision snapshot.
-    fn live_edges(&self, id: Uuid) -> Vec<Value> {
-        let id = json!(id);
-        (self.edges.values())
-            .filter(|e| e["deleted"] == false && (e["source"] == id || e["target"] == id))
-            .cloned()
-            .collect()
-    }
-    fn bump(&mut self, id: Uuid) {
-        let node = self.nodes.get_mut(&id).unwrap();
-        node["version"] = json!(node["version"].as_u64().unwrap() + 1);
-        node["content_revision"] = json!(node["content_revision"].as_i64().unwrap() + 1);
-        let snapshot =
-            json!({"node":node.clone(),"links":self.live_edges(id),"relationships_available":true});
-        let revision = snapshot["node"]["content_revision"].as_i64().unwrap();
-        self.revisions.insert((id, revision), snapshot);
-    }
-    fn get(&self, id: Uuid) -> Value {
-        self.nodes[&id].clone()
-    }
-    fn context(&self, id: Uuid) -> Value {
-        json!({"node":self.get(id),"nodes":[],"edges":self.live_edges(id),"pinned_revisions":[],"truncated":false})
-    }
-    fn tree(&self, id: Uuid) -> Value {
-        let children: Vec<_> = (self.edges.values())
-            .filter(|e| e["deleted"] == false && e["edge_type"] == "parent-child" && e["source"] == json!(id))
-            .map(|e| json!({"node":self.get(id_of(&e["target"]).unwrap()),"children":[],"truncated":false}))
-            .collect();
-        json!({"node":self.get(id),"children":children,"truncated":false})
-    }
-    fn revision(&self, id: Uuid, revision: i64) -> Value {
-        self.revisions[&(id, revision)].clone()
-    }
-    fn check(&self, id: Uuid, op: &Value) -> Result<(), String> {
-        let node = self.nodes.get(&id).ok_or("missing")?;
-        if node["version"] != op["expected_version"] {
-            return Err(format!(
-                "stale {id}: {} != {}",
-                node["version"], op["expected_version"]
-            ));
-        }
-        Ok(())
-    }
-    fn apply(&mut self, operations: &[Value]) -> Result<(), String> {
-        assert!(!operations.is_empty() && operations.len() <= 100);
-        let mut next = self.clone();
-        for op in operations {
-            next.one(op)?;
-        }
-        *self = next;
-        Ok(())
-    }
-    fn one(&mut self, op: &Value) -> Result<(), String> {
-        let id = id_of(&op["id"]).unwrap();
-        match op["op"].as_str().unwrap() {
-            "create_node" => {
-                if self.nodes.contains_key(&id) {
-                    return Err("conflict".into());
-                }
-                let task = op["kind"] == "task";
-                self.nodes.insert(id, json!({"id":id,"kind":op["kind"],"title":op["title"],
-                    "content_type":op.get("content_type").cloned().unwrap_or(json!("note")),
-                    "metadata":op.get("metadata").cloned().unwrap_or(json!({})),
-                    "task_state":if task { op.get("task_state").cloned().unwrap_or(json!("draft")) } else { Value::Null },
-                    "verification":"unverified","last_verified_by":null,"created_by":SERVICE,
-                    "provenance":[],"deleted":false,"retired":false,"version":0,"content_revision":0}));
-                self.bump(id);
-            }
-            "update_node" => {
-                self.check(id, op)?;
-                let patch = op["patch"].as_object().unwrap();
-                if patch.is_empty() {
-                    return Ok(());
-                }
-                if patch.get("task_state") == Some(&json!("completed")) {
-                    let open = (self.edges.values()).any(|e| {
-                        e["deleted"] == false
-                            && e["edge_type"] == "parent-child"
-                            && e["source"] == json!(id)
-                            && !matches!(
-                                self.nodes[&id_of(&e["target"]).unwrap()]["task_state"].as_str(),
-                                Some("completed" | "canceled")
-                            )
-                    });
-                    if open {
-                        return Err("open child".into());
-                    }
-                }
-                let node = self.nodes.get_mut(&id).unwrap();
-                for (key, value) in patch {
-                    node[key] = value.clone();
-                }
-                if patch.contains_key("metadata") {
-                    node["verification"] = json!("unverified");
-                    node["last_verified_by"] = Value::Null;
-                }
-                self.bump(id);
-            }
-            "verify_node" => {
-                self.check(id, op)?;
-                let node = self.nodes.get_mut(&id).unwrap();
-                node["verification"] = op["verification"].clone();
-                node["last_verified_by"] = json!(SERVICE);
-                let provenance = node["provenance"].as_array_mut().unwrap();
-                for item in op["evidence"].as_array().unwrap() {
-                    provenance.retain(|p| p["source_id"] != item["source_id"]);
-                    provenance.push(item.clone());
-                }
-                self.bump(id);
-            }
-            "add_edge" => {
-                let (source, target) =
-                    (id_of(&op["source"]).unwrap(), id_of(&op["target"]).unwrap());
-                if self.nodes[&source]["deleted"] == true || self.nodes[&target]["deleted"] == true
-                {
-                    return Err("deleted endpoint".into());
-                }
-                self.edges.insert(id, json!({"id":id,"edge_type":op["edge_type"],"source":source,"target":target,"deleted":false}));
-                self.bump(source);
-                self.bump(target);
-            }
-            "delete_node" => {
-                self.check(id, op)?;
-                let incident: Vec<_> = self.live_edges(id);
-                for edge in &incident {
-                    self.edges.get_mut(&id_of(&edge["id"]).unwrap()).unwrap()["deleted"] =
-                        json!(true);
-                }
-                self.nodes.get_mut(&id).unwrap()["deleted"] = json!(true);
-                self.bump(id);
-                for edge in incident {
-                    for end in ["source", "target"] {
-                        let other = id_of(&edge[end]).unwrap();
-                        if other != id {
-                            self.bump(other);
-                        }
-                    }
-                }
-            }
-            "restore_node" => {
-                self.check(id, op)?;
-                let snapshot = self.revision(id, op["revision"].as_i64().unwrap());
-                let lifecycle = op["include_lifecycle"] == true;
-                if self.nodes[&id]["deleted"] == true && !lifecycle {
-                    return Err("tombstone".into());
-                }
-                let mut others = vec![];
-                for link in snapshot["links"].as_array().unwrap() {
-                    let other = [
-                        id_of(&link["source"]).unwrap(),
-                        id_of(&link["target"]).unwrap(),
-                    ]
-                    .into_iter()
-                    .find(|end| *end != id)
-                    .unwrap();
-                    if self.nodes[&other]["deleted"] == true {
-                        return Err("deleted endpoint".into());
-                    }
-                    self.edges.insert(id_of(&link["id"]).unwrap(), link.clone());
-                    others.push(other);
-                }
-                let node = self.nodes.get_mut(&id).unwrap();
-                for key in ["title", "metadata"] {
-                    node[key] = snapshot["node"][key].clone();
-                }
-                if lifecycle {
-                    for key in ["task_state", "deleted", "retired"] {
-                        node[key] = snapshot["node"][key].clone();
-                    }
-                }
-                node["verification"] = json!("unverified");
-                node["last_verified_by"] = Value::Null;
-                self.bump(id);
-                for other in others {
-                    self.bump(other);
-                }
-            }
-            other => panic!("unexpected {other}"),
-        }
-        Ok(())
-    }
-}
+mod graph;
+use graph::Graph;
 
 struct Fixture {
     graph: Graph,
@@ -260,12 +71,14 @@ fn fixture() -> Fixture {
     assert!(register.valid());
     let operations = register
         .plan(
-            workspace,
-            actor,
-            SERVICE,
+            super::super::Scope {
+                workspace,
+                actor,
+                project,
+                service: SERVICE,
+            },
             &graph.get(epic),
-            &graph.context(approval),
-            &graph.context(cleanup),
+            [&graph.context(approval), &graph.context(cleanup)],
         )
         .unwrap();
     graph.apply(&operations).unwrap();
@@ -298,14 +111,16 @@ impl Fixture {
             ..*self
         }
     }
+    fn scope(&self) -> Scope<'static> {
+        Scope {
+            workspace: self.workspace,
+            actor: self.actor,
+            service: SERVICE,
+            project: self.project,
+        }
+    }
     fn load(&self) -> Result<Registration, Refusal> {
-        Registration::load(
-            &self.graph.get(self.registration),
-            self.workspace,
-            self.actor,
-            SERVICE,
-            self.project,
-        )
+        Registration::load(&self.graph.get(self.registration), self.scope())
     }
     fn version(&self) -> String {
         self.graph.get(self.registration)["version"].to_string()
@@ -324,8 +139,10 @@ impl Fixture {
         self.restore(revision).plan(
             &reg,
             &self.graph.get(self.epic),
-            &self.graph.get(self.closure),
-            &self.graph.revision(self.closure, revision),
+            GateRevision {
+                tombstone: &self.graph.get(self.closure),
+                snapshot: &self.graph.revision(self.closure, revision),
+            },
         )
     }
     fn gates(&self, reg: &Registration) -> [Value; 3] {
@@ -357,7 +174,7 @@ impl Fixture {
         assert!(decide.valid());
         let reg = self.load()?;
         let [a, c, g] = self.gates(&reg);
-        decide.plan(&reg, &a, &c, &g, journaled)
+        decide.plan(&reg, [&a, &c, &g], journaled)
     }
     fn decide(&mut self, revision: i32, choice: Choice) -> Result<(), String> {
         let operations = self.plan_decision(&self.decision(revision, choice), false)?;
@@ -405,7 +222,7 @@ impl Fixture {
             ..self.base(EvidenceKind::Merge, 0x11)
         }
     }
-    fn ordinary(&self, repo: &str, commit: String, proof: u8, passed: bool) -> Evidence {
+    fn ordinary(&self, repo: &str, commit: String, (proof, passed): (u8, bool)) -> Evidence {
         Evidence {
             repository: Some(repo.into()),
             sha: Some(commit),
@@ -438,16 +255,27 @@ impl Fixture {
         assert!(close.valid());
         let operations = close.plan(
             &reg,
-            &self.graph.get(self.epic),
-            [&a, &c, &g],
-            &self.records(&reg),
-            &self.graph.tree(self.epic),
+            ClosureReads {
+                epic: &self.graph.get(self.epic),
+                gates: [&a, &c, &g],
+                records: &self.records(&reg),
+                tree: &self.graph.tree(self.epic),
+            },
         )?;
         self.graph.apply(&operations)
     }
     fn state(&self) -> Value {
         self.graph.get(self.registration)["metadata"][META].clone()
     }
+}
+
+#[test]
+fn evidence_anchors_hash_nested_keys_in_canonical_order() {
+    let event = json!({"z":"approved","a":[{"z":"é","a":1},true],"n":null});
+    assert_eq!(
+        digest(&event),
+        "eb85894d02f588cbe361f3dc0ed87cf967df9abcaa24e7ae250557784feba81f"
+    );
 }
 
 fn sha(seed: u8) -> String {
@@ -499,17 +327,50 @@ fn restore_refuses_other_owners_projects_revisions_and_stale_versions() {
     let f = fixture();
     let node = f.graph.get(f.registration);
     for (actor, project) in [(Uuid::new_v4(), f.project), (f.actor, Uuid::new_v4())] {
-        assert!(Registration::load(&node, f.workspace, actor, SERVICE, project).is_err());
+        assert!(
+            Registration::load(
+                &node,
+                Scope {
+                    actor,
+                    project,
+                    ..f.scope()
+                }
+            )
+            .is_err()
+        );
     }
-    assert!(Registration::load(&node, Uuid::new_v4(), f.actor, SERVICE, f.project).is_err());
-    assert!(Registration::load(&node, f.workspace, f.actor, "other-service", f.project).is_err());
+    assert!(
+        Registration::load(
+            &node,
+            Scope {
+                workspace: Uuid::new_v4(),
+                ..f.scope()
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        Registration::load(
+            &node,
+            Scope {
+                service: "other-service",
+                ..f.scope()
+            }
+        )
+        .is_err()
+    );
     // A Graph-direct registration names a Graph actor instead of the AQ owner.
     let mut direct = node.clone();
     direct["metadata"][META]["spec"]
         .as_object_mut()
         .unwrap()
         .remove("owner_authority");
-    assert!(Registration::load(&direct, f.workspace, f.actor, SERVICE, f.project).is_err());
+    assert!(Registration::load(&direct, f.scope()).is_err());
+}
+
+#[test]
+fn restore_refuses_unverified_or_unrelated_gate_revisions() {
+    let f = fixture();
     // The revisions before verification lack the guarded verification.
     for revision in 1..f.guarded {
         assert!(f.plan_restore(revision).is_err(), "revision {revision}");
@@ -523,7 +384,14 @@ fn restore_refuses_other_owners_projects_revisions_and_stale_versions() {
     let restore = f.restore(f.guarded);
     assert!(
         restore
-            .plan(&reg, &epic, &f.graph.get(f.closure), &other)
+            .plan(
+                &reg,
+                &epic,
+                GateRevision {
+                    tombstone: &f.graph.get(f.closure),
+                    snapshot: &other
+                }
+            )
             .is_err()
     );
     assert!(
@@ -531,11 +399,18 @@ fn restore_refuses_other_owners_projects_revisions_and_stale_versions() {
             .plan(
                 &reg,
                 &epic,
-                &f.graph.get(reg.cleanup),
-                &f.graph.revision(f.closure, f.guarded)
+                GateRevision {
+                    tombstone: &f.graph.get(reg.cleanup),
+                    snapshot: &f.graph.revision(f.closure, f.guarded)
+                }
             )
             .is_err()
     );
+}
+
+#[test]
+fn restore_keeps_a_compare_and_swap_guard_on_the_registration() {
+    let f = fixture();
     // A batch planned against an older registration version is refused by CAS.
     let operations = f.plan_restore(f.guarded).unwrap();
     let mut moved = f.graph.clone();
@@ -581,12 +456,37 @@ fn five_repository_evidence_closes_the_epic_once() {
         "cleanup is released once"
     );
 
+    record_five_repositories(&mut f);
+    // The cleanup task completes only through ordinary delivery.
+    assert!(f.close().unwrap_err().contains("normal delivery"));
+    let cleanup = f.graph.get(reg.cleanup);
+    f.graph
+        .apply(&[json!({"op":"update_node","id":reg.cleanup,"expected_version":cleanup["version"],"patch":{"task_state":"completed"}})])
+        .unwrap();
+    f.close().unwrap();
+    let epic = f.graph.get(f.epic);
+    let gate = f.graph.get(f.closure);
+    assert_eq!(epic["task_state"], "completed");
+    assert_eq!(gate["task_state"], "completed");
+    assert_eq!(gate["verification"], "verified");
+    let state = f.state();
+    let receipt = Uuid::new_v5(&f.registration, b"close");
+    assert_eq!(state["closed"], json!(receipt));
+    assert_eq!(gate["metadata"][META]["receipt"], json!(receipt));
+    let closure = &f.graph.get(receipt)["metadata"][META];
+    assert_eq!(closure["approval_revision"], 2);
+    assert_eq!(closure["merges"].as_object().unwrap().len(), 5);
+    assert!(f.close().is_err(), "closed once");
+    assert!(f.evidence(f.merge(REPOS[1], sha(0x91), None)).is_err());
+}
+
+fn record_five_repositories(f: &mut Fixture) {
     let mut merges = BTreeMap::new();
     let mut builds = BTreeMap::new();
     for (i, repo) in REPOS.iter().enumerate() {
         let commit = sha(0x40 + i as u8);
         assert!(
-            f.evidence(f.ordinary(repo, commit.clone(), 0x60, true))
+            f.evidence(f.ordinary(repo, commit.clone(), (0x60, true)))
                 .is_err(),
             "a build needs its merge"
         );
@@ -598,22 +498,11 @@ fn five_repository_evidence_closes_the_epic_once() {
         f.evidence(f.merge("Acme/other", sha(0x99), None)).is_err(),
         "unregistered repository"
     );
-    // The first server build fails, then passes after a repair merge.
     let first = REPOS[0];
-    f.evidence(f.ordinary(first, merges[first].clone(), 0x50, false))
-        .unwrap();
-    let current = id_of(&f.state()["merges"][first]).unwrap();
-    assert!(
-        f.evidence(f.merge(first, sha(0x90), None)).is_err(),
-        "a repair must supersede"
-    );
-    f.evidence(f.merge(first, sha(0x90), Some(current)))
-        .unwrap();
-    merges.insert(first.to_string(), sha(0x90));
-    assert!(f.state()["ordinary"].get(first).is_none());
+    repair_server_merge(f, &mut merges);
     for (i, repo) in REPOS.iter().enumerate() {
         let proof = artifact(0x60 + i as u8);
-        let mut build = f.ordinary(repo, merges[*repo].clone(), 0x60 + i as u8, true);
+        let mut build = f.ordinary(repo, merges[*repo].clone(), (0x60 + i as u8, true));
         assert!(
             f.evidence(Evidence {
                 sha: Some(sha(0x77)),
@@ -640,27 +529,22 @@ fn five_repository_evidence_closes_the_epic_once() {
         "the repaired merge"
     );
     f.evidence(f.integrated(&merges, &builds)).unwrap();
-    // The cleanup task completes only through ordinary delivery.
-    assert!(f.close().unwrap_err().contains("normal delivery"));
-    let cleanup = f.graph.get(reg.cleanup);
-    f.graph
-        .apply(&[json!({"op":"update_node","id":reg.cleanup,"expected_version":cleanup["version"],"patch":{"task_state":"completed"}})])
+}
+
+fn repair_server_merge(f: &mut Fixture, merges: &mut BTreeMap<String, String>) {
+    // The first server build fails, then passes after a repair merge.
+    let first = REPOS[0];
+    f.evidence(f.ordinary(first, merges[first].clone(), (0x50, false)))
         .unwrap();
-    f.close().unwrap();
-    let epic = f.graph.get(f.epic);
-    let gate = f.graph.get(f.closure);
-    assert_eq!(epic["task_state"], "completed");
-    assert_eq!(gate["task_state"], "completed");
-    assert_eq!(gate["verification"], "verified");
-    let state = f.state();
-    let receipt = Uuid::new_v5(&f.registration, b"close");
-    assert_eq!(state["closed"], json!(receipt));
-    assert_eq!(gate["metadata"][META]["receipt"], json!(receipt));
-    let closure = &f.graph.get(receipt)["metadata"][META];
-    assert_eq!(closure["approval_revision"], 2);
-    assert_eq!(closure["merges"].as_object().unwrap().len(), 5);
-    assert!(f.close().is_err(), "closed once");
-    assert!(f.evidence(f.merge(REPOS[1], sha(0x91), None)).is_err());
+    let current = id_of(&f.state()["merges"][first]).unwrap();
+    assert!(
+        f.evidence(f.merge(first, sha(0x90), None)).is_err(),
+        "a repair must supersede"
+    );
+    f.evidence(f.merge(first, sha(0x90), Some(current)))
+        .unwrap();
+    merges.insert(first.to_string(), sha(0x90));
+    assert!(f.state()["ordinary"].get(first).is_none());
 }
 
 #[test]
@@ -681,8 +565,12 @@ fn closure_refuses_an_open_sibling_task() {
     for (i, repo) in REPOS.iter().enumerate() {
         f.evidence(approval(f.merge(repo, sha(0x40 + i as u8), None)))
             .unwrap();
-        f.evidence(approval(f.ordinary(repo, sha(0x40 + i as u8), 0x60, true)))
-            .unwrap();
+        f.evidence(approval(f.ordinary(
+            repo,
+            sha(0x40 + i as u8),
+            (0x60, true),
+        )))
+        .unwrap();
         merges.insert(repo.to_string(), sha(0x40 + i as u8));
         builds.insert(repo.to_string(), artifact(0x60));
     }
@@ -726,7 +614,7 @@ fn settle_cleanup(f: &mut Fixture, approval_revision: i32) {
     for (i, repo) in REPOS.iter().enumerate() {
         let commit = sha(0x40 + i as u8);
         f.evidence(at(f.merge(repo, commit.clone(), None))).unwrap();
-        f.evidence(at(f.ordinary(repo, commit.clone(), 0x60 + i as u8, true)))
+        f.evidence(at(f.ordinary(repo, commit.clone(), (0x60 + i as u8, true))))
             .unwrap();
         merges.insert(repo.to_string(), commit);
         builds.insert(repo.to_string(), artifact(0x60 + i as u8));
@@ -919,113 +807,11 @@ fn payload_bounds() {
     assert!(
         !Evidence {
             flag_absent: None,
-            ..f.ordinary(REPOS[0], sha(1), 1, true)
+            ..f.ordinary(REPOS[0], sha(1), (1, true))
         }
         .valid()
     );
     assert!(!f.integrated(&BTreeMap::new(), &BTreeMap::new()).valid());
 }
 
-/// The model served as Graph reads, the way the server's runtime serves them.
-struct Served<'a>(&'a Graph, Uuid);
-impl super::super::dispatch::Reads for Served<'_> {
-    type Error = String;
-    async fn get(&self, path: String, _: &'static str) -> Result<Value, String> {
-        let prefix = format!("/v1/workspaces/{}/nodes/", self.1);
-        let rest = path.strip_prefix(&prefix).ok_or("another workspace")?;
-        let (id, tail) = rest.split_once('/').unwrap_or((rest, ""));
-        let id: Uuid = id.parse().map_err(|_| "malformed path")?;
-        if !self.0.nodes.contains_key(&id) {
-            return Err("not found".into());
-        }
-        let mut raw = match tail {
-            "" => self.0.get(id),
-            "context" => self.0.context(id),
-            "tree?depth=1&limit=200" => self.0.tree(id),
-            tail => {
-                let n = tail.strip_prefix("revisions/").and_then(|n| n.parse().ok());
-                let n: i64 = n.ok_or("malformed path")?;
-                self.0.revisions.get(&(id, n)).cloned().ok_or("not found")?
-            }
-        };
-        let node = if raw.get("node").is_some() {
-            &mut raw["node"]
-        } else {
-            &mut raw
-        };
-        node["workspace_id"] = json!(self.1);
-        Ok(raw)
-    }
-    fn fail(&self, refusal: Option<Refusal>) -> String {
-        refusal.unwrap_or("unavailable").into()
-    }
-}
-
-#[tokio::test]
-async fn dispatch_reads_only_what_the_registration_names() {
-    use super::super::dispatch::{Action, plan};
-    let mut f = fixture();
-    // Only registration reads a journal table; these actions never touch it.
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .acquire_timeout(std::time::Duration::from_millis(200))
-        .connect_lazy("postgres://localhost/unused")
-        .unwrap();
-    let at = (f.workspace, f.actor, f.project, SERVICE);
-    let decide = Decide {
-        operation_id: Uuid::new_v4(),
-        project_id: f.project,
-        registration_id: f.registration,
-        expected_version: f.version(),
-        revision: 1,
-        choice: Choice::Approve,
-        vetted: REPOS.iter().map(|r| (r.to_string(), sha(1))).collect(),
-        evidence: artifact(0xd0),
-    };
-    let restore = f.restore(f.guarded);
-    let subject = f.graph.get(f.registration);
-    let operations = {
-        let r = Served(&f.graph, f.workspace);
-        let refused = plan(&r, &pool, at, &subject, Action::Decide(&decide)).await;
-        assert_eq!(refused.unwrap_err(), "a registered record is deleted");
-        let other = (f.workspace, Uuid::new_v4(), f.project, SERVICE);
-        let refused = plan(&r, &pool, other, &subject, Action::Restore(&restore)).await;
-        assert_eq!(
-            refused.unwrap_err(),
-            "registration belongs to another owner"
-        );
-        let elsewhere = Served(&f.graph, Uuid::new_v4());
-        let refused = plan(&elsewhere, &pool, at, &subject, Action::Restore(&restore)).await;
-        assert!(refused.is_err());
-        plan(&r, &pool, at, &subject, Action::Restore(&restore))
-            .await
-            .unwrap()
-    };
-    assert_eq!(operations, f.plan_restore(f.guarded).unwrap());
-    f.graph.apply(&operations).unwrap();
-    let subject = f.graph.get(f.registration);
-    let r = Served(&f.graph, f.workspace);
-    let decided = plan(&r, &pool, at, &subject, Action::Decide(&decide))
-        .await
-        .unwrap();
-    f.graph.apply(&decided).unwrap();
-    let close = Close {
-        operation_id: Uuid::new_v4(),
-        project_id: f.project,
-        registration_id: f.registration,
-        expected_version: f.version(),
-    };
-    let subject = f.graph.get(f.registration);
-    let r = Served(&f.graph, f.workspace);
-    let pending = plan(&r, &pool, at, &subject, Action::Close(&close)).await;
-    assert_eq!(pending.unwrap_err(), "a cleanup merge is pending");
-
-    // A release before any decision is reconciled only after the journal
-    // read, which this unreachable pool cannot answer.
-    let f = released_before_decision();
-    let at = (f.workspace, f.actor, f.project, SERVICE);
-    let subject = f.graph.get(f.registration);
-    let decide = f.decision(1, Choice::Approve);
-    let r = Served(&f.graph, f.workspace);
-    let unread = plan(&r, &pool, at, &subject, Action::Decide(&decide)).await;
-    assert_eq!(unread.unwrap_err(), "unavailable");
-}
+mod dispatch;

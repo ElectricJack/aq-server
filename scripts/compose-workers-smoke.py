@@ -7,6 +7,7 @@ $XDG_RUNTIME_DIR/aq-sandbox/podman.sock), a systemd user manager, and the publis
 Dockerfile.worker digest (deploy/worker-image.env, or AQ_WORKER_IMAGE). The host's
 main Docker daemon runs only the production stack, never sandboxes.
 """
+from dataclasses import dataclass, field
 import http.client
 import hashlib
 import importlib.util
@@ -25,6 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("compose_prod_smoke", ROOT / "scripts/compose-prod-smoke.py")
 prod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prod)
+
+def worker_executable_version(candidate):
+    # The executable embeds the exact source revision. OCI's version label
+    # continues to identify the bare package version.
+    return f"aq-worker {candidate['version']}+{candidate['source_revision']}"
+
 
 SANDBOX_IMAGE = "docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec"
 MAIN_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock")
@@ -117,30 +124,27 @@ def binds(service):
     return [v for v in service.get("volumes", []) if v["type"] == "bind"]
 
 
-def validate_production(config, slice_values, host_budget=VPS):
-    """Static production contract: limits everywhere, sockets only where intended."""
-    services = config["services"]
-    assert {"aq-supervisor-host", "aq-worker-cloud", "cloudflared", *STACK} <= set(services)
-    long_running = {"cpus": 0.0, "memory": 0}
-    limits = {}
-    for name, service in services.items():
-        for key in ("cpus", "mem_limit", "memswap_limit", "pids_limit"):
-            assert service.get(key), f"{name} missing {key}"
-        memory = int(service["mem_limit"])
-        assert int(service["memswap_limit"]) == memory, name + " may swap beyond its memory limit"
-        limits[name] = {"cpus": float(service["cpus"]), "memory": memory, "pids": int(service["pids_limit"])}
-        assert prod.DIGEST.fullmatch(service["image"]), "unpinned image: " + name
-        assert service["read_only"] and service["cap_drop"] == ["ALL"], name
-        assert "no-new-privileges:true" in service["security_opt"], name
-        assert not service.get("privileged") and service.get("pid") != "host", name
-        assert not service.get("ports"), "host ports on " + name
-        for volume in service.get("volumes", []):
-            for path in (volume.get("source", ""), volume["target"]):
-                assert "docker.sock" not in path and not path.rstrip("/").endswith(("/run/docker", "/var/run")), \
-                    f"{name} mounts a Docker socket path: {path}"
-        if service.get("restart") != "no" and name not in ("graph-db-init", "server-db-init"):
-            long_running["cpus"] += limits[name]["cpus"]
-            long_running["memory"] += memory
+def service_limits(name, service):
+    for key in ("cpus", "mem_limit", "memswap_limit", "pids_limit"):
+        assert service.get(key), f"{name} missing {key}"
+    memory = int(service["mem_limit"])
+    assert int(service["memswap_limit"]) == memory, name + " may swap beyond its memory limit"
+    return {"cpus": float(service["cpus"]), "memory": memory, "pids": int(service["pids_limit"])}
+
+
+def validate_container(name, service):
+    assert prod.DIGEST.fullmatch(service["image"]), "unpinned image: " + name
+    assert service["read_only"] and service["cap_drop"] == ["ALL"], name
+    assert "no-new-privileges:true" in service["security_opt"], name
+    assert not service.get("privileged") and service.get("pid") != "host", name
+    assert not service.get("ports"), "host ports on " + name
+    for volume in service.get("volumes", []):
+        for path in (volume.get("source", ""), volume["target"]):
+            assert "docker.sock" not in path and not path.rstrip("/").endswith(("/run/docker", "/var/run")), \
+                f"{name} mounts a Docker socket path: {path}"
+
+
+def validate_host_budget(long_running, slice_values, host_budget):
     sandbox_cpus = int(slice_values["CPUQuota"].rstrip("%")) / 100
     sandbox_memory = size(slice_values["MemoryMax"])
     assert slice_values["MemorySwapMax"] == "0"
@@ -148,7 +152,10 @@ def validate_production(config, slice_values, host_budget=VPS):
     total_memory = long_running["memory"] + sandbox_memory
     assert total_cpus <= host_budget["cpus"], ("CPU budget exceeds VPS/host", total_cpus)
     assert total_memory <= host_budget["memory"] - HOST_MEMORY_MIN, ("memory budget leaves under 1 GB for the host", total_memory)
+    return total_cpus, total_memory
 
+
+def validate_cloud_worker(services):
     worker = services["aq-worker-cloud"]
     assert set(worker["networks"]) == {"workers"}, "worker must not join edge/database"
     assert worker["environment"]["AQ_SERVER_URL"] == "https://" + PLACEHOLDERS["AQ_PUBLIC_HOSTNAME"]
@@ -165,9 +172,8 @@ def validate_production(config, slice_values, host_budget=VPS):
     assert initializer["network_mode"] == "none" and not binds(initializer)
     assert {v["target"] for v in initializer["volumes"]} == worker_targets
 
-    if "aq-worker-boat" in services:
-        validate_boat(services)
 
+def validate_supervisor(services):
     supervisor = services["aq-supervisor-host"]
     assert set(supervisor["networks"]) <= {"database", "supervisor"}, "supervisor is not a worker node"
     assert [(b["source"], b["target"], b.get("read_only")) for b in binds(supervisor)] == [
@@ -182,6 +188,25 @@ def validate_production(config, slice_values, host_budget=VPS):
         if name != "aq-supervisor-host":
             assert not supervisor_sources & {v.get("source") for v in service.get("volumes", [])}, \
                 f"{name} shares supervisor state or credentials"
+
+
+def validate_production(config, slice_values, host_budget=VPS):
+    """Check production resource limits, service isolation and shared mounts."""
+    services = config["services"]
+    assert {"aq-supervisor-host", "aq-worker-cloud", "cloudflared", *STACK} <= set(services)
+    long_running = {"cpus": 0.0, "memory": 0}
+    limits = {}
+    for name, service in services.items():
+        limits[name] = service_limits(name, service)
+        validate_container(name, service)
+        if service.get("restart") != "no" and name not in ("graph-db-init", "server-db-init"):
+            long_running["cpus"] += limits[name]["cpus"]
+            long_running["memory"] += limits[name]["memory"]
+    total_cpus, total_memory = validate_host_budget(long_running, slice_values, host_budget)
+    validate_cloud_worker(services)
+    if "aq-worker-boat" in services:
+        validate_boat(services)
+    validate_supervisor(services)
     return {"service_limits": limits, "sandbox_slice": slice_values,
             "budget": {"cpus": total_cpus, "memory_bytes": total_memory, "host": host_budget}}
 
@@ -196,6 +221,11 @@ def validate_boat(services):
         "/config", "/boat-entrypoint.sh", "/state", "/var/lib/aq-worker/leases"}
     assert all(v.get("read_only") for v in binds(boat))
     assert [s["source"] for s in boat["secrets"]] == ["boat_attempt_key"]
+    validate_boat_state(services, boat, worker)
+    validate_boat_secret_scope(services)
+
+
+def validate_boat_state(services, boat, worker):
     boat_sources = {v["source"] for v in boat["volumes"]}
     assert not boat_sources & {v["source"] for v in worker["volumes"]}, "Boat shares cloud identity/state"
     boat_init = services["aq-worker-boat-state-init"]
@@ -204,6 +234,9 @@ def validate_boat(services):
     assert boat_init["image"] == boat["image"] and boat_init["user"] == "0:0"
     assert {v["source"] for v in boat_init["volumes"]} == {
         v["source"] for v in boat["volumes"] if v["type"] == "volume"}
+
+
+def validate_boat_secret_scope(services):
     for name, service in services.items():
         if name != "aq-worker-boat":
             assert "boat_attempt_key" not in {s["source"] for s in service.get("secrets", [])}
@@ -232,33 +265,30 @@ def slice_usage(path):
     return int(re.search(r"^usage_usec (\d+)$", stat, re.M).group(1))
 
 
-def worker_setup(sock, evidence):
-    """Run the actual production worker against a disposable server identity.
+@dataclass(frozen=True)
+class WorkerFixture:
+    sock: str
+    image: str
+    candidate: dict
+    evidence: dict
+    node_id: str
+    credential: str = field(repr=False)
+    uid: int
+    gid: int
 
-    Only this smoke's server additionally joins the workers network, allowing a
-    local HTTP foundation heartbeat without a real Access hostname/token. The
-    production worker's user, mounts, command and hardening stay in the overlay.
-    B2 admission is fenced by this worker revision; no tasks are submitted.
-    """
-    default_image = next(line.removeprefix("AQ_WORKER_IMAGE=") for line in
-                         (ROOT / "deploy/worker-image.env").read_text().splitlines()
-                         if line.startswith("AQ_WORKER_IMAGE="))
-    image = os.environ.get("AQ_WORKER_IMAGE", default_image)
-    assert prod.DIGEST.fullmatch(image), "set AQ_WORKER_IMAGE to the published Dockerfile.worker digest"
-    candidate = json.loads((ROOT / "vendor/worker-candidate.json").read_text())
-    node_id, credential = str(uuid.uuid4()), "aqn_" + secrets.token_hex(32)
-    uid, gid = Path(sock).stat().st_uid, Path(sock).stat().st_gid
-
-    def setup(stack):
+    def setup(self, stack):
+        sock, image, candidate = self.sock, self.image, self.candidate
+        node_id, credential, uid, gid = self.node_id, self.credential, self.uid, self.gid
         directory = stack.directory / "worker-config"
         (directory / "agent-q").mkdir(parents=True)
         # Only the enrolled foundation config is secret; never print it.
         (directory / "agent-q/worker.toml").write_text(
             f'server_url = "http://server:8081"\nnode_id = "{node_id}"\ncredential = "{credential}"\n')
         (directory / "agent-q/worker.toml").chmod(0o600)
+        # The smoke may use a rootless daemon on the test host filesystem.
         (directory / "controller.json").write_text(json.dumps({
             "state_dir": "/state/controller",
-            "docker_local": {"socket": "/run/aq-sandbox/podman.sock", "templates": []},
+            "docker_local": {"socket": "/run/aq-sandbox/podman.sock", "shared_root_fs": True, "templates": []},
             "node": {"runtime": {"id": "aq-worker", "version": candidate["version"], "digest": "0" * 64},
                      "capabilities": [], "features": [], "templates": [], "max_concurrent_sandboxes": 2,
                      "spend_ceiling": None, "capacity": {"memory_bytes": 8 * 2**30, "cpu_millis": 4000,
@@ -277,7 +307,9 @@ def worker_setup(sock, evidence):
             "server": {"networks": {"workers": {}}}})
         (stack.directory / "smoke.json").write_text(json.dumps(fixture))
 
-    def start(stack):
+    def start(self, stack):
+        image, candidate, evidence = self.image, self.candidate, self.evidence
+        node_id, credential, uid, gid = self.node_id, self.credential, self.uid, self.gid
         def sql(query):
             return stack.compose("exec", "-T", "postgres", "sh", "-ec",
                 'export PGPASSWORD="$(cat /run/secrets/postgres_password)"; exec psql -v ON_ERROR_STOP=1 -U agent_q -d aq_server -tAc "$1"',
@@ -294,7 +326,7 @@ def worker_setup(sock, evidence):
             return "node controller starting" in logs and "admission fenced; foundation heartbeat remains active" in logs
         stack.wait(controller_ready, "docker-local controller recovery and admission fence", 15)
         version = stack.compose("exec", "-T", "aq-worker-cloud", "aq-worker", "--version").stdout.strip()
-        assert version == "aq-worker " + candidate["version"], version
+        assert version == worker_executable_version(candidate), version
         observed = json.loads(stack.compose("exec", "-T", "aq-worker-cloud", "cat",
                                            "/usr/share/agent-q/worker-candidate.json").stdout)
         assert observed == candidate, "running worker differs from pinned source"
@@ -314,7 +346,76 @@ def worker_setup(sock, evidence):
                               "controller": "docker-local connected; journal persisted; admission fenced",
                               "volume_ownership": ownership, "restart_count": state["RestartCount"]}
 
-    return setup, start
+
+def worker_setup(sock, evidence):
+    """Run the actual production worker against a disposable server identity.
+
+    Only this smoke's server additionally joins the workers network, allowing a
+    local HTTP foundation heartbeat without a real Access hostname/token. The
+    production worker's user, mounts, command and hardening stay in the overlay.
+    B2 admission is fenced by this worker revision; no tasks are submitted.
+    """
+    default_image = next(line.removeprefix("AQ_WORKER_IMAGE=") for line in
+                         (ROOT / "deploy/worker-image.env").read_text().splitlines()
+                         if line.startswith("AQ_WORKER_IMAGE="))
+    image = os.environ.get("AQ_WORKER_IMAGE", default_image)
+    assert prod.DIGEST.fullmatch(image), "set AQ_WORKER_IMAGE to the published Dockerfile.worker digest"
+    candidate = json.loads((ROOT / "vendor/worker-candidate.json").read_text())
+    node_id, credential = str(uuid.uuid4()), "aqn_" + secrets.token_hex(32)
+    uid, gid = Path(sock).stat().st_uid, Path(sock).stat().st_gid
+
+    worker = WorkerFixture(sock, image, candidate, evidence, node_id, credential, uid, gid)
+    return worker.setup, worker.start
+
+
+def sample_stack_health(stack, ids, failures, began):
+    code, report = stack.readiness()
+    latency = time.monotonic() - began
+
+    if code != 0 or latency > READINESS_DEADLINE:
+        failures.append({"latency": round(latency, 2), "code": code, "report": report})
+    for name, cid in ids.items():
+        health = json.loads(stack.run("docker", "inspect", cid).stdout)[0]["State"]["Health"]
+        if health["Status"] != "healthy" or health["FailingStreak"]:
+            failures.append({"service": name, "status": health["Status"],
+                             "failing_streak": health["FailingStreak"]})
+    worker = json.loads(stack.run("docker", "inspect", stack.compose("ps", "-q", "aq-worker-cloud").stdout.strip()).stdout)[0]
+    if not worker["State"]["Running"] or worker["RestartCount"]:
+        failures.append({"service": "aq-worker-cloud", "state": worker["State"],
+                         "restart_count": worker["RestartCount"]})
+    return latency
+
+
+def measure_sandbox_load(stack, cgroup, quota):
+    ids = {name: stack.compose("ps", "-q", name).stdout.strip() for name in STACK}
+    started_usage, started_at = slice_usage(cgroup), time.monotonic()
+    samples, latencies, failures = 0, [], []
+    while time.monotonic() - started_at < LOAD_SECONDS:
+        began = time.monotonic()
+        latencies.append(sample_stack_health(stack, ids, failures, began))
+        samples += 1
+        time.sleep(max(0, 1 - (time.monotonic() - began)))
+    elapsed = time.monotonic() - started_at
+    used = (slice_usage(cgroup) - started_usage) / 1e6 / elapsed
+    assert not failures, failures
+    assert samples >= LOAD_SECONDS // 3, samples
+    # Sandbox load is real but held to the aggregate quota.
+    assert quota * 0.6 <= used <= quota * 1.1, ("sandbox CPU outside quota", used, quota)
+    return elapsed, used, samples, latencies
+
+
+def cleanup_sandbox_slice(sock, unit, unit_file, sandboxes):
+    errors = []
+    for cid in sandboxes:
+        try:
+            api(sock, "DELETE", f"/containers/{cid}?force=true", ok=(204, 404))
+        except Exception as error:  # report every cleanup failure
+            errors.append(str(error))
+    systemctl("stop", unit, check=False)
+    if unit_file.exists():
+        unit_file.unlink()
+        systemctl("daemon-reload", check=False)
+    assert not errors, errors
 
 
 def sandbox_load_does_not_starve_server_health():
@@ -363,33 +464,7 @@ def sandbox_load_does_not_starve_server_health():
             quota = int(slice_values["CPUQuota"].rstrip("%")) / 100
             demand = SPINNER_SANDBOXES * SPINNERS_EACH / 2  # sum of per-sandbox NanoCpus
             assert demand > quota, "load must exceed the aggregate quota"
-            ids = {name: stack.compose("ps", "-q", name).stdout.strip() for name in STACK}
-            started_usage, started_at = slice_usage(cgroup), time.monotonic()
-            samples, latencies, failures = 0, [], []
-            while time.monotonic() - started_at < LOAD_SECONDS:
-                began = time.monotonic()
-                code, report = stack.readiness()
-                latency = time.monotonic() - began
-                latencies.append(latency)
-                if code != 0 or latency > READINESS_DEADLINE:
-                    failures.append({"latency": round(latency, 2), "code": code, "report": report})
-                for name, cid in ids.items():
-                    health = json.loads(stack.run("docker", "inspect", cid).stdout)[0]["State"]["Health"]
-                    if health["Status"] != "healthy" or health["FailingStreak"]:
-                        failures.append({"service": name, "status": health["Status"],
-                                         "failing_streak": health["FailingStreak"]})
-                worker = json.loads(stack.run("docker", "inspect", stack.compose("ps", "-q", "aq-worker-cloud").stdout.strip()).stdout)[0]
-                if not worker["State"]["Running"] or worker["RestartCount"]:
-                    failures.append({"service": "aq-worker-cloud", "state": worker["State"],
-                                     "restart_count": worker["RestartCount"]})
-                samples += 1
-                time.sleep(max(0, 1 - (time.monotonic() - began)))
-            elapsed = time.monotonic() - started_at
-            used = (slice_usage(cgroup) - started_usage) / 1e6 / elapsed
-            assert not failures, failures
-            assert samples >= LOAD_SECONDS // 3, samples
-            # Sandbox load is real but held to the aggregate quota.
-            assert quota * 0.6 <= used <= quota * 1.1, ("sandbox CPU outside quota", used, quota)
+            elapsed, used, samples, latencies = measure_sandbox_load(stack, cgroup, quota)
             oom = []
             for cid in hogs:
                 state = api(sock, "GET", f"/containers/{cid}/json")["State"]
@@ -403,17 +478,7 @@ def sandbox_load_does_not_starve_server_health():
                 "health": "postgres, server, aq-graph, aq-git healthy with zero failing streak throughout",
                 "host_cpus": os.cpu_count()}
     finally:
-        errors = []
-        for cid in sandboxes:
-            try:
-                api(sock, "DELETE", f"/containers/{cid}?force=true", ok=(204, 404))
-            except Exception as error:  # report every cleanup failure
-                errors.append(str(error))
-        systemctl("stop", unit, check=False)
-        if unit_file.exists():
-            unit_file.unlink()
-            systemctl("daemon-reload", check=False)
-        assert not errors, errors
+        cleanup_sandbox_slice(sock, unit, unit_file, sandboxes)
     evidence["sandbox_cleanup"] = "sandbox containers and transient slice removed"
     print(json.dumps(evidence, sort_keys=True))
     print("PASS compose_worker_starts_with_docker_local")

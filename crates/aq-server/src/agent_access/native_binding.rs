@@ -48,29 +48,8 @@ async fn seal(
     {
         return Err(Error("scope_denied"));
     }
-    let graph = serde_json::to_value(&a.graph)?;
-    if graph.is_null()
-        || graph["profile_id"] != profile["profile_id"]
-        || graph["profile_revision"] != profile["revision"]
-        || graph["profile_digest"] != digest(profile)?
-        || graph["context_digest"] != digest(context)?
-    {
-        return Err(Error("scope_denied"));
-    }
-    let binding = json!({"task_id":a.task_id,"attempt_id":a.attempt.attempt_id,"session_id":a.attempt.session_id,"generation":a.attempt.generation,"node_id":a.identity.node_id,"boot_id":a.identity.boot_id,"project_id":a.project_id,"workspace_id":graph["workspace_id"],"resolved_spec_digest":a.execution_spec_digest,"profile_digest":graph["profile_digest"],"context_digest":graph["context_digest"]});
-    if !contract::valid("Binding", &binding) {
-        return Err(Error("invalid_request"));
-    }
-    let p = Principal {
-        binding: binding.clone(),
-        profile: profile.clone(),
-        context: context.clone(),
-        version: i64::MAX,
-        revision: i64::MAX,
-        expires: 253402300799999,
-        ..Default::default()
-    };
-    graph::validate_launch(&p)?;
+    let p = launch_principal(&a, a.identity.node_id, profile, context)?;
+    let binding = p.binding.clone();
     p.issuance_response(&"a".repeat(47))?;
     let inserted=sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING").bind(a.attempt.attempt_id).bind(a.identity.node_id).bind(&binding).bind(profile).bind(context).execute(&mut **tx).await?.rows_affected();
     if inserted == 1 && super::grant_check::grant_tables(state) {

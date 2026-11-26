@@ -11,7 +11,7 @@ use aq_session_protocol::{Digest, SessionIdentity};
 use aq_worker_protocol::{AttemptRef, GraphBinding, NodeIdentity, SourceBinding};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgConnection, Postgres, Row, Transaction};
+use sqlx::{PgConnection, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -90,10 +90,10 @@ async fn node_revoked(
     policy: Policy,
     rows: Rows,
 ) -> Result<bool> {
-    let sql = rows.sql(
-        "SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1",
-        "FOR UPDATE",
-    );
+    // Terminal policies only sample it; the attempt row orders them, not the node row.
+    let terminal = matches!(policy, Policy::TerminalActive | Policy::TerminalHistorical);
+    let lock = if terminal { "" } else { "FOR UPDATE" };
+    let sql = rows.sql("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1", lock);
     let revoked: Option<bool> = sqlx::query_scalar(&sql)
         .bind(node)
         .fetch_optional(tx)
@@ -142,6 +142,39 @@ pub struct AuthorityView {
     pub rows: Rows,
 }
 impl AuthorityView {
+    fn require_record(&self, node: Uuid, attempt: Uuid, row: &PgRow) -> Result<()> {
+        if self.offer_id != row.get::<Uuid, _>("offer_id")
+            || self.identity.node_id != node
+            || self.attempt.attempt_id != attempt
+            || self.attempt.session_id != row.get::<Uuid, _>("session_id")
+            || self.task_id != row.get::<Uuid, _>("task_id")
+        {
+            return Err(AuthorityError::InvalidState);
+        }
+        Ok(())
+    }
+    /// Called after record verification and locks; sample the clock only after
+    /// checking the current boot, including on the compact authority path.
+    async fn require_policy(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        policy: Policy,
+        clock: impl Fn() -> Result<u64>,
+    ) -> Result<()> {
+        if matches!(policy, Policy::GraphActive | Policy::TerminalActive) {
+            require_current_boot(tx, &self.identity).await?;
+            self.active_at(clock()?)?;
+        }
+        if matches!(policy, Policy::TerminalActive)
+            && (self.kind != Kind::ProfiledV1
+                || self.execution_deadline_ms.is_none()
+                || !matches!(self.stop, Some(super::profiled::Stop::Running)))
+        {
+            return Err(AuthorityError::Unsupported);
+        }
+        Ok(())
+    }
+
     pub fn require_session(&self, expected: &SessionIdentity) -> Result<()> {
         if &self.session != expected {
             Err(AuthorityError::Identity)
@@ -209,7 +242,8 @@ pub async fn read(
 ) -> Result<AuthorityView> {
     load(state, tx, expected, policy, Rows::Snapshot).await
 }
-async fn load(
+/// `load_locked` or `read`, as `rows` says.
+pub async fn load(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     expected: &SessionIdentity,
@@ -294,68 +328,7 @@ async fn load_record_locked(
     let body: Value = row.get("state");
     let kind: String = row.get("kind");
     let mut view = if kind == "legacy_fixture" {
-        let value: AttemptState =
-            serde_json::from_value(body).map_err(|_| AuthorityError::InvalidState)?;
-        let graph = value
-            .offer
-            .spec
-            .bindings
-            .as_ref()
-            .and_then(|b| b.graph.clone());
-        let source = value
-            .offer
-            .spec
-            .bindings
-            .as_ref()
-            .and_then(|b| b.source.clone());
-        let session = SessionIdentity::Remote {
-            node_id: node,
-            boot_id: value.offer.identity.boot_id,
-            attempt_id: value.offer.attempt.attempt_id,
-            assignment_generation: value.offer.attempt.generation,
-            session_id: value.offer.attempt.session_id,
-        };
-        AuthorityView {
-            kind: Kind::LegacyFixture,
-            session,
-            identity: value.offer.identity,
-            attempt: value.offer.attempt,
-            offer_id: value.offer.offer_id,
-            project_id: value.offer.spec.project_id,
-            task_id: value.task_id,
-            graph,
-            source,
-            record_revision: 0,
-            authority_revision: 0,
-            grant_revision: 0,
-            holds_task: row.get("holds_task"),
-            status: match value.status {
-                AuthorityStatus::Offered => Status::Offered,
-                AuthorityStatus::Granted => Status::Granted,
-                AuthorityStatus::Cancelling => Status::Cancelling,
-                AuthorityStatus::Finished => Status::Finished,
-                AuthorityStatus::Declined => Status::Declined,
-            },
-            grant_id: None,
-            grant_expires_at_ms: value.grant_expires_at_ms,
-            execution_deadline_ms: None,
-            execution_spec_digest: value.offer.spec.resolved_spec_digest,
-            launch_manifest_digest: None,
-            terminal_policy: None,
-            selection_digest: None,
-            cancellation_id: value.cancellation_id,
-            revoked,
-            stopped: value.stopped,
-            stop: None,
-            retention: None,
-            effects: None,
-            release_ready: !row.get::<bool, _>("holds_task"),
-            retention_released: value
-                .disposition
-                .as_ref()
-                .is_some_and(|d| d.retention_release),
-            rows: Rows::Lock,
-        }
+        project_legacy(body, node, row.get("holds_task"), revoked)?
     } else if kind == "profiled_v1" {
         let deadline = row.get("execution_deadline_ms");
         load_profiled_compat(
@@ -371,38 +344,98 @@ async fn load_record_locked(
     } else {
         return Err(AuthorityError::Unsupported);
     };
-    if view.offer_id != row.get::<Uuid, _>("offer_id")
-        || view.identity.node_id != node
-        || view.attempt.attempt_id != attempt
-        || view.attempt.session_id != row.get::<Uuid, _>("session_id")
-        || view.task_id != row.get::<Uuid, _>("task_id")
-    {
-        return Err(AuthorityError::InvalidState);
-    }
+    view.require_record(node, attempt, &row)?;
     view.record_revision = row.get::<i64, _>("record_revision") as u64;
     view.authority_revision = row.get::<i64, _>("authority_revision") as u64;
     view.grant_revision = row.get::<i64, _>("grant_revision") as u64;
-    if matches!(policy, Policy::GraphActive | Policy::TerminalActive) {
-        let registered: Option<Value> =
-            sqlx::query_scalar("SELECT state->'identity' FROM execution_nodes WHERE node_id=$1")
-                .bind(node)
-                .fetch_optional(&mut **tx)
-                .await?;
-        if registered
-            != Some(serde_json::to_value(&view.identity).map_err(|_| AuthorityError::InvalidState)?)
-        {
-            return Err(AuthorityError::StaleBoot);
-        }
-        view.active_at(clock())?;
-    }
-    if matches!(policy, Policy::TerminalActive)
-        && (view.kind != Kind::ProfiledV1
-            || view.execution_deadline_ms.is_none()
-            || !matches!(view.stop, Some(super::profiled::Stop::Running)))
-    {
-        return Err(AuthorityError::Unsupported);
-    }
+    view.require_policy(tx, policy, || Ok(clock())).await?;
     Ok(view)
+}
+
+fn project_legacy(
+    body: Value,
+    node: Uuid,
+    holds_task: bool,
+    revoked: bool,
+) -> Result<AuthorityView> {
+    let value: AttemptState =
+        serde_json::from_value(body).map_err(|_| AuthorityError::InvalidState)?;
+    let graph = value
+        .offer
+        .spec
+        .bindings
+        .as_ref()
+        .and_then(|b| b.graph.clone());
+    let source = value
+        .offer
+        .spec
+        .bindings
+        .as_ref()
+        .and_then(|b| b.source.clone());
+    let session = SessionIdentity::Remote {
+        node_id: node,
+        boot_id: value.offer.identity.boot_id,
+        attempt_id: value.offer.attempt.attempt_id,
+        assignment_generation: value.offer.attempt.generation,
+        session_id: value.offer.attempt.session_id,
+    };
+    Ok(AuthorityView {
+        kind: Kind::LegacyFixture,
+        session,
+        identity: value.offer.identity,
+        attempt: value.offer.attempt,
+        offer_id: value.offer.offer_id,
+        project_id: value.offer.spec.project_id,
+        task_id: value.task_id,
+        graph,
+        source,
+        record_revision: 0,
+        authority_revision: 0,
+        grant_revision: 0,
+        holds_task,
+        status: match value.status {
+            AuthorityStatus::Offered => Status::Offered,
+            AuthorityStatus::Granted => Status::Granted,
+            AuthorityStatus::Cancelling => Status::Cancelling,
+            AuthorityStatus::Finished => Status::Finished,
+            AuthorityStatus::Declined => Status::Declined,
+        },
+        grant_id: None,
+        grant_expires_at_ms: value.grant_expires_at_ms,
+        execution_deadline_ms: None,
+        execution_spec_digest: value.offer.spec.resolved_spec_digest,
+        launch_manifest_digest: None,
+        terminal_policy: None,
+        selection_digest: None,
+        cancellation_id: value.cancellation_id,
+        revoked,
+        stopped: value.stopped,
+        stop: None,
+        retention: None,
+        effects: None,
+        release_ready: !holds_task,
+        retention_released: value
+            .disposition
+            .as_ref()
+            .is_some_and(|d| d.retention_release),
+        rows: Rows::Lock,
+    })
+}
+
+async fn require_current_boot(
+    tx: &mut Transaction<'_, Postgres>,
+    identity: &NodeIdentity,
+) -> Result<()> {
+    let registered: Option<Value> =
+        sqlx::query_scalar("SELECT state->'identity' FROM execution_nodes WHERE node_id=$1")
+            .bind(identity.node_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if registered != Some(serde_json::to_value(identity).map_err(|_| AuthorityError::InvalidState)?)
+    {
+        return Err(AuthorityError::StaleBoot);
+    }
+    Ok(())
 }
 
 /// Full immutable verification retained for compatibility and cache cold misses.
@@ -419,76 +452,8 @@ async fn load_profiled_compat(
         serde_json::from_value(body).map_err(|_| AuthorityError::InvalidState)?;
     value.validate().map_err(|_| AuthorityError::InvalidState)?;
     let immutable=sqlx::query(&rows.sql("SELECT l.launch_binding,l.launch_manifest,l.source_binding,l.manifest_digest,l.execution_spec_digest,l.execution_spec,s.selection_digest,s.selection,d.decision#>'{outcome,resolved}' AS admitted_selection FROM profiled_launches l JOIN intelligence_attempt_selections s ON s.attempt_id=l.attempt_id JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE l.attempt_id=$1", "FOR SHARE OF l,s,d")).bind(attempt).fetch_optional(&mut **tx).await?.ok_or(AuthorityError::InvalidState)?;
-    if immutable.get::<Value, _>("launch_binding")
-        != serde_json::to_value(&value.offer.binding).map_err(|_| AuthorityError::InvalidState)?
-        || immutable.get::<Value, _>("launch_manifest")
-            != serde_json::to_value(&value.offer.manifest)
-                .map_err(|_| AuthorityError::InvalidState)?
-        || immutable.get::<Value, _>("source_binding")
-            != serde_json::to_value(&value.source).map_err(|_| AuthorityError::InvalidState)?
-        || immutable.get::<String, _>("manifest_digest")
-            != value.offer.binding.launch_manifest_digest.as_str()
-        || immutable.get::<String, _>("execution_spec_digest")
-            != value.offer.binding.execution_spec_digest.as_str()
-    {
-        return Err(AuthorityError::InvalidState);
-    }
-    // A selection recorded before roles and profiles (spec 0014) keeps its
-    // old shape and its stored digest; no type here reads it.
-    let stored_selection: Value = immutable.get("selection");
-    let invalid = |_| AuthorityError::InvalidState;
-    let historical = aq_selection::recorded_before_roles(&stored_selection);
-    let selected: Option<aq_selection::ResolvedSelection> = match historical {
-        true => None,
-        false => Some(serde_json::from_value(stored_selection.clone()).map_err(invalid)?),
-    };
-    let selection_digest: Digest = match &selected {
-        Some(selected) => {
-            aq_selection::digest(selected).map_err(|_| AuthorityError::InvalidState)?
-        }
-        None => serde_json::from_value(Value::String(immutable.get("selection_digest")))
-            .map_err(invalid)?,
-    };
-    let spec: Value = immutable.get("execution_spec");
-    let admitted_selection: Value = immutable.get("admitted_selection");
-    if spec.get("kind").and_then(Value::as_str) != Some("synthetic_profiled_authority_fixture") {
-        let typed: aq_admission::execution_spec::ProfiledExecutionSpec =
-            serde_json::from_value(spec.clone()).map_err(|_| AuthorityError::InvalidState)?;
-        typed
-            .validate_against(&value.offer)
-            .map_err(|_| AuthorityError::InvalidState)?;
-        let format = match value.source.base.algorithm {
-            aq_worker_protocol::ObjectAlgorithm::Sha1 => aq_admission::ObjectFormat::Sha1,
-        };
-        if typed.selection_digest != selection_digest
-            || value.offer.manifest.selection_explanation.digest != selection_digest
-            || typed.source.repository_id != value.source.repository_id
-            || typed.source.repository_binding_generation != value.source.binding_generation
-            || typed.source.resolved_object.format != format
-            || typed.source.resolved_object.hex != value.source.base.hex
-            || typed.task_observation.digest.as_str() != value.graph.context_digest
-        {
-            return Err(AuthorityError::InvalidState);
-        }
-    }
-    let selected_node = match &value.offer.binding.session {
-        SessionIdentity::Remote {
-            node_id, boot_id, ..
-        } => aq_selection::ExecutionTarget::Worker {
-            node_id: *node_id,
-            boot_id: *boot_id,
-        },
-        _ => return Err(AuthorityError::Unsupported),
-    };
-    let manifest = &value.offer.manifest;
-    if admitted_selection != stored_selection
-        || immutable.get::<String, _>("selection_digest") != selection_digest.as_str()
-        || aq_selection::digest(&spec).map_err(|_| AuthorityError::InvalidState)?
-            != value.offer.binding.execution_spec_digest
-        || selected.is_some_and(|s| s.differs_from(manifest, &selected_node))
-    {
-        return Err(AuthorityError::InvalidState);
-    }
+    verify_launch(&value, &immutable)?;
+    let selection_digest = verify_selection(&value, &immutable)?;
     let release_ready = value.release_ready();
     let session = value.offer.binding.session.clone();
     let (identity, attempt) = remote(&session)?;
@@ -528,4 +493,91 @@ async fn load_profiled_compat(
         retention_released: release_ready,
         rows: Rows::Lock,
     })
+}
+
+fn verify_launch(value: &ProfiledState, immutable: &PgRow) -> Result<()> {
+    if immutable.get::<Value, _>("launch_binding")
+        != serde_json::to_value(&value.offer.binding).map_err(|_| AuthorityError::InvalidState)?
+        || immutable.get::<Value, _>("launch_manifest")
+            != serde_json::to_value(&value.offer.manifest)
+                .map_err(|_| AuthorityError::InvalidState)?
+        || immutable.get::<Value, _>("source_binding")
+            != serde_json::to_value(&value.source).map_err(|_| AuthorityError::InvalidState)?
+        || immutable.get::<String, _>("manifest_digest")
+            != value.offer.binding.launch_manifest_digest.as_str()
+        || immutable.get::<String, _>("execution_spec_digest")
+            != value.offer.binding.execution_spec_digest.as_str()
+    {
+        return Err(AuthorityError::InvalidState);
+    }
+    Ok(())
+}
+
+fn verify_selection(value: &ProfiledState, immutable: &PgRow) -> Result<Digest> {
+    // A selection recorded before roles and profiles (spec 0014) keeps its
+    // old shape and its stored digest; no type here reads it.
+    let stored_selection: Value = immutable.get("selection");
+    let invalid = |_| AuthorityError::InvalidState;
+    let historical = aq_selection::recorded_before_roles(&stored_selection);
+    let selected: Option<aq_selection::ResolvedSelection> = match historical {
+        true => None,
+        false => Some(serde_json::from_value(stored_selection.clone()).map_err(invalid)?),
+    };
+    let selection_digest: Digest = match &selected {
+        Some(selected) => {
+            aq_selection::digest(selected).map_err(|_| AuthorityError::InvalidState)?
+        }
+        None => serde_json::from_value(Value::String(immutable.get("selection_digest")))
+            .map_err(invalid)?,
+    };
+    let spec: Value = immutable.get("execution_spec");
+    let admitted_selection: Value = immutable.get("admitted_selection");
+    verify_execution_spec(value, &spec, &selection_digest)?;
+    let selected_node = match &value.offer.binding.session {
+        SessionIdentity::Remote {
+            node_id, boot_id, ..
+        } => aq_selection::ExecutionTarget::Worker {
+            node_id: *node_id,
+            boot_id: *boot_id,
+        },
+        _ => return Err(AuthorityError::Unsupported),
+    };
+    let manifest = &value.offer.manifest;
+    if admitted_selection != stored_selection
+        || immutable.get::<String, _>("selection_digest") != selection_digest.as_str()
+        || aq_selection::digest(&spec).map_err(|_| AuthorityError::InvalidState)?
+            != value.offer.binding.execution_spec_digest
+        || selected.is_some_and(|s| s.differs_from(manifest, &selected_node))
+    {
+        return Err(AuthorityError::InvalidState);
+    }
+    Ok(selection_digest)
+}
+
+fn verify_execution_spec(
+    value: &ProfiledState,
+    spec: &Value,
+    selection_digest: &Digest,
+) -> Result<()> {
+    if spec.get("kind").and_then(Value::as_str) != Some("synthetic_profiled_authority_fixture") {
+        let typed: aq_admission::execution_spec::ProfiledExecutionSpec =
+            serde_json::from_value(spec.clone()).map_err(|_| AuthorityError::InvalidState)?;
+        typed
+            .validate_against(&value.offer)
+            .map_err(|_| AuthorityError::InvalidState)?;
+        let format = match value.source.base.algorithm {
+            aq_worker_protocol::ObjectAlgorithm::Sha1 => aq_admission::ObjectFormat::Sha1,
+        };
+        if typed.selection_digest != *selection_digest
+            || value.offer.manifest.selection_explanation.digest != *selection_digest
+            || typed.source.repository_id != value.source.repository_id
+            || typed.source.repository_binding_generation != value.source.binding_generation
+            || typed.source.resolved_object.format != format
+            || typed.source.resolved_object.hex != value.source.base.hex
+            || typed.task_observation.digest.as_str() != value.graph.context_digest
+        {
+            return Err(AuthorityError::InvalidState);
+        }
+    }
+    Ok(())
 }

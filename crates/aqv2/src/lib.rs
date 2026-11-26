@@ -14,6 +14,8 @@ pub mod catalog;
 mod chat;
 pub mod cli;
 mod client;
+#[cfg(feature = "project_environments")]
+mod environment;
 pub mod flags;
 mod input;
 mod json;
@@ -195,6 +197,8 @@ async fn dispatch(ctx: &Ctx, command: &cli::Command) -> Result<Value> {
         C::Message(c) => typed::message(ctx, c).await,
         C::Conversation(c) => typed::conversation(ctx, c).await,
         C::Operation(c) => typed::operation(ctx, c).await,
+        #[cfg(feature = "project_environments")]
+        C::Environment(c) => environment::environment(ctx, c).await,
         C::External(tokens) => surface::external(ctx, tokens).await,
         C::Result(cli::ResultCommand::Command(rest)) => {
             let tokens: Vec<String> = std::iter::once("result".into())
@@ -329,6 +333,8 @@ fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
         C::Conversation(Conversation::Other(rest)) => ("conversation", rest),
         C::Operation(Operation::Other(rest)) => ("operation", rest),
         C::Result(cli::ResultCommand::Command(rest)) => ("result", rest),
+        #[cfg(feature = "project_environments")]
+        C::Environment(environment::Environment::Other(rest)) => ("environment", rest),
         _ => return None,
     };
     Some(
@@ -341,18 +347,7 @@ fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
 /// level, and under each typed group the registry commands that share it.
 pub fn with_registry_help(mut command: clap::Command) -> clap::Command {
     let program = program();
-    let mut groups = String::new();
-    let mut line = String::from(" ");
-    for g in flags::groups() {
-        if line.len() + g.len() > 76 {
-            groups.push_str(&line);
-            groups.push('\n');
-            line = String::from(" ");
-        }
-        line.push(' ');
-        line.push_str(&g);
-    }
-    groups.push_str(&line);
+    let groups = registry_groups();
     command = command.after_help(format!(
         "{}\n\nRegistry command groups (`{program} GROUP` lists a group, `{program} COMMAND --help` a command's flags):\n{groups}",
         cli::AFTER_HELP
@@ -368,19 +363,40 @@ pub fn with_registry_help(mut command: clap::Command) -> clap::Command {
         "operation",
         "result",
     ] {
-        let lines = flags::group(&[group.to_owned()]);
-        if lines.is_empty() {
+        let Some(text) = registry_group_help(group, program) else {
             continue;
-        }
-        let width = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
-        let mut text =
-            format!("Registry commands (`{program} COMMAND --help` shows a command's flags):\n");
-        for (tokens, summary) in lines {
-            text.push_str(&format!("  {tokens:<width$}  {summary}\n"));
-        }
+        };
         command = command.mut_subcommand(group, |c| c.after_help(text.trim_end().to_owned()));
     }
     command
+}
+fn registry_groups() -> String {
+    let mut groups = String::new();
+    let mut line = String::from(" ");
+    for g in flags::groups() {
+        if line.len() + g.len() > 76 {
+            groups.push_str(&line);
+            groups.push('\n');
+            line = String::from(" ");
+        }
+        line.push(' ');
+        line.push_str(&g);
+    }
+    groups.push_str(&line);
+    groups
+}
+fn registry_group_help(group: &str, program: &str) -> Option<String> {
+    let lines = flags::group(&[group.to_owned()]);
+    if lines.is_empty() {
+        return None;
+    }
+    let width = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
+    let mut text =
+        format!("Registry commands (`{program} COMMAND --help` shows a command's flags):\n");
+    for (tokens, summary) in lines {
+        text.push_str(&format!("  {tokens:<width$}  {summary}\n"));
+    }
+    Some(text)
 }
 pub async fn run(cli: cli::Cli) -> Result<Value> {
     if let Some(operation) = cli.commands.command.unsupported() {

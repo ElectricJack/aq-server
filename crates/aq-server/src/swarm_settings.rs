@@ -8,14 +8,14 @@ use axum::{
 use serde_json::Value;
 use uuid::Uuid;
 fn error(error: aq_swarm_settings::Error) -> AppError {
-    aq_swarm_settings::map_error(
-        error,
-        AppError::BadRequest,
-        AppError::Conflict,
-        AppError::NotFound,
-        crate::error::db,
-        AppError::Internal,
-    )
+    use aq_swarm_settings::Error;
+    match error {
+        Error::Invalid(message) => AppError::BadRequest(message),
+        Error::Conflict(message) => AppError::Conflict(message),
+        Error::NotFound(message) => AppError::NotFound(message),
+        Error::Database(error) => crate::error::db(error),
+        Error::Internal => AppError::Internal,
+    }
 }
 /// The configured providers; one whose saved Codex login is past the owner's age limit
 /// says so, since selection then treats that credential as missing.
@@ -57,10 +57,12 @@ async fn save(
 ) -> Result<Json<Value>, AppError> {
     aq_swarm_settings::http::save(
         &state.store.pool,
-        actor.id,
-        body,
+        aq_swarm_settings::http::SaveRequest {
+            actor: actor.id,
+            path: uri.path(),
+            body,
+        },
         &available(&state).await?,
-        uri.path(),
     )
     .await
     .map(Json)

@@ -18,6 +18,7 @@ pub use refusal::{CODES, Refusal, RefusalCode};
 /// The operations a grant can name (§6.2). Owner-only operations are listed
 /// separately in [`OWNER_ONLY`] and can never be held by an agent.
 pub mod op {
+    pub const WORKSPACE_REQUEST: &str = "task.workspace.request";
     pub const TASK_READ: &str = "task.read";
     pub const TASK_CREATE_SUBTASK: &str = "task.create.subtask";
     pub const TASK_CREATE_PROJECT: &str = "task.create.project";
@@ -36,8 +37,12 @@ pub mod op {
     pub const MESSAGE_READ: &str = "message.read";
     pub const MESSAGE_ACK: &str = "message.ack";
     pub const RESULT_READ: &str = "result.read";
+    /// Spec 0017 §6.2: build a recipe from the task's pushed head and run a command in it.
+    #[cfg(feature = "project_environments")]
+    pub const ENVIRONMENT_TRY: &str = "environment.try";
     /// Every grantable operation, in the order the spec lists them.
-    pub const ALL: [&str; 18] = [
+    pub const ALL: [&str; 19 + cfg!(feature = "project_environments") as usize] = [
+        WORKSPACE_REQUEST,
         TASK_READ,
         TASK_CREATE_SUBTASK,
         TASK_CREATE_PROJECT,
@@ -56,6 +61,8 @@ pub mod op {
         MESSAGE_READ,
         MESSAGE_ACK,
         RESULT_READ,
+        #[cfg(feature = "project_environments")]
+        ENVIRONMENT_TRY,
     ];
 }
 
@@ -393,27 +400,46 @@ pub enum Decision {
     Allow(Grant),
     Deny(Refusal),
 }
+/// A command and the operation grant it requires.
+#[derive(Debug, Clone, Copy)]
+pub struct RequiredGrant<'a> {
+    pub command: &'a str,
+    pub operation: &'a str,
+}
+impl<'a> RequiredGrant<'a> {
+    pub fn new(command: &'a str, operation: &'a str) -> Self {
+        Self { command, operation }
+    }
+}
+/// The grant requirement and target used in one authorization decision.
+#[derive(Debug, Clone, Copy)]
+pub struct GrantRequest<'a> {
+    pub required: RequiredGrant<'a>,
+    pub target: Target,
+}
+impl<'a> GrantRequest<'a> {
+    pub fn new(command: &'a str, operation: &'a str, target: Target) -> Self {
+        Self {
+            required: RequiredGrant::new(command, operation),
+            target,
+        }
+    }
+}
 /// Check `operation` for `command` against `grants` and the resolved target.
-pub fn check(
-    grants: &GrantSet,
-    holder: Holder,
-    command: &str,
-    operation: &str,
-    target: Target,
-) -> Decision {
+pub fn check(grants: &GrantSet, holder: Holder, request: GrantRequest<'_>) -> Decision {
+    let operation = request.required.operation;
+    let target = request.target;
     // Anything outside the grantable vocabulary is owner-only: deny by default.
     if owner_only(operation) || !grantable(operation) {
-        return Decision::Deny(Refusal::owner_only(command, operation));
+        return Decision::Deny(Refusal::owner_only(request.required));
     }
     match grants.get(operation) {
         None => Decision::Deny(Refusal::grant_missing(
-            command,
-            operation,
+            request.required,
             grants.related(operation),
         )),
         Some(g) if !allows(g.scope, holder, target) => Decision::Deny(Refusal::scope_denied(
-            command,
-            operation,
+            request.required,
             grants.related(operation),
         )),
         Some(g) => Decision::Allow(g.clone()),
@@ -423,7 +449,13 @@ pub fn check(
 /// Grant each `/v1/agent/*` question, comment, wait and result route requires, with
 /// the registry command it maps to (spec 0006 §9). The graph and message
 /// routes keep checking their agent-access-1 profile capability.
-pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 14] = [
+pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str);
+    15 + 2 * cfg!(feature = "project_environments") as usize] = [
+    (
+        "/v1/agent/workspace/request",
+        "task.workspace.request",
+        op::WORKSPACE_REQUEST,
+    ),
     ("/v1/agent/questions", "question.ask", op::QUESTION_ASK),
     (
         "/v1/agent/questions/show",
@@ -466,6 +498,18 @@ pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 14] = [
         "result.review.patch",
         op::RESULT_READ,
     ),
+    #[cfg(feature = "project_environments")]
+    (
+        "/v1/agent/environments/try",
+        "environment.try",
+        op::ENVIRONMENT_TRY,
+    ),
+    #[cfg(feature = "project_environments")]
+    (
+        "/v1/agent/environments/try/{job_id}",
+        "environment.job.show",
+        op::ENVIRONMENT_TRY,
+    ),
 ];
 /// `(command, grant, target)` for an agent route path. Comments act on a
 /// task thread related to the attempt's task as `relation` (its own task
@@ -474,21 +518,21 @@ pub fn route_grant(
     path: &str,
     holder: Holder,
     relation: Relation,
-) -> Option<(&'static str, &'static str, Target)> {
+) -> Option<GrantRequest<'static>> {
     let (_, command, grant) = AGENT_ROUTE_GRANTS.iter().find(|(p, _, _)| *p == path)?;
     let target = if grant.starts_with("comment.") {
         Target::Task {
             project: holder.project,
             relation,
         }
-    } else if *grant == op::RESULT_READ {
-        // Results are read by project: `result.read@project:self` reaches them
-        // and no narrower scope does.
+    } else if *grant == op::RESULT_READ || grant.starts_with("environment.") {
+        // Results are read, and environments tried, by project:
+        // `project:self` reaches them and no narrower scope does.
         Target::Project(holder.project)
     } else {
         Target::OwnAttempt
     };
-    Some((command, grant, target))
+    Some(GrantRequest::new(command, grant, target))
 }
 
 impl Target {
@@ -544,20 +588,37 @@ pub struct AttemptIds {
     pub task_id: Uuid,
     pub project_id: Uuid,
 }
+/// Identity recorded on an audit row, including attempt provenance for agents.
+pub struct AuditCaller {
+    pub kind: &'static str,
+    pub id: Uuid,
+    pub attempt: Option<AttemptIds>,
+}
+/// The authorization decision as the server saw it, before the audit grant is resolved.
+pub struct AuditDecision<'a> {
+    pub command: &'a str,
+    pub grant: Option<&'a str>,
+    pub target: Option<&'a Target>,
+    pub decision: &'a Decision,
+}
 impl AuditEntry {
-    /// Any caller's decision; `ids` is the attempt for an agent.
-    #[allow(clippy::too_many_arguments)]
     pub fn caller(
-        caller_kind: &'static str,
-        caller_id: Uuid,
-        ids: Option<AttemptIds>,
-        command: &str,
-        grant: Option<&str>,
-        target: Option<&Target>,
-        decision: &Decision,
+        caller: AuditCaller,
+        checked: AuditDecision<'_>,
         operation_id: Option<Uuid>,
         request_id: Uuid,
     ) -> Self {
+        let AuditCaller {
+            kind: caller_kind,
+            id: caller_id,
+            attempt: ids,
+        } = caller;
+        let AuditDecision {
+            command,
+            grant,
+            target,
+            decision,
+        } = checked;
         Self {
             caller_kind,
             caller_id,
@@ -578,12 +639,15 @@ impl AuditEntry {
     }
     pub fn agent(
         ids: AttemptIds,
-        command: &str,
-        grant: &str,
-        target: Target,
+        request: GrantRequest<'_>,
         decision: &Decision,
         request_id: Uuid,
     ) -> Self {
+        let RequiredGrant {
+            command,
+            operation: grant,
+        } = request.required;
+        let target = request.target;
         Self {
             caller_kind: "agent",
             caller_id: ids.attempt_id,

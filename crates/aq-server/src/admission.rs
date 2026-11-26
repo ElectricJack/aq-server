@@ -101,40 +101,11 @@ pub fn classify(path: &str) -> Class {
         return Class::AgentCommand;
     }
     #[cfg(feature = "delivery_playbook")]
-    if path.starts_with("/v1/git/") {
+    if path.starts_with("/v1/git/") || path.starts_with("/v1/supervisor/git/") {
         return Class::GitTransfer;
     }
-    if path == "/v1/worker/profiled/material-presence" {
-        return Class::MaterialPresence;
-    }
-    if path == "/v1/worker/profiled/inventory-v2" {
-        return Class::MaterialInventory;
-    }
-
-    if path == "/v1/worker/profiled/renew" {
-        return Class::Renewal;
-    }
-    if path.starts_with("/v1/worker/profiled/source/")
-        || matches!(
-            path,
-            "/v1/worker/profiled/material"
-                | "/v1/worker/profiled/material/refresh"
-                | "/v1/worker/profiled/artifact"
-        )
-    {
-        return Class::Bulk;
-    }
-    if matches!(
-        path,
-        "/v1/worker/profiled/register"
-            | "/v1/worker/profiled/accept"
-            | "/v1/worker/profiled/prepare"
-            | "/v1/worker/profiled/launch-closure"
-            | "/v1/worker/profiled/poll"
-            | "/v1/worker/profiled/started"
-            | "/v1/worker/profiled/stopped"
-    ) {
-        return Class::Control;
+    if let Some(class) = profiled_class(path) {
+        return class;
     }
     if path.starts_with("/api/observations/") {
         return Class::ObservationRead;
@@ -204,6 +175,42 @@ pub fn classify(path: &str) -> Class {
         Class::General
     }
 }
+fn profiled_class(path: &str) -> Option<Class> {
+    if path == "/v1/worker/profiled/material-presence" {
+        return Some(Class::MaterialPresence);
+    }
+    if path == "/v1/worker/profiled/inventory-v2" {
+        return Some(Class::MaterialInventory);
+    }
+
+    if path == "/v1/worker/profiled/renew" {
+        return Some(Class::Renewal);
+    }
+    if path.starts_with("/v1/worker/profiled/source/")
+        || matches!(
+            path,
+            "/v1/worker/profiled/material"
+                | "/v1/worker/profiled/material/refresh"
+                | "/v1/worker/profiled/artifact"
+        )
+    {
+        return Some(Class::Bulk);
+    }
+    if matches!(
+        path,
+        "/v1/worker/profiled/register"
+            | "/v1/worker/profiled/accept"
+            | "/v1/worker/profiled/prepare"
+            | "/v1/worker/profiled/launch-closure"
+            | "/v1/worker/profiled/poll"
+            | "/v1/worker/profiled/started"
+            | "/v1/worker/profiled/stopped"
+    ) {
+        return Some(Class::Control);
+    }
+    None
+}
+
 fn busy(path: &str, message: &str) -> Response {
     tracing::warn!(%path, "request refused with 503: {message}");
     let mut response = if matches!(
@@ -335,7 +342,7 @@ mod output_poll_tests {
     #[cfg(feature = "delivery_playbook")]
     #[test]
     fn git_transfers_take_their_own_lane_outside_the_bulk_deadline() {
-        let path = "/v1/git/7d1f2ad4-0f0b-4c5e-9a46-2b1c1b7a9d11/git-receive-pack";
-        assert_eq!(classify(path), Class::GitTransfer);
+        assert_eq!(classify("/v1/git/r/git-receive-pack"), Class::GitTransfer);
+        assert_eq!(classify("/v1/supervisor/git/r/x"), Class::GitTransfer);
     }
 }

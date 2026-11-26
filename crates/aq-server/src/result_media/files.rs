@@ -254,9 +254,11 @@ impl Root {
             (w + usize::from(a.writer), r + a.readers)
         });
         let occupied = all.get(&id);
-        if writer && (writers >= 2 || occupied.is_some_and(|a| a.writer || a.readers > 0))
-            || !writer && (readers >= 4 || occupied.is_some_and(|a| a.writer))
-        {
+        let busy = match (writer, occupied) {
+            (true, activity) => writers >= 2 || activity.is_some_and(|a| a.writer || a.readers > 0),
+            (false, activity) => readers >= 4 || activity.is_some_and(|a| a.writer),
+        };
+        if busy {
             return Err(Error::Busy);
         }
         let a = all.entry(id).or_default();
@@ -456,22 +458,7 @@ impl Root {
         let dir = match directory(parent, name.as_ref()) {
             Ok(dir) => dir,
             Err(_) => {
-                // openat's error is deliberately opaque, but only ENOENT from
-                // fstatat can confirm absence; symlinks/unreadable is failure.
-                return match nix::sys::stat::fstatat(
-                    Some(parent.as_raw_fd()),
-                    name.as_str(),
-                    nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-                ) {
-                    Err(Errno::ENOENT) => {
-                        // A prior interrupted unlink may be visible but not
-                        // durable. Confirm the parent before releasing charge.
-                        io(parent.sync_all())?;
-                        self.point("absence_durable")?;
-                        self.check()
-                    }
-                    _ => Err(Error::Storage),
-                };
+                return self.confirm_absent(parent, &name);
             }
         };
         private(&dir, true)?;
@@ -505,6 +492,24 @@ impl Root {
             _ => Err(Error::Storage),
         }
     }
+    fn confirm_absent(&self, parent: &File, name: &str) -> Result<()> {
+        // openat's error is deliberately opaque, but only ENOENT from
+        // fstatat can confirm absence; symlinks/unreadable is failure.
+        match nix::sys::stat::fstatat(
+            Some(parent.as_raw_fd()),
+            name,
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Err(Errno::ENOENT) => {
+                // A prior interrupted unlink may be visible but not
+                // durable. Confirm the parent before releasing charge.
+                io(parent.sync_all())?;
+                self.point("absence_durable")?;
+                self.check()
+            }
+            _ => Err(Error::Storage),
+        }
+    }
     pub fn point(&self, _name: &str) -> Result<()> {
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -535,5 +540,62 @@ impl Drop for ActivityGuard {
                 all.remove(&self.id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// `Root::open` refuses a root that is not 0700, and `tempdir()`
+    /// follows the umask (0755 on CI runners).
+    fn private_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
+
+    #[test]
+    fn activity_limits_keep_readers_and_writers_exclusive_per_generation() {
+        let dir = private_dir();
+        let root = Root::open(dir.path(), Uuid::new_v4()).unwrap();
+        let reading = Uuid::new_v4();
+        let readers: Vec<_> = (0..4)
+            .map(|_| root.active(reading, false).unwrap())
+            .collect();
+        assert!(matches!(
+            root.active(Uuid::new_v4(), false),
+            Err(Error::Busy)
+        ));
+        assert!(matches!(root.active(reading, true), Err(Error::Busy)));
+        let writing = Uuid::new_v4();
+        let writer = root.active(writing, true).unwrap();
+        let other_writer = root.active(Uuid::new_v4(), true).unwrap();
+        assert!(matches!(
+            root.active(Uuid::new_v4(), true),
+            Err(Error::Busy)
+        ));
+        drop(readers);
+        assert!(matches!(root.active(writing, false), Err(Error::Busy)));
+        assert!(matches!(root.active(writing, true), Err(Error::Busy)));
+        drop(writer);
+        let reader = root.active(writing, false).unwrap();
+        assert!(matches!(root.active(writing, true), Err(Error::Busy)));
+        drop(reader);
+        root.active(writing, true).unwrap();
+        drop(other_writer);
+    }
+
+    #[test]
+    fn cleanup_confirms_absence_but_refuses_a_symlink_generation() {
+        let dir = private_dir();
+        let root = Root::open(dir.path(), Uuid::new_v4()).unwrap();
+        let id = Uuid::new_v4();
+        root.remove(id, false).unwrap();
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("staging").join(id.to_string()))
+            .unwrap();
+        assert!(matches!(root.remove(id, false), Err(Error::Storage)));
     }
 }

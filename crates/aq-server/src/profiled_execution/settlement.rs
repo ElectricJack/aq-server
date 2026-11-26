@@ -10,9 +10,14 @@ mod automatic;
 mod completion;
 use aq_profiled_state::default_policy;
 mod facts;
+#[cfg(feature = "delivery_playbook")]
+pub(crate) use facts::retained_bundle_head;
 mod owner;
 pub mod publication;
+#[cfg(feature = "delivery_playbook")]
+pub(crate) use automatic::recover_held_for_retry_exact;
 pub use automatic::settle_after_record;
+pub(crate) use automatic::settle_workspace_checkpoint_locked;
 pub use automatic::{
     AutoDisposition, AutoSettlement, ReplacementFacts, record_replacement_facts,
     reworked_without_facts,
@@ -47,3 +52,6 @@ fn default_policy_offers_name_the_policy_actor() {
     let other = r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
     assert_eq!(review_requirement(other), HumanOwner);
 }
+
+#[cfg(all(feature = "project_environments", feature = "delivery_playbook"))]
+pub(crate) use automatic::publication_retry::terminal_refusal;

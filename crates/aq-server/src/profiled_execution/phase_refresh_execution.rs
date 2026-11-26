@@ -152,7 +152,7 @@ fn validate_provenance_profile(
     {
         return Err(refused());
     }
-    let fact = receipt
+    let registry_matches_provenance = receipt
         .confirmation
         .facts
         .iter()
@@ -163,23 +163,16 @@ fn validate_provenance_profile(
                 preflight_registry,
                 current_registry,
                 ..
-            } => Some((
-                selected_registry,
-                accepted_registry,
-                preflight_registry,
-                current_registry,
-            )),
+            } => Some(
+                selected_registry == &p.selected_registry
+                    && accepted_registry == &p.accepted_registry
+                    && preflight_registry == &p.preflight_registry
+                    && current_registry == &p.current_registry,
+            ),
             _ => None,
         })
         .ok_or_else(|| refused())?;
-    if fact
-        != (
-            &p.selected_registry,
-            &p.accepted_registry,
-            &p.preflight_registry,
-            &p.current_registry,
-        )
-    {
+    if !registry_matches_provenance {
         return Err(refused());
     }
     Ok(())
@@ -239,17 +232,4 @@ async fn replay_preflight(
     let pinned = Box::pin(pinned::load_replay_locked(state, tx, auth, q, original)).await?;
     validate_replay_floor(registry, &pinned.registry_at_load)?;
     Ok(Some(pinned))
-}
-
-async fn observe_ready(
-    state: &AppState,
-    graph: &crate::agent_access::Runtime,
-    workspace: uuid::Uuid,
-) -> Result<
-    crate::agent_access::scheduling::ReadyPage,
-    crate::agent_access::scheduling::SchedulingReadError,
-> {
-    graph
-        .scheduling_ready_current(workspace, 8, None, state.clock.as_ref())
-        .await
 }

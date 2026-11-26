@@ -205,8 +205,10 @@ subject revision and the single `expected_versions` entry (`task` or
   `schema.json`, which is the feature-off build's) sets what the task needs
   from its environment (Graph metadata `aq:needs`, a list of at most 32
   distinct capability labels) or clears it when `needs` is null, absent or
-  empty. It preserves other metadata keys. Once any attempt of the task has
-  been granted the operation is `rejected`, as for `task.role.set`. The same
+  empty. It preserves other metadata keys. After a grant, only a direct owner
+  can change the needs of a successor. AQ requires current stopped-result
+  evidence and reconciled effects before the edit. The previous grant and
+  result keep their original environment. The same
   build accepts `needs` on `task.create` and on each task of
   `task.graph.create`; a malformed list is `422`.
 - `task.route.set` puts an owner route on the task: `class` is
@@ -217,7 +219,13 @@ subject revision and the single `expected_versions` entry (`task` or
   task version and record the change in the route history; a stale version
   returns a `conflict`.
 - `task.dependency.add` adds a `blocks` edge from `blocker_id`;
-  `task.dependency.remove` removes `edge_id` at `edge_version`.
+  `task.dependency.remove` removes `edge_id` at `edge_version`. With
+  `resume_held: true`, a task held at a limit an owner retry overrides (a
+  budget, or delivery's return limit) waits on the blocker instead: the edge
+  is added first, then the hold's override is recorded under the operation's
+  id, and the ordinary poll replaces the stopped attempt once the blocker
+  completes. Any other hold, or no hold, is `rejected` with its reason code
+  and no edge is added.
 - `task.activate` makes a `draft` task `active`, so the scheduler may start
   it. A task in any other state is `rejected` and nothing is written:
   reopening a completed or canceled task is not activation. A draft has never

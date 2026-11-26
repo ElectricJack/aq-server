@@ -14,6 +14,9 @@ pub struct QualifiedRuntime {
     pub capabilities: Vec<aq_session_protocol::Capability>,
     pub features: Vec<Feature>,
     pub material_delivery: Option<DeliveryCapability>,
+    /// Backend attested by the daemon operator for this exact runtime qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_kind: Option<aq_selection::BackendKind>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +32,25 @@ pub struct ProjectPolicy {
     /// Agent grant ceilings, owner additions and draft authority by work kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_grants: Option<aq_agent_grants::resolve::ProjectGrants>,
+}
+impl ProjectPolicy {
+    /// The retained source-policy record for this project at one configuration.
+    pub(crate) fn record(
+        &self,
+        revision: u64,
+        configuration_digest: aq_admission::Digest,
+    ) -> ProjectPolicyRecord {
+        ProjectPolicyRecord {
+            schema_version: 1,
+            project_id: self.project_id,
+            revision,
+            configuration_digest,
+            enabled: self.enabled,
+            priority: self.priority,
+            source: self.source.clone(),
+            retention_handle: self.retention_handle,
+        }
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -105,45 +127,8 @@ impl ProfiledConfig {
         {
             return Err("profiled policy bounds".into());
         }
-        let mut runtimes = BTreeSet::new();
-        for item in &self.qualified_runtimes {
-            artifact(&item.runtime)?;
-            artifact(&item.qualification)?;
-            if !runtimes.insert((item.runtime.id.clone(), item.runtime.version.clone()))
-                || item.features.len() > 4
-                || item.features.iter().collect::<BTreeSet<_>>().len() != item.features.len()
-            {
-                return Err("duplicate or unbounded qualified runtime".into());
-            }
-            aq_session_protocol::require_capabilities(&item.capabilities, &item.capabilities)
-                .map_err(|_| "invalid qualified runtime capabilities")?;
-            if let Some(delivery) = &item.material_delivery {
-                artifact(&delivery.adapter)?;
-                if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
-                    return Err("unsupported configured material delivery".into());
-                }
-            }
-        }
-        let mut projects = BTreeSet::new();
-        for project in &self.projects {
-            if project.project_id.is_nil()
-                || !projects.insert(project.project_id)
-                || project.retention_handle.is_nil()
-                || !(-1_000_000..=1_000_000).contains(&project.priority)
-            {
-                return Err("project source policy bounds".into());
-            }
-            project
-                .source
-                .validate()
-                .map_err(|_| "explicit immutable object or safe source ref required")?;
-            if let Some(g) = &project.agent_grants {
-                g.validate().map_err(|e| e.to_string())?;
-            }
-            if let Some(placement) = &project.placement {
-                placement.validate()?;
-            }
-        }
+        validate_runtimes(&self.qualified_runtimes)?;
+        validate_projects(&self.projects)?;
         Ok(())
     }
     /// Compact authority anchor. Private immutable Definition construction proves
@@ -173,16 +158,7 @@ impl ProfiledConfig {
             .iter()
             .find(|policy| policy.project_id == project_id)
             .ok_or("project has no configured source policy")?;
-        Ok(ProjectPolicyRecord {
-            schema_version: 1,
-            project_id,
-            revision: self.revision,
-            configuration_digest: self.configuration_digest()?,
-            enabled: policy.enabled,
-            priority: policy.priority,
-            source: policy.source.clone(),
-            retention_handle: policy.retention_handle,
-        })
+        Ok(policy.record(self.revision, self.configuration_digest()?))
     }
     pub fn project_policy_ref(&self, project_id: Uuid) -> Result<ArtifactRef, String> {
         self.project_policy_record(project_id)?.artifact()
@@ -202,19 +178,16 @@ impl ProfiledConfig {
             .ok_or("runtime has no exact daemon-owned qualification")?;
         aq_session_protocol::require_capabilities(&runtime.capabilities, &request.capabilities)
             .map_err(|_| "qualified runtime capability mismatch")?;
-        if request
-            .features
-            .iter()
-            .any(|feature| !runtime.features.contains(feature))
-            || runtime
-                .features
-                .iter()
-                .any(|feature| !request.features.contains(feature))
-        {
+        if !same_features(&request.features, &runtime.features) {
             return Err("qualified runtime feature mismatch".into());
         }
         Ok(runtime)
     }
+}
+/// Both feature lists contain exactly the same features.
+fn same_features(requested: &[Feature], qualified: &[Feature]) -> bool {
+    requested.iter().all(|feature| qualified.contains(feature))
+        && qualified.iter().all(|feature| requested.contains(feature))
 }
 pub fn deserialize<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -225,4 +198,58 @@ pub fn deserialize<'de, D: serde::Deserializer<'de>>(
             Ok(std::sync::Arc::new(config))
         })
         .transpose()
+}
+
+fn validate_runtimes(items: &[QualifiedRuntime]) -> Result<(), String> {
+    let mut runtimes = BTreeSet::new();
+    for item in items {
+        artifact(&item.runtime)?;
+        artifact(&item.qualification)?;
+        if !runtimes.insert((item.runtime.id.clone(), item.runtime.version.clone()))
+            || item.features.len() > 4
+            || item.features.iter().collect::<BTreeSet<_>>().len() != item.features.len()
+        {
+            return Err("duplicate or unbounded qualified runtime".into());
+        }
+        aq_session_protocol::require_capabilities(&item.capabilities, &item.capabilities)
+            .map_err(|_| "invalid qualified runtime capabilities")?;
+        validate_material_delivery(item)?;
+    }
+    Ok(())
+}
+
+/// Configured material delivery is version 1 and requires server material.
+fn validate_material_delivery(item: &QualifiedRuntime) -> Result<(), String> {
+    let Some(delivery) = &item.material_delivery else {
+        return Ok(());
+    };
+    artifact(&delivery.adapter)?;
+    if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
+        return Err("unsupported configured material delivery".into());
+    }
+    Ok(())
+}
+
+fn validate_projects(items: &[ProjectPolicy]) -> Result<(), String> {
+    let mut projects = BTreeSet::new();
+    for project in items {
+        if project.project_id.is_nil()
+            || !projects.insert(project.project_id)
+            || project.retention_handle.is_nil()
+            || !(-1_000_000..=1_000_000).contains(&project.priority)
+        {
+            return Err("project source policy bounds".into());
+        }
+        project
+            .source
+            .validate()
+            .map_err(|_| "explicit immutable object or safe source ref required")?;
+        if let Some(g) = &project.agent_grants {
+            g.validate().map_err(|e| e.to_string())?;
+        }
+        if let Some(placement) = &project.placement {
+            placement.validate()?;
+        }
+    }
+    Ok(())
 }

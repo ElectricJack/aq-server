@@ -191,11 +191,7 @@ pub fn header<'a>(mut values: impl Iterator<Item = Option<&'a str>>) -> Result<O
         return Err(Error::Invalid("duplicate node slot header"));
     }
     let value = value.ok_or(Error::Invalid("invalid node slot header"))?;
-    if value.is_empty()
-        || value.len() > 4
-        || value.starts_with('0')
-        || !value.bytes().all(|v| v.is_ascii_digit())
-    {
+    if !canonical_slot(value) {
         return Err(Error::Invalid("invalid node slot header"));
     }
     let slot = value
@@ -205,6 +201,12 @@ pub fn header<'a>(mut values: impl Iterator<Item = Option<&'a str>>) -> Result<O
         return Err(Error::Invalid("invalid node slot header"));
     }
     Ok(Some(slot))
+}
+
+fn canonical_slot(value: &str) -> bool {
+    (1..=4).contains(&value.len())
+        && !value.starts_with('0')
+        && value.bytes().all(|v| v.is_ascii_digit())
 }
 
 /// Redelivery preserves an existing reservation even above a lowered count, but

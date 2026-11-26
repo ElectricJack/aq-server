@@ -9,6 +9,16 @@ pub(super) fn function_body(name: &str) -> Result<&'static str> {
     aq_profiled_state::sql_function_body(sql, name).ok_or_else(corrupt)
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
+    validate_functions(tx, supported).await?;
+    validate_triggers(tx).await?;
+    validate_keys(tx).await
+}
+
+fn expected_body(name: &str, supported: u32) -> Result<&'static str> {
+    super::compute41::contract_ids(supported, name).map_or_else(|| function_body(name), Ok)
+}
+
+async fn validate_functions(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
     for (name, signature, language, set) in [
         (
             "profiled_close_ungranted",
@@ -27,11 +37,14 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
     ] {
         let actual: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1) AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname=$2 AND p.prokind='f' AND p.proretset=$3 AND NOT p.proisstrict AND p.proparallel='u'")
             .bind(format!("{name}({signature})")).bind(language).bind(set).fetch_optional(&mut **tx).await?;
-        let ids = super::compute41::contract_ids(supported, name);
-        if actual.as_deref() != Some(ids.map_or_else(|| function_body(name), Ok)?) {
+        if actual.as_deref() != Some(expected_body(name, supported)?) {
             return Err(corrupt());
         }
     }
+    Ok(())
+}
+
+async fn validate_triggers(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     for (table, trigger, function, kind) in [
         (
             "profiled_cancellations",
@@ -70,6 +83,10 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
             return Err(corrupt());
         }
     }
+    Ok(())
+}
+
+async fn validate_keys(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     // Primary/foreign keys are the retained identity joins, including the
     // one-cancellation and one-proven-settlement-per-attempt constraints.
     let valid:bool=sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM (VALUES ('profiled_cancellations',1,1),('profiled_cancel_operations',1,1),('profiled_cancelled_settlements',1,2)) e(name,pk,fk) WHERE (SELECT count(*) FROM pg_constraint WHERE conrelid=to_regclass(e.name) AND contype='p' AND convalidated)<>e.pk OR (SELECT count(*) FROM pg_constraint WHERE conrelid=to_regclass(e.name) AND contype='f' AND convalidated)<>e.fk)")
@@ -78,4 +95,33 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
         return Err(corrupt());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn function_bodies_follow_frozen_migration_boundaries() {
+        for name in [
+            "profiled_close_ungranted",
+            "profiled_close_expired_ungranted",
+            "profiled_cancelled_settlement_guard",
+            "profiled_cancelled_absence_guard",
+        ] {
+            let mut expected = None;
+            for (version, sql) in super::super::MIGRATIONS {
+                if let Some(body) = aq_profiled_state::sql_function_body(sql, name) {
+                    expected = Some(body);
+                }
+                if *version >= 43 {
+                    assert_eq!(
+                        Some(expected_body(name, *version as u32).unwrap()),
+                        expected,
+                        "{name} at format {version}"
+                    );
+                }
+            }
+        }
+    }
 }

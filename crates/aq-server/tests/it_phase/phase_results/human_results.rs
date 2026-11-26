@@ -1,4 +1,5 @@
 // Actual SQL/router origins with synthetic fixture proof DTOs, not a harness run.
+use crate::common::supervisor::{supervised, supervisor_token};
 use aq_server::profiled_execution::human_results as api;
 use axum::{
     body::{Body, to_bytes},
@@ -43,6 +44,188 @@ fn detail(report: &ResultReport, revision: &str, profile: bool) -> String {
         }
     )
 }
+
+fn assert_source_metadata(item: &Value, retained: &Value, report: &ResultReport) {
+    assert_eq!(item["origin"], ORIGIN);
+    assert_eq!(
+        item["project_id"],
+        retained["spec"]["lifecycle"]["project_id"]
+    );
+    assert_eq!(item["task_id"], retained["spec"]["task"]["task_id"]);
+    assert_eq!(
+        item["repository_id"],
+        retained["spec"]["source"]["repository_id"]
+    );
+    assert_eq!(
+        item["source_base"],
+        retained["spec"]["source"]["resolved_object"]
+    );
+    assert_eq!(item["source_receipt_ids"], json!(report.source_receipt_ids));
+    assert_eq!(item["pending_effect_ids"], json!(report.pending_effect_ids));
+    for forbidden in [
+        "credential",
+        "execution_spec",
+        "launch_manifest",
+        "accepted",
+        "settled",
+        "eligible",
+        "stop",
+        "identity",
+    ] {
+        assert!(item.get(forbidden).is_none(), "unexpected {forbidden}");
+    }
+}
+
+async fn assert_unavailable_report(f: &terminal::Prepared, report_id: Uuid, reason: &str) {
+    let (status, page) = get(f, "/api/human/results?profile=recorded_native_v2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["incomplete"], true);
+    assert_eq!(page["items"], serde_json::json!([]));
+    assert_eq!(page["unavailable"][0]["report_id"], json!(report_id));
+    assert_eq!(page["unavailable"][0]["reason"], reason);
+}
+
+async fn assert_paginated_sources(f: &terminal::Prepared, retained: &Value, report: &ResultReport) {
+    let (status, first) = get(f, "/api/human/results?profile=recorded_native_v2&limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["coverage"], api::NATIVE_V2_COVERAGE);
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    let cursor = first["next_after"].as_str().unwrap();
+    let (status, second) = get(
+        f,
+        &format!("/api/human/results?profile=recorded_native_v2&limit=1&after={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(second["next_after"].is_null());
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert!(
+        first["items"][0]["report_id"].as_str().unwrap()
+            < second["items"][0]["report_id"].as_str().unwrap()
+    );
+    for item in [&first["items"][0], &second["items"][0]] {
+        assert_source_metadata(item, retained, report);
+    }
+}
+
+#[tokio::test]
+async fn a_project_supervisor_discovers_native_results_in_both_reads() {
+    let (f, report) = Box::pin(ready()).await;
+    let env = &f.c.env.env;
+    let (state, pool) = (&env.state, &env.pool);
+    let auth = terminal::auth(&f).await;
+    let receipt = results::record(state, &auth, &report).await.unwrap();
+    let (project, task): (Uuid, Uuid) =
+        sqlx::query_as("SELECT project_id,task_id FROM result_revision_pins WHERE report_id=$1")
+            .bind(report.report_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let other = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')",
+    )
+    .bind(other)
+    .bind(serde_json::json!({"name":"Other","enabled":true}))
+    .execute(pool)
+    .await
+    .unwrap();
+    #[cfg(not(feature = "supervisor_full_access"))]
+    let app = aq_server::build_worker_router(state.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    let app = aq_server::build_worker_router_with_owner_app(
+        state.clone(),
+        aq_server::build_admin_router(state.clone()),
+    );
+    let own = supervisor_token(state, pool, Some(project)).await;
+    let foreign = supervisor_token(state, pool, Some(other)).await;
+    let global = supervisor_token(state, pool, None).await;
+    let (status, list) = supervised(&app, &own, "result.list", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["coverage"], api::NATIVE_V2_COVERAGE);
+    assert_eq!(
+        list["items"][0]["report_id"],
+        serde_json::json!(report.report_id)
+    );
+    assert_eq!(list["items"][0]["origin"], ORIGIN);
+    assert_eq!(list["items"][0]["revision"], receipt.report_digest.as_str());
+    let exact =
+        serde_json::json!({"result_id":report.report_id,"revision":receipt.report_digest.as_str()});
+    let (status, found) = supervised(&app, &own, "result.show", exact.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(
+        found["items"][0]["report_id"],
+        serde_json::json!(report.report_id)
+    );
+    assert_eq!(found["items"][0]["current_report_head"], true);
+    assert_eq!(
+        supervised(&app, &foreign, "result.show", exact.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        supervised(&app, &global, "result.show", exact.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let mut legacy = exact;
+    legacy["profile"] = serde_json::json!("recorded_legacy_native_only");
+    assert_eq!(
+        supervised(&app, &own, "result.show", legacy).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, legacy) = supervised(
+        &app,
+        &own,
+        "result.list",
+        serde_json::json!({"profile":"recorded_legacy_native_only"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["coverage"], api::COVERAGE);
+    assert!(legacy["items"].as_array().unwrap().is_empty(), "{legacy}");
+    let (status, defaults) = supervised(&app, &global, "result.list", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{defaults}");
+    assert_eq!(defaults["coverage"], api::COVERAGE);
+    for params in [
+        serde_json::json!({}),
+        serde_json::json!({"scope":"project","project_id":project,"task_id":task}),
+    ] {
+        let (status, feed) = supervised(&app, &own, "result.feed", params).await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        assert_eq!(
+            feed["scope"]["project_id"],
+            serde_json::json!(project),
+            "{feed}"
+        );
+        assert_eq!(
+            feed["data"]["items"][0]["revision"]["report_id"],
+            serde_json::json!(report.report_id),
+            "{feed}"
+        );
+    }
+    let (status, refused) = supervised(
+        &app,
+        &foreign,
+        "result.feed",
+        serde_json::json!({"project_id":project}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["error"], "supervisor_refused");
+    let (status, empty) = supervised(
+        &app,
+        &foreign,
+        "result.feed",
+        serde_json::json!({"task_id":task}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["data"]["items"], serde_json::json!([]), "{empty}");
+}
+
 #[tokio::test]
 async fn opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait() {
     let (f, report) = Box::pin(ready()).await;
@@ -106,6 +289,48 @@ async fn opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait() {
     );
     assert_eq!(before, invariant(&f).await);
 }
+async fn assert_exact_report_head(f: &terminal::Prepared, path: &str, head_report_id: Uuid) {
+    let (status, exact) = get(f, path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(exact["items"].as_array().unwrap().len(), 1);
+    assert!(exact["next_after"].is_null());
+    assert_eq!(exact["items"][0]["origin"], ORIGIN);
+    assert_eq!(exact["items"][0]["current_report_head"], false);
+    assert_eq!(exact["items"][0]["head_report_id"], json!(head_report_id));
+}
+
+async fn assert_result_query_filters(f: &terminal::Prepared, report: &ResultReport, path: &str) {
+    assert_eq!(
+        get(f, &detail(report, &"f".repeat(64), true)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(f, &format!("{path}&project_id={}", Uuid::new_v4()))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(f, "/api/human/results?profile=unknown").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get(f, "/api/human/results?profile=recorded_native_v2&unknown=1")
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, scoped) = get(
+        f,
+        &format!(
+            "/api/human/results?profile=recorded_native_v2&project_id={}",
+            Uuid::new_v4()
+        ),
+    )
+    .await;
+    assert!(scoped["items"].as_array().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only() {
     let (f, report) = Box::pin(ready()).await;
@@ -140,96 +365,10 @@ async fn opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only(
             .0,
         StatusCode::NOT_FOUND
     );
-    let (status, first) = get(&f, "/api/human/results?profile=recorded_native_v2&limit=1").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(first["coverage"], api::NATIVE_V2_COVERAGE);
-    assert_eq!(first["items"].as_array().unwrap().len(), 1);
-    let cursor = first["next_after"].as_str().unwrap();
-    let (status, second) = get(
-        &f,
-        &format!("/api/human/results?profile=recorded_native_v2&limit=1&after={cursor}"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(second["next_after"].is_null());
-    assert_eq!(second["items"].as_array().unwrap().len(), 1);
-    assert!(
-        first["items"][0]["report_id"].as_str().unwrap()
-            < second["items"][0]["report_id"].as_str().unwrap()
-    );
-    for item in [&first["items"][0], &second["items"][0]] {
-        assert_eq!(item["origin"], ORIGIN);
-        assert_eq!(
-            item["project_id"],
-            retained["spec"]["lifecycle"]["project_id"]
-        );
-        assert_eq!(item["task_id"], retained["spec"]["task"]["task_id"]);
-        assert_eq!(
-            item["repository_id"],
-            retained["spec"]["source"]["repository_id"]
-        );
-        assert_eq!(
-            item["source_base"],
-            retained["spec"]["source"]["resolved_object"]
-        );
-        assert_eq!(item["source_receipt_ids"], json!(report.source_receipt_ids));
-        assert_eq!(item["pending_effect_ids"], json!(report.pending_effect_ids));
-        for forbidden in [
-            "credential",
-            "execution_spec",
-            "launch_manifest",
-            "accepted",
-            "settled",
-            "eligible",
-            "stop",
-            "identity",
-        ] {
-            assert!(item.get(forbidden).is_none(), "unexpected {forbidden}");
-        }
-    }
+    assert_paginated_sources(&f, &retained, &report).await;
     let path = detail(&report, receipt.report_digest.as_str(), true);
-    let (status, exact) = get(&f, &path).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(exact["items"].as_array().unwrap().len(), 1);
-    assert!(exact["next_after"].is_null());
-    assert_eq!(exact["items"][0]["origin"], ORIGIN);
-    assert_eq!(exact["items"][0]["current_report_head"], false);
-    assert_eq!(
-        exact["items"][0]["head_report_id"],
-        json!(correction.report_id)
-    );
-    assert_eq!(
-        get(&f, &detail(&report, &"f".repeat(64), true)).await.0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&f, &format!("{path}&project_id={}", Uuid::new_v4()))
-            .await
-            .0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&f, "/api/human/results?profile=unknown").await.0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        get(
-            &f,
-            "/api/human/results?profile=recorded_native_v2&unknown=1"
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    let (_, scoped) = get(
-        &f,
-        &format!(
-            "/api/human/results?profile=recorded_native_v2&project_id={}",
-            Uuid::new_v4()
-        ),
-    )
-    .await;
-    assert!(scoped["items"].as_array().unwrap().is_empty());
+    assert_exact_report_head(&f, &path, correction.report_id).await;
+    assert_result_query_filters(&f, &report, &path).await;
     assert_eq!(
         invariants,
         invariant(&f).await,
@@ -247,15 +386,11 @@ async fn opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only(
         StatusCode::FORBIDDEN
     );
 }
-#[tokio::test]
-async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
-    let (f, report) = Box::pin(ready()).await;
-    let auth = terminal::auth(&f).await;
-    let receipt = results::record(&f.c.env.env.state, &auth, &report)
-        .await
-        .unwrap();
-    let path = detail(&report, receipt.report_digest.as_str(), true);
-    assert_eq!(get(&f, &path).await.0, StatusCode::OK);
+async fn assert_terminal_qualification_fence(
+    f: &terminal::Prepared,
+    report: &ResultReport,
+    path: &str,
+) {
     let pool = &f.c.env.env.pool;
     let original: Value = sqlx::query_scalar(
         "SELECT phase_terminal_qualification FROM profiled_stopped_receipts WHERE attempt_id=$1",
@@ -278,13 +413,8 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
     tx.commit().await.unwrap();
     // The exact read keeps the origin fence as a refusal; a list isolates the
     // refused report in `unavailable` rather than failing every report.
-    assert_eq!(get(&f, &path).await.0, StatusCode::CONFLICT);
-    let (status, page) = get(&f, "/api/human/results?profile=recorded_native_v2").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(page["incomplete"], true);
-    assert_eq!(page["items"], serde_json::json!([]));
-    assert_eq!(page["unavailable"][0]["report_id"], serde_json::json!(report.report_id));
-    assert_eq!(page["unavailable"][0]["reason"], "refused");
+    assert_eq!(get(f, path).await.0, StatusCode::CONFLICT);
+    assert_unavailable_report(f, report.report_id, "refused").await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_stopped_receipts DISABLE TRIGGER profiled_stopped_immutable")
         .execute(&mut *tx)
@@ -303,7 +433,11 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    assert_eq!(get(&f, &path).await.0, StatusCode::OK);
+    assert_eq!(get(f, path).await.0, StatusCode::OK);
+}
+
+async fn assert_result_origin_fence(f: &terminal::Prepared, report: &ResultReport, path: &str) {
+    let pool = &f.c.env.env.pool;
     // Even a valid enum/fk shape cannot relabel the nominal issued family.
     let foreign = if ORIGIN == "phase_execution_v2" {
         "phase_refresh_execution_v1"
@@ -326,15 +460,10 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    assert_eq!(get(&f, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(get(f, path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
     // The exact read stays a refusal, but a list isolates the one bad report
     // and says so: the page is incomplete, not an error for every report.
-    let (status, page) = get(&f, "/api/human/results?profile=recorded_native_v2").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(page["incomplete"], true);
-    assert_eq!(page["items"], serde_json::json!([]));
-    assert_eq!(page["unavailable"][0]["report_id"], serde_json::json!(report.report_id));
-    assert_eq!(page["unavailable"][0]["reason"], "validation_failed");
+    assert_unavailable_report(f, report.report_id, "validation_failed").await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")
         .execute(&mut *tx)
@@ -351,7 +480,20 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    assert_eq!(get(f, path).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
+    let (f, report) = Box::pin(ready()).await;
+    let auth = terminal::auth(&f).await;
+    let receipt = results::record(&f.c.env.env.state, &auth, &report)
+        .await
+        .unwrap();
+    let path = detail(&report, receipt.report_digest.as_str(), true);
     assert_eq!(get(&f, &path).await.0, StatusCode::OK);
+    assert_terminal_qualification_fence(&f, &report, &path).await;
+    assert_result_origin_fence(&f, &report, &path).await;
 }
 #[tokio::test]
 async fn phase_result_without_uploads_lists_an_empty_media_page() {
@@ -378,11 +520,20 @@ async fn phase_result_without_uploads_lists_an_empty_media_page() {
     )
     .await
     .unwrap();
-    let app = aq_server::build_admin_router_with_optional_owners(state, None, None, None, Some(media.clone()));
+    let app = aq_server::build_admin_router_with_optional_owners(
+        state,
+        None,
+        None,
+        None,
+        Some(media.clone()),
+    );
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("{}/media", detail(&report, receipt.report_digest.as_str(), false)))
+                .uri(format!(
+                    "{}/media",
+                    detail(&report, receipt.report_digest.as_str(), false)
+                ))
                 .header("x-aq-dev-email", "owner@localhost")
                 .body(Body::empty())
                 .unwrap(),
@@ -390,10 +541,14 @@ async fn phase_result_without_uploads_lists_an_empty_media_page() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let page: Value = serde_json::from_slice(&to_bytes(response.into_body(), 262144).await.unwrap()).unwrap();
+    let page: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 262144).await.unwrap()).unwrap();
     assert_eq!(page["items"], json!([]));
     assert_eq!(page["binding"]["report_id"], json!(report.report_id));
-    assert_eq!(page["binding"]["report_revision"], receipt.report_digest.as_str());
+    assert_eq!(
+        page["binding"]["report_revision"],
+        receipt.report_digest.as_str()
+    );
     assert_eq!(page["binding"]["coverage"], "recorded_legacy_native_only");
     media.shutdown().await.unwrap();
 }

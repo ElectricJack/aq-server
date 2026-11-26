@@ -28,6 +28,69 @@ async fn read(app: &axum::Router, path: &str, email: &str) -> (StatusCode, serde
     (code, serde_json::from_slice(&bytes).unwrap())
 }
 
+/// A quarantined H3 episode with one delivered owner nudge and one inbox-only nudge.
+async fn seed_stall_and_nudges(pool: &sqlx::PgPool, attempt: Uuid, task: Uuid) -> (Uuid, Uuid) {
+    let mut ep = ladder::Episode::open(attempt, task, &ExecutionPolicy::v1(), NOW);
+    ep.rung = ladder::Rung::Quarantined;
+    ep.rung_since_ms = NOW + 10;
+    ep.explanation = Some(Explanation::RegisteredWait);
+    ep.nudges = 2;
+    ep.notified = true;
+    sqlx::query("INSERT INTO stall_episodes(episode_id,attempt_id,lineage_id,policy_version,revision,rung,state,updated_at_ms) VALUES($1,$2,$3,1,7,'quarantined',$4,$5)")
+        .bind(ep.episode_id).bind(attempt).bind(task).bind(json!(ep)).bind((NOW + 20) as i64)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'replacement_ceiling','owner','{}',$3,$4)")
+        .bind(attempt).bind(task).bind(Uuid::new_v4()).bind((NOW + 30) as i64)
+        .execute(pool).await.unwrap();
+    seed_nudges(pool, attempt, ep.episode_id).await
+}
+
+/// One delivered owner nudge and one deferred stall action in the inbox.
+async fn seed_nudges(pool: &sqlx::PgPool, attempt: Uuid, episode: Uuid) -> (Uuid, Uuid) {
+    sqlx::query("INSERT INTO mailbox_heads(mailbox_key,next_cursor) VALUES('g10-ops',3)")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (handed, inbox) = (Uuid::new_v4(), Uuid::new_v4());
+    for (cursor, id, inbox_only) in [(1i64, handed, false), (2, inbox, true)] {
+        sqlx::query("INSERT INTO mailbox_messages(message_id,mailbox_key,cursor,thread_id,sender,recipient,payload_digest,body,created_at_ms) VALUES($1,'g10-ops',$2,$1,'{}','{}','x','nudge',$3)")
+            .bind(id).bind(cursor).bind(NOW as i64).execute(pool).await.unwrap();
+        let action = if inbox_only {
+            let action = Uuid::new_v4();
+            sqlx::query("INSERT INTO stall_actions(action_id,episode_id,kind,ordinal,expected_revision,intent,created_at_ms,receipt,receipted_at_ms,delivery) VALUES($1,$2,'nudge',1,1,'{}',$3,'{}',$3,'deferred')")
+                .bind(action).bind(episode).bind(NOW as i64).execute(pool).await.unwrap();
+            Some(action)
+        } else {
+            None
+        };
+        sqlx::query("INSERT INTO stall_nudges(message_id,attempt_id,action_id,inbox_only,created_at_ms) VALUES($1,$2,$3,$4,$5)")
+            .bind(id).bind(attempt).bind(action).bind(inbox_only).bind((NOW + cursor as u64) as i64)
+            .execute(pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO mailbox_deliveries(delivery_id,message_id,attempt_id,disposition,updated_at_ms) VALUES($1,$2,$3,'handed_to_harness',$4)")
+        .bind(Uuid::new_v4()).bind(handed).bind(attempt).bind((NOW + 40) as i64)
+        .execute(pool).await.unwrap();
+    (handed, inbox)
+}
+
+async fn seed_semantic_progress(pool: &sqlx::PgPool, node: Uuid, task: Uuid, attempt: Uuid) {
+    // Semantic progress counts tool starts; terminal output does not.
+    sqlx::query("INSERT INTO observation_nodes(node_id) VALUES($1) ON CONFLICT DO NOTHING")
+        .bind(node)
+        .execute(pool)
+        .await
+        .unwrap();
+    for (seq, at, kind) in [
+        (900_001i64, NOW + 50, "tool_started"),
+        (900_002, NOW + 60, "usage"),
+    ] {
+        sqlx::query("INSERT INTO observation_events(event_id,node_id,sequence,lineage_id,attempt_id,recorded_at_ms,record,decision) VALUES($1,$2,$3,$4,$5,$6,$7,'{}')")
+            .bind(Uuid::new_v4()).bind(node).bind(seq).bind(task).bind(attempt).bind(at as i64)
+            .bind(json!({"body":{"kind":{"kind":kind}}}))
+            .execute(pool).await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn owner_operations_read_projects_stall_wait_nudge_progress_and_manifest() {
     let w = Box::pin(wait_env()).await;
@@ -48,57 +111,8 @@ async fn owner_operations_read_projects_stall_wait_nudge_progress_and_manifest()
             .await
             .unwrap();
 
-    // H3: a quarantined episode explained by a wait, and two nudges.
-    let mut ep = ladder::Episode::open(attempt, task, &ExecutionPolicy::v1(), NOW);
-    ep.rung = ladder::Rung::Quarantined;
-    ep.rung_since_ms = NOW + 10;
-    ep.explanation = Some(Explanation::RegisteredWait);
-    ep.nudges = 2;
-    ep.notified = true;
-    sqlx::query("INSERT INTO stall_episodes(episode_id,attempt_id,lineage_id,policy_version,revision,rung,state,updated_at_ms) VALUES($1,$2,$3,1,7,'quarantined',$4,$5)")
-        .bind(ep.episode_id).bind(attempt).bind(task).bind(json!(ep)).bind((NOW + 20) as i64)
-        .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'replacement_ceiling','owner','{}',$3,$4)")
-        .bind(attempt).bind(task).bind(Uuid::new_v4()).bind((NOW + 30) as i64)
-        .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO mailbox_heads(mailbox_key,next_cursor) VALUES('g10-ops',3)")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let (handed, inbox) = (Uuid::new_v4(), Uuid::new_v4());
-    for (cursor, id, inbox_only, owner) in [(1i64, handed, false, true), (2, inbox, true, false)] {
-        sqlx::query("INSERT INTO mailbox_messages(message_id,mailbox_key,cursor,thread_id,sender,recipient,payload_digest,body,created_at_ms) VALUES($1,'g10-ops',$2,$1,'{}','{}','x','nudge',$3)")
-            .bind(id).bind(cursor).bind(NOW as i64).execute(&pool).await.unwrap();
-        let action = if owner {
-            None
-        } else {
-            let action = Uuid::new_v4();
-            sqlx::query("INSERT INTO stall_actions(action_id,episode_id,kind,ordinal,expected_revision,intent,created_at_ms,receipt,receipted_at_ms,delivery) VALUES($1,$2,'nudge',1,1,'{}',$3,'{}',$3,'deferred')")
-                .bind(action).bind(ep.episode_id).bind(NOW as i64).execute(&pool).await.unwrap();
-            Some(action)
-        };
-        sqlx::query("INSERT INTO stall_nudges(message_id,attempt_id,action_id,inbox_only,created_at_ms) VALUES($1,$2,$3,$4,$5)")
-            .bind(id).bind(attempt).bind(action).bind(inbox_only).bind((NOW + cursor as u64) as i64)
-            .execute(&pool).await.unwrap();
-    }
-    sqlx::query("INSERT INTO mailbox_deliveries(delivery_id,message_id,attempt_id,disposition,updated_at_ms) VALUES($1,$2,$3,'handed_to_harness',$4)")
-        .bind(Uuid::new_v4()).bind(handed).bind(attempt).bind((NOW + 40) as i64)
-        .execute(&pool).await.unwrap();
-    // Semantic progress counts tool starts; terminal output does not.
-    sqlx::query("INSERT INTO observation_nodes(node_id) VALUES($1) ON CONFLICT DO NOTHING")
-        .bind(f.node.node_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    for (seq, at, kind) in [
-        (900_001i64, NOW + 50, "tool_started"),
-        (900_002, NOW + 60, "usage"),
-    ] {
-        sqlx::query("INSERT INTO observation_events(event_id,node_id,sequence,lineage_id,attempt_id,recorded_at_ms,record,decision) VALUES($1,$2,$3,$4,$5,$6,$7,'{}')")
-            .bind(Uuid::new_v4()).bind(f.node.node_id).bind(seq).bind(task).bind(attempt).bind(at as i64)
-            .bind(json!({"body":{"kind":{"kind":kind}}}))
-            .execute(&pool).await.unwrap();
-    }
+    let (handed, inbox) = seed_stall_and_nudges(&pool, attempt, task).await;
+    seed_semantic_progress(&pool, f.node.node_id, task, attempt).await;
 
     let app = aq_server::build_admin_router(f.state.clone());
     let (code, boot) = read(&app, "/api/v1/bootstrap", "owner@localhost").await;

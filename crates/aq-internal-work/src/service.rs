@@ -17,12 +17,12 @@ pub type Now = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// Tells a supervisor: the project's when `project` is set (the global one
 /// when that project has none), else the global supervisor. The server sends
-/// it as a message in that supervisor's conversation.
+/// it as a message in that supervisor's conversation and answers its id.
 pub type NotifySupervisor = Arc<
     dyn Fn(
             Option<Uuid>,
             String,
-        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<Uuid, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -91,7 +91,9 @@ impl Service {
         let (pool, now_ms) = (&self.pool, (self.now)());
         let candidates = self.resolve(request, now_ms).await?;
         let candidates = candidates.as_deref().map_err(String::as_str);
-        store::submit_as(pool, id, request, candidates, now_ms).await
+        store::Queue::at(pool, now_ms)
+            .submit_as(id, request, candidates)
+            .await
     }
 
     /// Settings (or the request's override) pick the profile; the profile
@@ -163,7 +165,9 @@ impl Service {
         let now_ms = (self.now)();
         let candidates = self.resolve(&row.request, now_ms).await?;
         let candidates = candidates.as_deref().map_err(String::as_str);
-        store::submit_retry(&self.pool, &row.request, candidates, lineage, now_ms).await
+        store::Queue::at(&self.pool, now_ms)
+            .submit_retry(&row.request, candidates, lineage)
+            .await
     }
 
     /// The `/escalate` of a supervisor: the owner gets the failed run, with
@@ -191,11 +195,37 @@ impl Service {
                 .project_id
                 .filter(|_| !cfg!(feature = "supervisor_full_access"));
             match notify(project, notice::supervisor(&row)).await {
-                Ok(()) => told += 1,
+                Ok(_) => told += 1,
                 Err(error) => tracing::warn!(run = %row.id, %error, "telling a supervisor failed"),
             }
         }
         Ok(told)
+    }
+
+    /// A project supervisor's escalation (`supervisor.escalate`), told to the
+    /// global supervisor; answers the message id.
+    pub async fn escalate_decision(
+        &self,
+        project: Uuid,
+        task: Option<Uuid>,
+        decision: &str,
+    ) -> Result<Uuid> {
+        let known: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM project_execution_bindings WHERE project_id=$1)",
+        )
+        .bind(project)
+        .fetch_one(&self.pool)
+        .await?;
+        if !known {
+            return Err(Error::NotFound("No such project".into()));
+        }
+        let unavailable = || Error::Conflict("The global supervisor cannot be told now".into());
+        let notify = self.notify.as_ref().ok_or_else(unavailable)?;
+        let task = task.map_or(String::new(), |task| format!(", task {task}"));
+        let body = format!(
+            "Escalation from the project supervisor of project {project}{task}. The decision it needs, in its words:\n{decision}\n\nDecide what you can and act on it. When the decision is the owner's, say so in your reply with the project, the task and the decision needed."
+        );
+        notify(None, body).await.map_err(|_| unavailable())
     }
 
     /// The candidates of `profile`, or why there are none.
@@ -222,7 +252,15 @@ impl Service {
             .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
             .map_err(|_| Error::Corrupt)?;
         let now = u64::try_from(now_ms).unwrap_or(0);
-        let resolved = resolve(snapshot, registry, &observations, profile, now);
+        let resolved = resolve(
+            snapshot,
+            registry,
+            ObservedAt {
+                observations: &observations,
+                now_ms: now,
+            },
+            profile,
+        );
         Ok(resolved
             .map(|resolved| resolved.candidates)
             .map_err(|_| format!("intelligence profile {profile:?} has no usable candidate")))
@@ -285,10 +323,18 @@ impl Service {
         let (id, index) = (claimed.id, claimed.candidate_index);
         match checked {
             Ok((answer, usage)) => {
-                store::complete(pool, id, index, &answer, usage.as_ref(), now()).await
+                store::Queue::at(pool, now())
+                    .complete(
+                        store::CandidateAttempt::new(id, index),
+                        &answer,
+                        usage.as_ref(),
+                    )
+                    .await
             }
             Err((reason, detail)) => {
-                store::fail_candidate(pool, id, index, reason, &detail, now()).await
+                store::Queue::at(pool, now())
+                    .fail_candidate(store::CandidateAttempt::new(id, index), reason, &detail)
+                    .await
             }
         }
     }
@@ -343,7 +389,8 @@ impl Service {
     ) {
         while !*stop.borrow() {
             while self.enabled && running.len() < API_CONCURRENCY {
-                let claimed = store::claim(&self.pool, Way::Api, &[], &self.runner, (self.now)());
+                let claimed =
+                    store::Queue::at(&self.pool, (self.now)()).claim(Way::Api, &[], &self.runner);
                 match claimed.await {
                     Ok(Some(claimed)) => {
                         let service = Arc::clone(self);

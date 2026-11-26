@@ -1,28 +1,28 @@
 {
   "source_repository": "aq-worker",
-  "source_revision": "c3af96037083508f5cb586861ca0bbb615569f16",
+  "source_revision": "e0ef3e2bfc7746ee88760f3652ad9d5a3ca9ea14",
   "method": "Cargo package archives; public contract only, immutable integration candidate, no remote publication",
   "packages": [
     {
       "name": "aq-worker-protocol",
-      "version": "0.2.0",
-      "archive_sha256": "6278b14d3923248a34af1e3f48bfc4410766d080a25eae6accde5a597658c684",
+      "version": "0.2.1",
+      "archive_sha256": "f51abb177b7200ee74f0f85fcc67e42c33b83019cef7a2e9bc69082c625337e4",
       "files": [
         {
           "path": ".cargo_vcs_info.json",
-          "sha256": "17a747fd978747d7e2f51313a4a0b7603565cc0664349cb6cf08b53054b05775"
+          "sha256": "dc698a697281cb714c670499ea141b0ccbf76c59af6a03ba841d1b93532c08df"
         },
         {
           "path": "Cargo.lock",
-          "sha256": "c2fcd832761d205113a8f1fce4adbd3d3782bd105dcf85fe1d65c55ea25f0bb2"
+          "sha256": "ef802cbdc838a48b2904d62f465714aa1220441974a309b5ed86632c230dbe10"
         },
         {
           "path": "Cargo.toml",
-          "sha256": "4be3fc2e759af93390fa4b455d6f757557f6bd0827dc699925ecbdcdb63aa47d"
+          "sha256": "79aeba9b8fc58b9b989b15aeb0395f8f11e6001a4a75fc2121bdb2b7c6a3a6ab"
         },
         {
           "path": "Cargo.toml.orig",
-          "sha256": "aec32c542381f3ba170d7595dab8cfbc24e0cc9de1dbfbf0e970d1c181ddf3a0"
+          "sha256": "71ebfc2a1889bfb1bd647d0331eb381b1389844339142be5f675420f3c71127f"
         },
         {
           "path": "examples/fixtures.rs",
@@ -41,16 +41,24 @@
           "sha256": "c916367bf00ad78a18ee4df709829a8fb9843f5a11446e1940e2aa57f87b0de7"
         },
         {
+          "path": "src/git_author.rs",
+          "sha256": "ccd0d20fd0e14052b34a9e45c0cb2062ed748b77ce95417bc20cafb778bde167"
+        },
+        {
           "path": "src/lib.rs",
-          "sha256": "c3c7cf66aa40d2d6a52009187231ae8e8e857c41c4c1c69ed327c5a600c72905"
+          "sha256": "b51bef5dcaf84fd41a0842b698858171874eea96e5781c0ac9866e773c31c4b4"
         },
         {
           "path": "src/m4.rs",
-          "sha256": "89b5285310ae431908f630eba1ce9d99b793b73a2043af09745267c3fce2e4f7"
+          "sha256": "49360108f6022e6960b6d46d907fd51c90e380eebcbac5e9596ffc753da3779c"
+        },
+        {
+          "path": "src/retained_git.rs",
+          "sha256": "8e4bfe9af214db035b300dede9446af16c725c5469f4db11d78d39f6a97697f5"
         },
         {
           "path": "src/testing.rs",
-          "sha256": "c6724fbfcd9eebafb725266aa9f38e381dd7750ad621988e93f956396e191bd9"
+          "sha256": "6094356b18978ebcc40330975342f237e2456ada2dd918dcc009799374a68bbc"
         },
         {
           "path": "tests/conformance.rs",
@@ -60,36 +68,38 @@
           "path": "tests/m4.rs",
           "sha256": "37604a4dda663d5050068c1963e2d84a57cd31f6d48f26a4860582200351e6a9"
         }
-      ],
-      "source_revision": "cf87edffa3384a08f5bb0319b4f92ffc2a26b145"
+      ]
     },
     {
       "name": "aq-protocol",
-      "version": "0.1.0",
-      "archive_sha256": "8141cf1b30c2f098d2ff244e891cd71636426e0fdbb430f8351cc9f2f9343a90",
+      "version": "0.1.4",
+      "archive_sha256": "a12a3e4802fe8f2abcf929c2242e81b7afc790259acb9b00611c3258453b4080",
       "files": [
         {
           "path": ".cargo_vcs_info.json",
-          "sha256": "e0030765e1fd697adcc359fae6e19d6420dc20ffd14275f02161e94c33fe1a48"
+          "sha256": "b6035d0dbd0877d487a34cf8156fc044d39d2a7a19009226ed8aa4d3795ddbc0"
         },
         {
           "path": "Cargo.lock",
-          "sha256": "7e9c0492b2b99c8ae7702b94d45b6b73b75406b5eff2ae45044cd5ef56574220"
+          "sha256": "170b8c78dccd7267b13ceab309e2a065f6595dc4934c4061acfe06092293b28b"
         },
         {
           "path": "Cargo.toml",
-          "sha256": "c51bf772787a0de43d557bc057b21ae92bad53fc9a435b0bb2ee032c33d42dd5"
+          "sha256": "a72caaca794d57ce420a0e06e66d18a68b80d924888b82aa4cbe6d8940e3bf9e"
         },
         {
           "path": "Cargo.toml.orig",
-          "sha256": "b1f5460343cc24104291d3ddca0b44346442576add78ade9f3efa6a5e6fec8a8"
+          "sha256": "ed3cdff16b12cd1e83988cb2a661519e2af9085ca77ec22e1e1453be2c84abad"
+        },
+        {
+          "path": "fixtures/machine-v1.json",
+          "sha256": "f3cdf47c95ab08690d0b38c689ae8dee571c30a71fa4433f8affd4018fa833e9"
         },
         {
           "path": "src/lib.rs",
-          "sha256": "ae06f83f6e30cd390d25a46114a79ce1740342cd7aa82ab86f8f2174a8c0c32f"
+          "sha256": "3722357f5a0b46042716113f7d4cf091da79705a454b916a7d1ef867c1310094"
         }
-      ],
-      "source_revision": "e67ca81dd0c6978498ed2de66f0e44e9893f4e01"
+      ]
     }
   ]
 }

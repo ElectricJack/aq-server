@@ -124,6 +124,33 @@ async fn member(
     assert_eq!(Digest::of(&out).as_str(), digest);
     out
 }
+async fn wait_for_proposal_expiry(
+    proposal: &phase::Proposal,
+    accepted: &phase::AcceptedDelivery,
+) -> u64 {
+    // No clock substitution, offer/source retiming, TTL change or retry tuning.
+    let current = chrono::Utc::now().timestamp_millis() as u64;
+    let wait = proposal
+        .original
+        .offered
+        .clock
+        .expires_at_ms
+        .saturating_sub(current)
+        + 25;
+    assert!(wait <= 2025);
+    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    let current = chrono::Utc::now().timestamp_millis() as u64;
+    assert!(current >= proposal.original.offered.clock.expires_at_ms);
+    assert!(current < accepted.receipt.lease.expires_at_ms);
+    current
+}
+
+async fn source_manifest(c: &Case, binding: &aq_admission::LaunchBinding) -> Value {
+    let response = get(c, binding, None, 0).await;
+    assert_eq!(response.status(), 200);
+    serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
 #[tokio::test]
 #[ignore = "qualification requires explicit pinned actual aq-git and Git executable paths"]
 async fn actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease() {
@@ -174,31 +201,12 @@ async fn actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_le
         .await
         .unwrap();
     assert!(accepted.receipt.lease.expires_at_ms > proposal.original.offered.clock.expires_at_ms);
-    let before = get(c, &request.binding, None, 0).await;
-    assert_eq!(before.status(), 200);
-    let before: Value =
-        serde_json::from_slice(&before.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let before = source_manifest(c, &request.binding).await;
     let original_source = serde_json::to_value(&proposal.spec.source).unwrap();
     let original_manifest =
         serde_json::to_value(&proposal.original.offered.offer.manifest).unwrap();
-    // No clock substitution, offer/source retiming, TTL change or retry tuning.
-    let current = chrono::Utc::now().timestamp_millis() as u64;
-    let wait = proposal
-        .original
-        .offered
-        .clock
-        .expires_at_ms
-        .saturating_sub(current)
-        + 25;
-    assert!(wait <= 2025);
-    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
-    let current = chrono::Utc::now().timestamp_millis() as u64;
-    assert!(current >= proposal.original.offered.clock.expires_at_ms);
-    assert!(current < accepted.receipt.lease.expires_at_ms);
-    let after = get(c, &request.binding, None, 0).await;
-    assert_eq!(after.status(), 200);
-    let after: Value =
-        serde_json::from_slice(&after.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let current = wait_for_proposal_expiry(&proposal, &accepted).await;
+    let after = source_manifest(c, &request.binding).await;
     assert_eq!(before, after);
     let transfer: aq_worker_protocol::TransferManifest = serde_json::from_value(after).unwrap();
     let manifest = member(
