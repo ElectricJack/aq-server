@@ -70,12 +70,14 @@ impl FakeGit {
                 let result = answer(&request);
                 log.lock().unwrap().push(request.clone());
                 let mut frame = json!({"protocol_version": 1, "request_id": request["request_id"]});
+                // operation.show's journal has its own nullable error field,
+                // distinct from an error in the socket response envelope.
                 match result.get("error") {
-                    Some(error) => {
+                    Some(error) if result.get("payload").is_none() => {
                         frame["ok"] = json!(false);
                         frame["error"] = error.clone();
                     }
-                    None => {
+                    _ => {
                         frame["ok"] = json!(true);
                         frame["result"] = result;
                     }

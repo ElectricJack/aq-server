@@ -200,6 +200,64 @@ fn journal_reply(operation: Uuid, status: &str, outcome: Value) -> Value {
         "payload_hash":crate::digest(&payload).unwrap(),"payload":payload,"result":outcome})
 }
 #[tokio::test]
+async fn contradictory_journal_errors_never_become_success_or_definitive_rejection() {
+    let original = Uuid::from_u128(9);
+    let state = Arc::new(Mutex::new(Value::Null));
+    let reply = state.clone();
+    let git = FakeGit::start(move |r| {
+        if r["operation"] == "capabilities" {
+            json!({"capability_tokens":["publication_rejection_classification_v1"]})
+        } else {
+            reply.lock().unwrap().clone()
+        }
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let applied = json!({"outcome":"applied","target":task_branch(TASK),
+        "old":{"algorithm":"sha1","hex":"0".repeat(40)},
+        "new":{"algorithm":"sha1","hex":sha('a')},"acknowledged_at":"2026-11-25T15:00:00Z"});
+    let rejected =
+        json!({"outcome":"rejected","reason":"remote_rejected","rejection_class":"hook_declined"});
+    let present = json!({"outcome":"already_present","observed_target":{"algorithm":"sha1","hex":sha('a')},
+        "observed_at":"2026-11-25T15:00:00Z","caused_by_this_operation":false});
+    for status in ["complete", "failed"] {
+        for outcome in [&applied, &rejected, &present] {
+            let mut response = journal_reply(original, status, outcome.clone());
+            response["error"] =
+                json!({"code":"operation_indeterminate","message":"private journal error"});
+            *state.lock().unwrap() = response;
+            let journal = delivery
+                .inspect_publication(&target(), original, TASK, None, &sha('a'))
+                .await;
+            assert_eq!(journal["outcome"], "indeterminate", "{status}: {outcome}");
+            assert_eq!(journal["published"], false);
+            assert!(journal["receipt"].is_null());
+            assert!(journal["reason"].is_null());
+            assert!(journal["rejection_class"].is_null());
+            assert_eq!(journal["classification_record"], "not_recorded");
+            assert_eq!(journal["error_code"], "operation_indeterminate");
+            assert!(!journal.to_string().contains("private journal error"));
+            let recovered = delivery
+                .reconcile_publication(&target(), Uuid::new_v4(), original, &sha('a'), &journal)
+                .await;
+            assert_eq!(recovered["state"], "held");
+        }
+    }
+    // A recorded null error is normal for a successful journal, not a transport error.
+    let mut response = journal_reply(original, "complete", applied);
+    response["error"] = Value::Null;
+    *state.lock().unwrap() = response;
+    let journal = delivery
+        .inspect_publication(&target(), original, TASK, None, &sha('a'))
+        .await;
+    assert_eq!(journal["published"], true);
+    assert!(
+        git.operations()
+            .iter()
+            .all(|op| matches!(op.as_str(), "operation.show" | "capabilities"))
+    );
+    assert!(mock.seen().is_empty());
+}
+#[tokio::test]
 async fn historical_operation_ids_are_inspected_separately_and_unknown_phase_text_is_not_disclosed()
 {
     let operations = [
@@ -417,6 +475,7 @@ async fn original_success_is_recovered_only_with_valid_bound_oids_and_time() {
             assert!(journal["receipt"]["acknowledged_at"].as_str().is_some());
         } else {
             assert!(journal["receipt"].is_null());
+            assert_eq!(journal["outcome"], "indeterminate");
         }
     }
     assert!(

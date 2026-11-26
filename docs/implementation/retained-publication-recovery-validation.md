@@ -381,3 +381,89 @@ commit or push occurred. The source diff was read against saved originals in
 The final source/check/limit handoff was queued to the same global conversation
 as message `07aa6dbc-36b6-4f89-8c0e-3b20e3d9aad8`, cursor 240. This records
 mailbox delivery only; it does not assert recipient review or task acceptance.
+
+## Contradictory original-journal evidence, 2026-11-26
+
+The runner labels this follow-up's supplied tree as retained commit
+`af6c8e942983df22170c90d7dca4895c9aaa6663`. `git status --short` and
+`git rev-parse HEAD` both failed because the captured workspace has no Git
+metadata, so that revision label is not independently verified. The input's
+2589 Rust/SQL/TOML/lock files reproduce the preceding section's final fingerprint
+`e5da17b63977afd921ae09fc1d666963186161f1c47a80654b54819d15d1b51d`.
+The exact tested source fingerprint after this follow-up is
+`4a5a43c4146785bcb83e1379bf092cfbb0f034d74a0aff7314f3a698c65acbbe`
+(2589 files), using the algorithm recorded above.
+
+The original private-journal projection previously trusted a `complete` result
+even when that same journal recorded an error. It could recover an `applied` or
+`already_present` receipt, or disclose a definitive rejection/class, from
+contradictory evidence. The bridge now requires a complete record without an
+error before attesting success or rejection. Contradictory and failed records
+remain indeterminate without a receipt, rejection reason or class. Invalid
+success acknowledgments are explicitly indeterminate as well. Null or absent
+historical error fields remain compatible. The only disclosed error codes
+remain the existing allowlist; raw error text remains private.
+
+The socket fixture now distinguishes a journal's own error field from a
+transport-envelope error. The new regression exercises applied, already-present
+and rejected results with errors under both complete and failed status, then
+checks a legitimate complete record with a null error. It verifies that recovery
+stays held on contradictory evidence and that only `operation.show` and
+`capabilities` were called, with no forge calls, push or reconciliation. An
+existing invalid-receipt regression now also asserts the indeterminate outcome.
+
+All Cargo commands in this section set `CARGO_TARGET_DIR=/tmp/aq-target` and
+`CARGO_HOME=/tmp/aq-cargo`; downloaded dependencies and build output are outside
+the captured workspace. Commands actually run in this follow-up:
+
+| Exact command | Actual outcome |
+| --- | --- |
+| `cargo test -p aq-delivery --features delivery_playbook --lib contradictory_journal_errors --locked` | Before the production fix: exit 101, the new test failed because a contradictory complete journal returned `applied`. |
+| `cargo test -p aq-delivery --features delivery_playbook --lib github::tests::commands::retained_publication:: --locked` | After the fix: exit 0, 12 passed, including the new regression and existing binding/classification/receipt cases. |
+| `cargo test -p aq-delivery --features delivery_playbook --lib --locked` | Exit 0, all 122 passed on the final Rust source. |
+| `cargo test -p aq-command-registry --features delivery_playbook,supervisor_full_access --lib --locked` | Exit 0, all 24 passed, including the scoped publication routes and identity contract. |
+| `cargo test -p aq-supervisor-control --features delivery_playbook,supervisor_full_access --lib retained_publication --locked` | Exit 0, 1 passed, 36 filtered out; own-project paths allowed and cross-project paths refused. |
+| `cargo clippy -p aq-delivery --features delivery_playbook --lib --tests --locked -- -D warnings` | Exit 0, changed library and tests checked with warnings denied. |
+| `cargo fmt --all -- --check` | Exit 0 on final Rust source. |
+| `python3 scripts/migration_catalog.py` | Exit 0, 185 contiguous migrations. No migration was changed. |
+
+The exact authenticated `aq run result.review.show` command from the preceding
+section was run again. It returned the original result
+`68d19730-4db8-4668-855b-d3e9572d5050` at revision
+`f4b26ac1956b58997c0faca587f675453b20c9fb127da61dbf701b038f2b7b19`,
+repository `97a459e3-e35f-5af0-85c0-1c095b50519c` and retained commit
+`ac8b015d6dfaaa0aa7850d2e7ff13a2d20285cdd`, with empty `source_receipt_ids`.
+Separate exact commands
+`aq operation show dfd8cb53-9b5e-833c-bfe8-f32b36408c66 --json` and
+`aq operation show de4542bf-b430-8e57-a85e-9eb6f957679d --json` each returned
+HTTP 404 `not_found` in the supervisor journal. Those reads establish neither
+original publisher evidence absence nor publication acceptance or rejection.
+`aq commands` again exposed no private-journal publication bridge, so runtime
+`publication_rejection_classification_v1` and the live rejection class remain
+unverified. Source fixtures are not deployed capability evidence.
+
+Direct `aq message send` to protocol supervisor
+`842211df-4633-4bae-b559-96382fa70912` returned `not_found`. A request to relay
+and reuse existing inspection task `8cb39922`, with these bounded access
+findings, was queued to global conversation
+`ea5785f9-3da2-4bf4-8f64-e9558147b2f3` as message
+`6323d615-ad08-4d56-af2a-1bd042c8227b`, cursor 241. No duplicate repair was created.
+
+`DATABASE_URL` is unset; `postgres`, `psql` and `codescene` are unavailable.
+Database-backed recovery integration execution, migration application,
+full-server/workspace qualification, CodeScene and main-relative checks remain
+unrun. Existing nine database recovery tests still require normal CI. Release
+requires ordinary review/checks, a numbering check against current main and
+operator-provided project-scoped access through the existing authenticated
+bridge to the **original** AQ Git socket/journal. The runtime must independently
+advertise classification capability. Any live observation-only reconciliation
+requires separate authorization bound to the original operation, repository,
+binding generation and retained result/revision; actual policy correction
+cannot be specified without original-journal evidence. No live reconciliation,
+publication, worker retry, hold release, merge, deployment, host/credential
+change, commit or push occurred. Source and documentation diffs were read
+against originals saved under `/tmp`; `build-budget.toml` was not changed.
+
+The final source/check/limit handoff was queued to the global supervisor as
+message `cf12ed27-8075-4ea0-9aea-cbded3e3be73`, cursor 242. Queueing confirms
+mailbox delivery only, not recipient review, release or task acceptance.

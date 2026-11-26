@@ -94,6 +94,12 @@ for `already_present`. The latter may identify a later head containing the
 candidate, as attested by the bound original publisher. Recovery preserves that
 observed head separately from the retained result commit. Invalid or missing
 acknowledgments never create receipts, and returned timestamps are normalized.
+Only a completed original journal with no recorded error can attest success or
+definitive rejection. A result accompanied by an error remains indeterminate,
+without a receipt, rejection reason or rejection class; failed records and
+invalid success acknowledgments also remain indeterminate. Error codes are
+allowlisted and the journal's raw error text is never disclosed. Such evidence
+does not permit another push or release a hold.
 
 ## Recover a receipt after separate operator authorization
 

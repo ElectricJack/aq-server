@@ -368,6 +368,9 @@ impl GitPort for SocketGit {
             )
         });
         let reply = &result["result"];
+        // A terminal result alongside an error is contradictory journal evidence.
+        // Neither it nor a failed/pending record can attest success or rejection.
+        let definitive = status == "complete" && result["error"].is_null();
         let outcome = match reply["outcome"].as_str() {
             Some(s @ ("applied" | "already_present" | "rejected" | "indeterminate")) => Some(s),
             _ => None,
@@ -378,7 +381,7 @@ impl GitPort for SocketGit {
             ) => Some(s),
             _ => None,
         };
-        let published = status == "complete"
+        let published = definitive
             && match outcome {
                 Some("applied") => {
                     reply["target"] == reference
@@ -414,7 +417,7 @@ impl GitPort for SocketGit {
             .as_str()
             .filter(|_| {
                 classification
-                    && status == "complete"
+                    && definitive
                     && outcome == Some("rejected")
                     && reason == Some("remote_rejected")
             })
@@ -433,14 +436,14 @@ impl GitPort for SocketGit {
         } else {
             Value::Null
         };
-        let outcome = if status == "pending" {
+        let indeterminate =
+            !definitive || (matches!(outcome, Some("applied" | "already_present")) && !published);
+        let outcome = if indeterminate {
             Some("indeterminate")
-        } else if matches!(outcome, Some("applied" | "already_present")) && !published {
-            None
         } else {
             outcome
         };
-        let reason = if status == "pending" { None } else { reason };
+        let reason = if indeterminate { None } else { reason };
         let error_code = match result["error"]["code"].as_str() {
             Some(
                 c @ ("operation_indeterminate"
