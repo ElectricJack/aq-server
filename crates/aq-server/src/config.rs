@@ -255,7 +255,18 @@ fn removed_key(text: &str) -> Option<(&'static str, &'static str)> {
 }
 
 fn validate(c: &Config) -> Result<(), (String, String)> {
-    let invalid = |key: &str, reason: String| Err((key.to_string(), reason));
+    validate_basics(c)?;
+    validate_workers(c)?;
+    validate_runtime_requirements(c)?;
+    validate_services(c)?;
+    validate_agent_access(c)?;
+    validate_bootstrap(c)?;
+    Ok(())
+}
+fn invalid(key: &str, reason: String) -> Result<(), (String, String)> {
+    Err((key.into(), reason))
+}
+fn validate_basics(c: &Config) -> Result<(), (String, String)> {
     if c.format_version != SUPPORTED_FORMAT_VERSION {
         return invalid(
             "format_version",
@@ -291,6 +302,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
     {
         return invalid("auth.team_domain", "must start with https://".into());
     }
+    Ok(())
+}
+fn validate_workers(c: &Config) -> Result<(), (String, String)> {
     for (key, v) in [
         ("enrollment.code_ttl_secs", c.enrollment.code_ttl_secs),
         (
@@ -316,6 +330,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             "must be greater than workers.heartbeat_interval_secs".into(),
         );
     }
+    Ok(())
+}
+fn validate_runtime_requirements(c: &Config) -> Result<(), (String, String)> {
     if let Some(u) = &c.updates
         && !u.spool_dir.is_absolute()
     {
@@ -349,6 +366,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             );
         }
     }
+    Ok(())
+}
+fn validate_services(c: &Config) -> Result<(), (String, String)> {
     c.projects.validate().map_err(|e| ("projects".into(), e))?;
     if let Some(settings) = &c.result_media {
         settings
@@ -367,6 +387,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             .validate()
             .map_err(|e| ("source_retention".into(), e.to_string()))?;
     }
+    Ok(())
+}
+fn validate_agent_access(c: &Config) -> Result<(), (String, String)> {
     if let Some(settings) = &c.agent_access {
         if !settings.graph_token_file.is_absolute() {
             return invalid(
@@ -399,6 +422,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             );
         }
     }
+    Ok(())
+}
+fn validate_bootstrap(c: &Config) -> Result<(), (String, String)> {
     if c.bootstrap.enabled && c.bootstrap.owner_email.is_none() {
         return invalid(
             "bootstrap.owner_email",
@@ -485,6 +511,31 @@ mod tests {
             #[cfg(feature = "delivery_playbook")]
             delivery: None,
         }
+    }
+
+    #[test]
+    fn validation_preserves_error_precedence_across_sections() {
+        let mut c = cfg(Environment::Production, true);
+        c.format_version = 0;
+        c.workers.heartbeat_interval_secs = 0;
+        c.updates = Some(UpdatesConfig {
+            spool_dir: "relative".into(),
+        });
+        c.bootstrap.enabled = true;
+        assert_eq!(validate(&c).unwrap_err().0, "format_version");
+        c.format_version = SUPPORTED_FORMAT_VERSION;
+        assert_eq!(validate(&c).unwrap_err().0, "auth.mode");
+        c.environment = Environment::Development;
+        assert_eq!(
+            validate(&c).unwrap_err().0,
+            "workers.heartbeat_interval_secs"
+        );
+        c.workers = WorkersConfig::default();
+        assert_eq!(validate(&c).unwrap_err().0, "updates.spool_dir");
+        c.updates = None;
+        assert_eq!(validate(&c).unwrap_err().0, "bootstrap.owner_email");
+        c.bootstrap.enabled = false;
+        validate(&c).unwrap();
     }
 
     #[test]

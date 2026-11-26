@@ -46,3 +46,31 @@ async fn observation_lanes_are_sized_from_the_limits() {
     assert_eq!(LaunchLimits::DEFAULT.observation_requests, 2);
     assert_eq!(LaunchLimits::DEFAULT.observation_read_requests, 2);
 }
+
+#[test]
+fn profiled_routes_keep_their_specialized_lanes_and_exact_matches() {
+    use aq_server::admission::{Class, classify};
+    for (path, expected) in [
+        ("material-presence", Class::MaterialPresence),
+        ("inventory-v2", Class::MaterialInventory),
+        ("renew", Class::Renewal),
+        ("source/content", Class::Bulk),
+        ("material", Class::Bulk),
+        ("material/refresh", Class::Bulk),
+        ("artifact", Class::Bulk),
+        ("register", Class::Control),
+        ("accept", Class::Control),
+        ("prepare", Class::Control),
+        ("launch-closure", Class::Control),
+        ("poll", Class::Control),
+        ("started", Class::Control),
+        ("stopped", Class::Control),
+        ("reconcile", Class::Control),
+        ("source", Class::General),
+        ("material-presence/extra", Class::General),
+        ("renew/", Class::General),
+    ] {
+        let path = format!("/v1/worker/profiled/{path}");
+        assert_eq!(classify(&path), expected, "{path}");
+    }
+}
