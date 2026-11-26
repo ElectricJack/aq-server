@@ -392,7 +392,10 @@ fn operational_query(path: &str) -> Option<&'static [QueryParam]> {
             }
         }
         // project_bindings.rs::inspect, ::history
-        "/api/projects/{id}" | "/api/projects/{id}/revisions/{revision}" => NONE,
+        "/api/projects/{id}"
+        | "/api/projects/{id}/revisions/{revision}"
+        | "/api/projects/{home}/tasks/{task}/workspace"
+        | "/api/projects/{target}/workspace-requests" => NONE,
         // admin_api.rs::workers, ::status; execution/api.rs::inspect
         "/api/workers" | "/api/status" | "/api/execution/attempts/{id}" => NONE,
         // aq-supervisor-control api.rs::list

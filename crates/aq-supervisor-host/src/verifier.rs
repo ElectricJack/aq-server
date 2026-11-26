@@ -176,6 +176,19 @@ impl<A: PlanAuthority> EvidenceVerifier for Verifier<A> {
         }
         Ok(())
     }
+    /// The owner's stop and start released the reservation of this stopped turn
+    /// (the database allows that only after its generation stopped).
+    async fn released(&self, tx: &mut Transaction<'_, Postgres>, run: &Run) -> OwnerResult<bool> {
+        let released = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM central_supervisor_dispatches d
+              JOIN central_supervisor_reservations r USING (actor_id,reservation_id)
+              WHERE d.dispatch_id=$1 AND r.state='cancelled_before_plan')",
+        )
+        .bind(run.plan().dispatch_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(released)
+    }
 }
 
 async fn verify_start(

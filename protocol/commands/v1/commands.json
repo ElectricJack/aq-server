@@ -4102,6 +4102,119 @@
     },
     {
       "cli": [
+        "project",
+        "workspace",
+        "decide"
+      ],
+      "grant": "project.admin",
+      "kind": "mutation",
+      "name": "project.workspace.decide",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:428819c5fa72e925770fcea16b4d620cb92958cfb5a7e4c20ef962686d0041cf",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "access": {
+                "enum": [
+                  "read",
+                  "write"
+                ]
+              },
+              "commit_oid": {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              "decision": {
+                "enum": [
+                  "approved",
+                  "denied"
+                ]
+              },
+              "home_project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_revision": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "target_project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "task_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "target_project_id",
+              "home_project_id",
+              "task_id",
+              "project_revision",
+              "commit_oid",
+              "access",
+              "decision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{target}/workspace-requests/{home}/{task}/decision"
+          }
+        }
+      },
+      "summary": "Approve or deny a source request at its reviewed project revision, commit and access",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "project",
+        "workspace",
+        "requests"
+      ],
+      "grant": "project.admin",
+      "kind": "read",
+      "name": "project.workspace.requests",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:7224693aa495dba9270a7993b4d9379816376efaaa3fcb11523d40e1b6e28585",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "target_project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "target_project_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/projects/{target}/workspace-requests"
+          }
+        }
+      },
+      "summary": "List pending and denied workspace source requests for a target project",
+      "target": {
+        "param": "target_project_id",
+        "rule": "project"
+      }
+    },
+    {
+      "cli": [
         "provider",
         "accounts"
       ],
@@ -6693,7 +6806,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:c321c52de288a0c00a07f845e13efa86820a19626463fb59b6848d1a9f1026e9",
+          "params_digest": "sha256:6f460496c9158e479d4d68589003325469a14abe0f86d2e3de61fe5cf99bf416",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -6714,7 +6827,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:c321c52de288a0c00a07f845e13efa86820a19626463fb59b6848d1a9f1026e9",
+          "params_digest": "sha256:6f460496c9158e479d4d68589003325469a14abe0f86d2e3de61fe5cf99bf416",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -8061,6 +8174,372 @@
         }
       },
       "summary": "A task's attempts and work",
+      "target": {
+        "param": "task_id",
+        "rule": "task"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "workspace",
+        "request"
+      ],
+      "grant": "task.workspace.request",
+      "kind": "mutation",
+      "name": "task.workspace.request",
+      "owner_only": false,
+      "principals": {
+        "agent": {
+          "body": "params",
+          "params_digest": "sha256:db761f5ff1f90562d8797203ce9b7a1b1a8ac704f357c8eafcd84f339f6cc5a3",
+          "params_schema": {
+            "$defs": {
+              "requirement": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access": {
+                        "enum": [
+                          "read",
+                          "write"
+                        ]
+                      },
+                      "target_project_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "target_project_id",
+                      "access"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "service": {
+                        "const": "postgres"
+                      }
+                    },
+                    "required": [
+                      "service"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "service"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "workspace"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "target_project_id",
+                  "access"
+                ]
+              },
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target_project_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "access"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "workspace"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "service"
+                ]
+              },
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target_project_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "access"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "service"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "workspace"
+                ]
+              }
+            ],
+            "properties": {
+              "access": {
+                "enum": [
+                  "read",
+                  "write"
+                ]
+              },
+              "service": {
+                "const": "postgres"
+              },
+              "target_project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "workspace": {
+                "description": "At most 16 distinct target projects and one PostgreSQL request",
+                "items": {
+                  "$ref": "#/$defs/requirement"
+                },
+                "maxItems": 17,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/workspace/request"
+          }
+        },
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:0117727730bb221be9d9044ce9170284cb1c4f9f6bc8f47a42505568808b4d26",
+          "params_schema": {
+            "$defs": {
+              "requirement": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access": {
+                        "enum": [
+                          "read",
+                          "write"
+                        ]
+                      },
+                      "target_project_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "target_project_id",
+                      "access"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "service": {
+                        "const": "postgres"
+                      }
+                    },
+                    "required": [
+                      "service"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "service"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "workspace"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "target_project_id",
+                  "access"
+                ]
+              },
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target_project_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "access"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "workspace"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "service"
+                ]
+              },
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "target_project_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "access"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "service"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "workspace"
+                ]
+              }
+            ],
+            "properties": {
+              "access": {
+                "enum": [
+                  "read",
+                  "write"
+                ]
+              },
+              "home_project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "service": {
+                "const": "postgres"
+              },
+              "target_project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "task_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "workspace": {
+                "description": "At most 16 distinct target projects and one PostgreSQL request",
+                "items": {
+                  "$ref": "#/$defs/requirement"
+                },
+                "maxItems": 17,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "home_project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{home}/tasks/{task}/workspace"
+          }
+        }
+      },
+      "summary": "Request a sibling project checkout or a private PostgreSQL service for this task; AQ retains its edits before relaunch",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "workspace",
+        "show"
+      ],
+      "grant": "project.admin",
+      "kind": "read",
+      "name": "task.workspace.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:987c75f0af2a41e2aaa904d6f17503bd458b296c933e7aea015bcd2ef42b9c24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "home_project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "home_project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/projects/{home}/tasks/{task}/workspace"
+          }
+        }
+      },
+      "summary": "Show a task's requested sources and services",
       "target": {
         "param": "task_id",
         "rule": "task"

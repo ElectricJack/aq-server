@@ -192,9 +192,6 @@ impl GraphPayload for TaskNeedsSet {
     fn valid(&self) -> bool {
         true
     }
-    fn never_granted() -> bool {
-        true
-    }
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
         let needs = (self.needs.as_ref()).filter(|n| !n.0.is_empty());
         let key = aq_project_policy::environments::NEEDS_KEY;
