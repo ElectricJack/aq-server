@@ -25,8 +25,17 @@ pub async fn write(
     expected_version: u64,
     route: &Route,
 ) -> Result<Written, AppError> {
-    let by = route.source;
-    store(state, workspace, task, expected_version, by, Some(route)).await
+    let mut route = route.clone();
+    route.provider_intent = aq_routing::ProviderIntent::Any;
+    store(
+        state,
+        workspace,
+        task,
+        expected_version,
+        route.source,
+        Some(&route),
+    )
+    .await
 }
 
 pub async fn clear(

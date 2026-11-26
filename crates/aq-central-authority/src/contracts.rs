@@ -342,6 +342,7 @@ pub enum MailHoldReason {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryDisposition {
     NoPriorDispatch,
+    // Not handed off, or handed off by a stopped turn whose mail the owner released.
     Retryable {
         evidence: HandoffEvidence,
     },
@@ -383,6 +384,10 @@ impl MailHistoryFence {
             !self.entries.is_empty() && self.entries.len() <= MAX_BATCH,
             "history bound",
         )?;
+        self.validate_entries()?;
+        self.validate_operations()
+    }
+    fn validate_entries(&self) -> Result<()> {
         let mut ids = std::collections::BTreeSet::new();
         let mut cursors = std::collections::BTreeSet::new();
         for entry in &self.entries {
@@ -392,31 +397,22 @@ impl MailHistoryFence {
                 ids.insert(entry.message.message_id) && cursors.insert(entry.message.cursor),
                 "duplicate history candidate",
             )?;
-            let association = match &entry.disposition {
-                HistoryDisposition::NoPriorDispatch => None,
-                HistoryDisposition::Retryable { evidence } => {
-                    evidence.validate()?;
-                    ensure(
-                        evidence.disposition == HandoffDisposition::NotHandedOff,
-                        "retry requires exact not-handed-off receipt",
-                    )?;
-                    Some(&evidence.association)
-                }
-                HistoryDisposition::Held { association, .. } => {
-                    association.validate()?;
-                    Some(association)
-                }
-            };
-            if let Some(a) = association {
-                let b = &a.permit.binding;
+            if let Some(association) = entry.disposition.validated_association()? {
+                let binding = &association.permit.binding;
                 ensure(
-                    b.subject.actor_id() == self.actor_id
-                        && b.subject.conversation_id() == self.conversation_id
-                        && b.generation <= self.through_generation,
+                    self.covers(binding),
                     "history association subject/generation",
                 )?;
             }
         }
+        Ok(())
+    }
+    fn covers(&self, binding: &CentralBinding) -> bool {
+        binding.subject.actor_id() == self.actor_id
+            && binding.subject.conversation_id() == self.conversation_id
+            && binding.generation <= self.through_generation
+    }
+    fn validate_operations(&self) -> Result<()> {
         ensure(self.operations.len() == 2, "operation history bound")?;
         let mut operation_ids = std::collections::BTreeSet::new();
         for operation in &self.operations {
@@ -436,6 +432,22 @@ impl MailHistoryFence {
         Ok(())
     }
 }
+impl HistoryDisposition {
+    fn validated_association(&self) -> Result<Option<&DispatchAssociation>> {
+        Ok(match self {
+            HistoryDisposition::NoPriorDispatch => None,
+            HistoryDisposition::Retryable { evidence } => {
+                // A handed-off receipt is retryable only once the owner released it.
+                evidence.validate()?;
+                Some(&evidence.association)
+            }
+            HistoryDisposition::Held { association, .. } => {
+                association.validate()?;
+                Some(association)
+            }
+        })
+    }
+}
 pub fn validate_successor_history(
     plan: &CentralPlan,
     previous_generation: u64,
@@ -443,18 +455,30 @@ pub fn validate_successor_history(
 ) -> Result<()> {
     plan.validate()?;
     history.validate()?;
-    if history.actor_id != plan.subject.actor_id()
-        || history.conversation_id != plan.subject.conversation_id()
-        || history.through_generation != previous_generation
-        || previous_generation.checked_add(1) != Some(plan.generation)
-    {
+    if !history.matches_successor(plan, previous_generation) {
         return Err(Error::Refused(Refusal::Binding));
     }
     if history.entries.len() != plan.batch.messages.len() {
         return Err(Error::Refused(Refusal::Binding));
     }
     for message in &plan.batch.messages {
-        let entry = history
+        history.require_reusable_message(message)?;
+    }
+    for operation_id in [plan.dispatch_id, plan.host_operation_id] {
+        history.require_unused_operation(operation_id)?;
+    }
+    Ok(())
+}
+
+impl MailHistoryFence {
+    fn matches_successor(&self, plan: &CentralPlan, previous_generation: u64) -> bool {
+        self.actor_id == plan.subject.actor_id()
+            && self.conversation_id == plan.subject.conversation_id()
+            && self.through_generation == previous_generation
+            && previous_generation.checked_add(1) == Some(plan.generation)
+    }
+    fn require_reusable_message(&self, message: &MailRef) -> Result<()> {
+        let entry = self
             .entries
             .iter()
             .find(|e| {
@@ -467,9 +491,10 @@ pub fn validate_successor_history(
         if matches!(entry.disposition, HistoryDisposition::Held { .. }) {
             return Err(Error::Refused(Refusal::BatchHeld));
         }
+        Ok(())
     }
-    for operation_id in [plan.dispatch_id, plan.host_operation_id] {
-        let operation = history
+    fn require_unused_operation(&self, operation_id: Uuid) -> Result<()> {
+        let operation = self
             .operations
             .iter()
             .find(|o| o.operation_id == operation_id)
@@ -477,8 +502,8 @@ pub fn validate_successor_history(
         if !matches!(operation.disposition, OperationDisposition::Unused) {
             return Err(Error::Refused(Refusal::Conflict));
         }
+        Ok(())
     }
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

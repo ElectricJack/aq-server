@@ -196,6 +196,7 @@ async fn exact_refresh_prepare_http_uses_actual_current_store_and_its_own_qualif
 async fn actual_refresh_started_stopped_http_records_exact_new_ack_envelopes_and_retains_task() {
     let f = Box::pin(terminal::prepared_terminal()).await;
     let execution = terminal::issue(&f).await;
+    assert_eq!(terminal_reservations(&f).await, 1);
     let start = terminal::started_request(&f, &execution);
     let bytes = serde_json::to_vec(&start).unwrap();
     let (status, encoded) = post(&f, "started", bytes.clone(), None).await;
@@ -223,6 +224,7 @@ async fn actual_refresh_started_stopped_http_records_exact_new_ack_envelopes_and
     assert_eq!(snapshot(&f).await, after_stop);
     assert_eq!(after_stop["hot"]["state"]["stop"]["kind"], "stopped");
     assert_eq!(after_stop["holds"], true);
+    assert_eq!(terminal_reservations(&f).await, 0);
     let row = sqlx::query("SELECT initial_authority_kind,initial_authority_receipt_digest,phase_envelope_bytes,phase_ack_bytes FROM profiled_started_receipts")
         .fetch_one(&f.c.env.env.pool).await.unwrap();
     assert_eq!(
@@ -251,6 +253,14 @@ async fn actual_refresh_started_stopped_http_records_exact_new_ack_envelopes_and
         .await
         .is_err()
     );
+}
+
+async fn terminal_reservations(f: &terminal::Prepared) -> i64 {
+    sqlx::query_scalar("SELECT scope_rows FROM sealed_history_usage('phase_terminal',$1,0)")
+        .bind(f.prepared.original.identity.node_id)
+        .fetch_one(&f.c.env.env.pool)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -369,19 +379,19 @@ async fn expired_retired_runtime_still_cleans_up_with_exact_immutable_refresh_ac
     assert_eq!(after["holds"], true);
 }
 
-#[tokio::test]
-async fn no_started_refresh_closure_revokes_permission_retains_holds_and_replays_exact_ack() {
+fn synthetic_suppressed_closure(
+    f: &terminal::Prepared,
+    execution: &phase::ExecutionReceipt,
+) -> wire::ClosureRequest {
     use aq_admission::granted_closure as closure;
-    let f = Box::pin(terminal::prepared_terminal()).await;
-    let execution = terminal::issue(&f).await;
     let fixtures: Value = serde_json::from_str(include_str!(
         "../../../aq-phase-terminal-protocol/artifacts/refresh-v1/fixtures.json"
     ))
     .unwrap();
     let mut q: wire::ClosureRequest =
         serde_json::from_value(fixtures["closure_requests"][0].clone()).unwrap();
-    let prepared = terminal::checkpoint(&f);
-    let context = terminal::context(&f, &execution, &prepared);
+    let prepared = terminal::checkpoint(f);
+    let context = terminal::context(f, execution, &prepared);
     q.origin = wire::Origin::for_context(&context).unwrap();
     let r = &mut q.original;
     r.operation_id = Uuid::new_v4();
@@ -414,6 +424,15 @@ async fn no_started_refresh_closure_revokes_permission_retains_holds_and_replays
     record.terminal_revision = r.journal.revision;
     *record_digest = record.digest().unwrap();
     q.validate_for(&context).unwrap();
+    q
+}
+
+#[tokio::test]
+async fn no_started_refresh_closure_revokes_permission_retains_holds_and_replays_exact_ack() {
+    let f = Box::pin(terminal::prepared_terminal()).await;
+    let execution = terminal::issue(&f).await;
+    assert_eq!(terminal_reservations(&f).await, 1);
+    let q = synthetic_suppressed_closure(&f, &execution);
     let bytes = serde_json::to_vec(&q).unwrap();
     let (status, encoded) = post(&f, "launch-closure", bytes.clone(), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -425,6 +444,7 @@ async fn no_started_refresh_closure_revokes_permission_retains_holds_and_replays
     assert_eq!(after["started"], 0);
     assert_eq!(after["stopped"], 0);
     assert_eq!(after["closures"], 1);
+    assert_eq!(terminal_reservations(&f).await, 0);
     let (status, replay) = post(&f, "launch-closure", bytes, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(replay, encoded);

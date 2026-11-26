@@ -1,32 +1,42 @@
 use super::*;
+use std::collections::BTreeSet;
+
 /// Distinct live task targets of live `blocks` edges leaving `task`.
-pub fn blocked_by(raw: &Value, w: Uuid, task: Uuid) -> Option<u32> {
-    let mut live = std::collections::BTreeSet::new();
-    for n in raw["nodes"].as_array()? {
-        if n["workspace_id"] != json!(w) {
-            return None;
-        }
-        if n["kind"] == "task" && n["deleted"] == false {
-            live.insert(n["id"].as_str()?.to_owned());
-        }
-    }
+pub fn blocked_by(raw: &Value, workspace: Uuid, task: Uuid) -> Option<u32> {
+    let workspace = json!(workspace);
+    let live = live_tasks(raw["nodes"].as_array()?, &workspace)?;
     let source = task.to_string();
-    let mut targets = std::collections::BTreeSet::new();
-    for e in raw["edges"].as_array()? {
-        if e["workspace_id"] != json!(w) {
+    let mut targets = BTreeSet::new();
+    for edge in raw["edges"].as_array()? {
+        if edge["workspace_id"] != workspace {
             return None;
         }
-        let target = e["target"].as_str()?;
-        if e["edge_type"] == "blocks"
-            && e["deleted"] == false
-            && e["source"] == source.as_str()
-            && target != source
-            && live.contains(target)
-        {
-            targets.insert(target.to_owned());
+        let target = edge["target"].as_str()?;
+        if blocks_task(edge, &source, target) && live.contains(target) {
+            targets.insert(target);
         }
     }
-    u32::try_from(targets.len()).ok()
+    targets.len().try_into().ok()
+}
+
+fn live_tasks<'a>(nodes: &'a [Value], workspace: &Value) -> Option<BTreeSet<&'a str>> {
+    let mut tasks = BTreeSet::new();
+    for node in nodes {
+        if &node["workspace_id"] != workspace {
+            return None;
+        }
+        if node["kind"] == "task" && node["deleted"] == false {
+            tasks.insert(node["id"].as_str()?);
+        }
+    }
+    Some(tasks)
+}
+
+fn blocks_task(edge: &Value, source: &str, target: &str) -> bool {
+    edge["edge_type"] == "blocks"
+        && edge["deleted"] == false
+        && edge["source"] == source
+        && target != source
 }
 
 #[cfg(test)]

@@ -54,12 +54,20 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         }
         "supervisor.message.send" => "Send a message to the supervisor conversation",
         "swarm.availability.set" => "Turn the owner's availability switch on or off",
+        _ => return task_and_worker_summary(kind),
+    })
+}
+
+fn task_and_worker_summary(kind: &str) -> Option<&'static str> {
+    Some(match kind {
         "task.activate" => "Make a draft task schedulable",
         "task.activate.subtree" => "Make a task’s draft descendants schedulable",
         "task.cancel" => "Cancel a task and stop any attempt holding it",
         "task.complete" => "Close an active task by hand, with a reason, when no attempt holds it",
         "task.delete" => "Delete a task and its relationships; its history is kept",
-        "task.dependency.add" => "Make one task block another",
+        "task.dependency.add" => {
+            "Make one task block another; with resume_held, a task held at a limit waits on it instead"
+        }
         "task.dependency.remove" => "Remove a blocking dependency between two tasks",
         "task.edit" => "Edit a task's title, body, acceptance criteria, labels or story points",
         "task.reopen" => {
@@ -70,14 +78,14 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
             "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason; with fresh, starts a task held by a changed project binding from the current source"
         }
         "task.needs.set" => {
-            "Set or clear the capabilities a task needs from its environment, before any attempt of it has been granted"
+            "Set or clear a task’s environment capabilities before admission or after stopped work is reconciled"
         }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"
         }
         "task.route.clear" => "Remove a task's owner route so routing decides its class again",
         "task.route.set" => {
-            "Route a task to a class, optionally limited to harnesses and providers"
+            "Route a task to a class with optional ordered harness and provider preferences"
         }
         "thread.resolve" => {
             "Resolve a result comment thread, naming the follow-up revision and a reason"

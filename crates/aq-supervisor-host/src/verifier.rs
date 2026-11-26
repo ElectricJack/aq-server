@@ -41,6 +41,9 @@ impl<A: PlanAuthority> Verifier<A> {
 fn evidence<T>(result: anyhow::Result<T>) -> OwnerResult<T> {
     result.map_err(|_| OwnerError::Evidence)
 }
+fn require(matches: bool) -> OwnerResult<()> {
+    matches.then_some(()).ok_or(OwnerError::Evidence)
+}
 async fn original(
     tx: &mut Transaction<'_, Postgres>,
     id: uuid::Uuid,
@@ -71,12 +74,13 @@ async fn observation(
     let o: HostObservation = serde_json::from_str(&body).map_err(|_| OwnerError::Evidence)?;
     let guardian = original(tx, r.launch_id, "guardian", &r.guardian).await?;
     let g: GuardianIdentity = serde_json::from_str(&guardian).map_err(|_| OwnerError::Evidence)?;
-    if r.binding != run.plan().binding()?
-        || o.guardian != g
-        || g.intent.launch_id != r.launch_id
-        || g.intent.session != run.plan().session
-        || g.intent.manifest_digest != run.plan().profiles.host_plan.digest
-    {
+    let bound_guardian = r.binding == run.plan().binding()? && o.guardian == g;
+    let expected_launch =
+        g.intent.launch_id == r.launch_id && g.intent.session == run.plan().session;
+    if !bound_guardian || !expected_launch {
+        return Err(OwnerError::Evidence);
+    }
+    if g.intent.manifest_digest != run.plan().profiles.host_plan.digest {
         return Err(OwnerError::Evidence);
     }
     Ok(o)
@@ -94,13 +98,7 @@ pub(crate) async fn not_started(
         return Ok(None);
     }
     let obs = observation(tx, run, &stop.host, "stopped").await?;
-    if obs.phase != HostPhase::Stopped
-        || !obs.kernel_wait_echild
-        || obs.pane.is_some()
-        || obs.root_status.is_some()
-        || obs.reaped_count != 0
-        || stop.stopped_writers != stop.host.observation
-    {
+    if !stopped_without_children(&obs) || stop.stopped_writers != stop.host.observation {
         return Ok(None);
     }
     let started: bool = sqlx::query_scalar(
@@ -114,6 +112,12 @@ pub(crate) async fn not_started(
         disposition: HandoffDisposition::NotHandedOff,
         receipt: stop.host.observation.clone(),
     }))
+}
+
+fn stopped_without_children(obs: &HostObservation) -> bool {
+    let stopped = obs.phase == HostPhase::Stopped && obs.kernel_wait_echild;
+    let no_pane = obs.pane.is_none() && obs.root_status.is_none();
+    stopped && no_pane && obs.reaped_count == 0
 }
 
 #[async_trait::async_trait]
@@ -135,37 +139,16 @@ impl<A: PlanAuthority> EvidenceVerifier for Verifier<A> {
     ) -> OwnerResult<()> {
         match event {
             Event::CommitStart { launch, dispatch } => {
-                let row=sqlx::query("SELECT reservation,host_plan FROM central_host_launches WHERE actor_id=$1 AND generation=$2 AND launch_id=$3")
-                    .bind(run.plan().subject.actor_id()).bind(run.plan().generation as i64).bind(launch.launch_id).fetch_one(&mut **tx).await?;
-                let reservation: String = row.try_get("reservation")?;
-                let body: String = row.try_get("host_plan")?;
-                let h = evidence(HostPlan::decode(body.as_bytes()))?;
-                if *launch
-                    != evidence(journal::launch_ref(
-                        run.plan(),
-                        launch.launch_id,
-                        &reservation,
-                    ))?
-                    || *dispatch != run.plan().dispatch(dispatch.permit.clone())?
-                {
-                    return Err(OwnerError::Evidence);
-                }
-                evidence(bridge::permit(run.plan(), &h, &dispatch.permit))?;
+                verify_start(tx, run, launch, dispatch).await?;
             }
             Event::Running { observation: r } => {
                 let o = observation(tx, run, r, "running").await?;
-                if o.phase != HostPhase::Running {
-                    return Err(OwnerError::Evidence);
-                }
+                require(o.phase == HostPhase::Running)?;
             }
             Event::Stopped { evidence: r } => {
                 let o = observation(tx, run, &r.host, "stopped").await?;
-                if o.phase != HostPhase::Stopped
-                    || !o.kernel_wait_echild
-                    || r.stopped_writers != r.host.observation
-                {
-                    return Err(OwnerError::Evidence);
-                }
+                let stopped = o.phase == HostPhase::Stopped && o.kernel_wait_echild;
+                require(stopped && r.stopped_writers == r.host.observation)?;
             }
             Event::HostLost {
                 binding,
@@ -173,49 +156,89 @@ impl<A: PlanAuthority> EvidenceVerifier for Verifier<A> {
                 report,
             } => {
                 original(tx, *launch_id, "lost", report).await?;
-                if *binding != run.plan().binding()? {
-                    return Err(OwnerError::Evidence);
-                }
+                require(*binding == run.plan().binding()?)?;
             }
             Event::Tick | Event::Cancel { .. } => {}
             Event::ReconcileHandoff { evidence: e }
                 if e.disposition == HandoffDisposition::NotHandedOff =>
             {
-                if not_started(tx, run).await?.as_ref() != Some(e) {
-                    return Err(OwnerError::Evidence);
-                }
+                require(not_started(tx, run).await?.as_ref() == Some(e))?;
             }
             Event::Handoff { evidence: e } | Event::ReconcileHandoff { evidence: e } => {
-                let launch: uuid::Uuid = sqlx::query_scalar(
-                    "SELECT launch_id FROM central_host_launches WHERE actor_id=$1 AND generation=$2",
-                )
-                .bind(run.plan().subject.actor_id())
-                .bind(run.plan().generation as i64)
-                .fetch_one(&mut **tx)
-                .await?;
-                let body = original(tx, launch, "handoff", &e.receipt).await?;
-                let fact: HandoffFact =
-                    serde_json::from_str(&body).map_err(|_| OwnerError::Evidence)?;
-                let h = self.host(tx, run.plan()).await?;
-                if fact.launch_id != launch
-                    || fact.association != e.association
-                    || fact.disposition != e.disposition
-                    || run.association() != Some(&e.association)
-                    || (fact.disposition == HandoffDisposition::HandedOff
-                        && fact.input != h.startup.payload.digest)
-                {
-                    return Err(OwnerError::Evidence);
-                }
+                self.verify_handoff(tx, run, e).await?;
             }
             Event::ReportUnknown { association } => {
-                if run.association() != Some(association) {
-                    return Err(OwnerError::Evidence);
-                }
+                require(run.association() == Some(association))?;
             }
             // Any other event has no verified evidence path; no permissive fallback.
             #[allow(unreachable_patterns)]
             _ => return Err(OwnerError::Unsupported),
         }
         Ok(())
+    }
+    /// The owner's stop and start released the reservation of this stopped turn
+    /// (the database allows that only after its generation stopped).
+    async fn released(&self, tx: &mut Transaction<'_, Postgres>, run: &Run) -> OwnerResult<bool> {
+        let released = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM central_supervisor_dispatches d
+              JOIN central_supervisor_reservations r USING (actor_id,reservation_id)
+              WHERE d.dispatch_id=$1 AND r.state='cancelled_before_plan')",
+        )
+        .bind(run.plan().dispatch_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(released)
+    }
+}
+
+async fn verify_start(
+    tx: &mut Transaction<'_, Postgres>,
+    run: &Run,
+    launch: &HostLaunchRef,
+    dispatch: &DispatchAssociation,
+) -> OwnerResult<()> {
+    let row=sqlx::query("SELECT reservation,host_plan FROM central_host_launches WHERE actor_id=$1 AND generation=$2 AND launch_id=$3")
+                    .bind(run.plan().subject.actor_id()).bind(run.plan().generation as i64).bind(launch.launch_id).fetch_one(&mut **tx).await?;
+    let reservation: String = row.try_get("reservation")?;
+    let body: String = row.try_get("host_plan")?;
+    let h = evidence(HostPlan::decode(body.as_bytes()))?;
+    if *launch
+        != evidence(journal::launch_ref(
+            run.plan(),
+            launch.launch_id,
+            &reservation,
+        ))?
+        || *dispatch != run.plan().dispatch(dispatch.permit.clone())?
+    {
+        return Err(OwnerError::Evidence);
+    }
+    evidence(bridge::permit(run.plan(), &h, &dispatch.permit))?;
+    Ok(())
+}
+
+impl<A: PlanAuthority> Verifier<A> {
+    async fn verify_handoff(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        run: &Run,
+        e: &HandoffEvidence,
+    ) -> OwnerResult<()> {
+        let launch: uuid::Uuid = sqlx::query_scalar(
+            "SELECT launch_id FROM central_host_launches WHERE actor_id=$1 AND generation=$2",
+        )
+        .bind(run.plan().subject.actor_id())
+        .bind(run.plan().generation as i64)
+        .fetch_one(&mut **tx)
+        .await?;
+        let body = original(tx, launch, "handoff", &e.receipt).await?;
+        let fact: HandoffFact = serde_json::from_str(&body).map_err(|_| OwnerError::Evidence)?;
+        let h = self.host(tx, run.plan()).await?;
+        let associated =
+            fact.association == e.association && run.association() == Some(&e.association);
+        let disposition_matches = fact.disposition == e.disposition
+            && (fact.disposition != HandoffDisposition::HandedOff
+                || fact.input == h.startup.payload.digest);
+        require(fact.launch_id == launch && associated)?;
+        require(disposition_matches)
     }
 }

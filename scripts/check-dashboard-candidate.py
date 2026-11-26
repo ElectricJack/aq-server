@@ -38,6 +38,13 @@ def verify(root=ROOT):
     archive_path = vendor / archive
     require(archive_path.stat().st_size <= MAX_TOTAL + MAX_MANIFEST, "archive byte limit")
     require(sha256(archive_path.read_bytes()) == pin["archive_sha256"], "archive SHA256 mismatch")
+    files = read_archive(archive_path)
+    verify_manifest(files, pin)
+    verify_server_image(root, archive, pin["archive_sha256"])
+    return pin, files
+
+
+def read_archive(archive_path):
     files = {}
     with tarfile.open(archive_path, "r:gz") as bundle:
         total = 0
@@ -55,6 +62,10 @@ def verify(root=ROOT):
                 data = stream.read(limit + 1)
             require(len(data) == member.size, "archive member size mismatch")
             files[name] = data
+    return files
+
+
+def verify_manifest(files, pin):
     manifest_bytes = files.pop("dashboard-manifest.json")
     require(f"sha256:{sha256(manifest_bytes)}" == pin["dashboard_digest"], "manifest SHA256 mismatch")
     manifest = json.loads(manifest_bytes)
@@ -65,10 +76,14 @@ def verify(root=ROOT):
     require(len(files) <= 512 and sum(map(len, files.values())) <= MAX_TOTAL, "dashboard bundle limits")
     for name, data in files.items():
         require(manifest["files"][name] == {"sha256": sha256(data), "bytes": len(data)}, f"asset integrity mismatch: {name}")
+    files["dashboard-manifest.json"] = manifest_bytes
+
+
+def verify_server_image(root, archive, archive_sha256):
     docker = (root / "Dockerfile").read_text().split("FROM runtime AS server\n", 1)[1]
     wiring = (
         f"COPY vendor/{archive} /tmp/dashboard.tar.gz\n"
-        f"RUN echo '{pin['archive_sha256']}  /tmp/dashboard.tar.gz' | sha256sum -c - \\\n"
+        f"RUN echo '{archive_sha256}  /tmp/dashboard.tar.gz' | sha256sum -c - \\\n"
         "    && mkdir -p /usr/share/agent-q/dashboard \\\n"
         "    && tar -xzf /tmp/dashboard.tar.gz -C /usr/share/agent-q/dashboard \\\n"
         "    && rm /tmp/dashboard.tar.gz\n"
@@ -76,8 +91,6 @@ def verify(root=ROOT):
     require(wiring in docker, "Docker server stage archive verification/extraction differs from pin")
     require("ENV AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard\n" in docker, "Docker dashboard directory missing")
     require(docker.index(wiring) < docker.index("USER 10001:10001"), "dashboard must be installed before dropping privileges")
-    files["dashboard-manifest.json"] = manifest_bytes
-    return pin, files
 
 
 def extract(files, destination):

@@ -47,7 +47,7 @@ pub fn phrase(code: &str) -> String {
         }
         "never_granted_retry_bound_exhausted" => "too many of its offers were never granted",
         "replacement_project_revision_changed" => {
-            "the project binding changed since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
+            "the project binding changed beyond which nodes may run it since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
         }
         "replacement_after_unpublished_delivery_needs_new_source" => {
             "its delivery was not published, so a retry needs a new source"
@@ -72,6 +72,12 @@ pub fn phrase(code: &str) -> String {
         "route_class_unassigned" => {
             "its route names a class with no assigned profile, so it is routed again"
         }
+        "returns_exhausted" => "delivery reached its repair-return limit for its result",
+        "delivery_policy_held" => "the delivery playbook held its failed result",
+        "delivery_result_held" => "the delivery playbook held its result",
+        "replacement_delivery_effects_pending" => {
+            "a delivery operation for its held result is still running"
+        }
         _ => return format!("held by the retry policy: {code}"),
     };
     fixed.into()
@@ -93,19 +99,22 @@ pub fn retry_refusal(code: &str) -> String {
 
 /// A hold that is only a limit: attempts, cost or never-granted offers used up (the
 /// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner retry overrides it and
-/// every budget starts again (owner decision 2026-11-18). Every other hold is about what
-/// happened to the task and is never overridden.
+/// every budget starts again (owner decision 2026-11-18). So does the delivery playbook's hold of
+/// a result an owner retry reconciles: its return limit, or its policy hold of a failed result.
+/// Every other hold is about what happened to the task and is never overridden.
 pub fn is_budget_hold(code: &str) -> bool {
     budget_code(code).is_some()
 }
 /// `code` as the fixed code of a limit hold, if it is one.
 pub fn budget_code(code: &str) -> Option<&'static str> {
-    const CODES: [&str; 5] = [
+    const CODES: [&str; 7] = [
         "lineage_retry_budget_exhausted",
         "lineage_cost_budget_exhausted",
         "never_granted_retry_bound_exhausted",
         "replacement_policy_retry_budget_exhausted",
         "replacement_policy_time_budget_exhausted",
+        "returns_exhausted",
+        "delivery_policy_held",
     ];
     CODES.into_iter().find(|c| *c == code)
 }
@@ -114,6 +123,10 @@ pub fn budget_code(code: &str) -> Option<&'static str> {
 pub const OVERRIDES_FORMAT: u32 = 151;
 /// The longest owner reason an override records.
 pub const REASON_MAX: usize = 1024;
+
+pub(crate) fn valid_owner_reason(reason: &str) -> bool {
+    !reason.is_empty() && reason.chars().count() <= REASON_MAX
+}
 
 /// An owner's override of a budget hold, as recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,19 +149,30 @@ pub fn override_comment(code: &str, actor: &str, reason: &str) -> String {
     )
 }
 /// Records the override once per `operation_id` (a replay records nothing) and clears the
-/// task's current hold. Attempts offered up to `now_ms` are no longer charged.
+/// task's current hold. Attempts offered up to `now_ms` are no longer charged, and the delivery
+/// return count starts again.
 pub async fn record_override(
     conn: &mut PgConnection,
     task: Uuid,
     o: &Override,
     now: DateTime<Utc>,
 ) -> Result<(), Error> {
-    if !is_budget_hold(&o.hold_code) || o.reason.is_empty() || o.reason.chars().count() > REASON_MAX
-    {
+    if !is_budget_hold(&o.hold_code) || !valid_owner_reason(&o.reason) {
         return Err(Error::Invalid("limit override"));
     }
     let mut tx = conn.begin().await?;
     lock_budget(&mut tx, task).await?;
+    if super::owner_retry::available(&mut tx).await?
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM owner_task_retry_intents WHERE operation_id=$1)",
+        )
+        .bind(o.operation_id)
+        .fetch_one(&mut *tx)
+        .await?
+        && !super::owner_retry::authorized(&mut tx, o.operation_id, task, o.attempt_id).await?
+    {
+        return Err(Error::Invalid("owner retry anchor changed"));
+    }
     let inserted = sqlx::query(
         "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms,spent_microunits) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
@@ -173,6 +197,10 @@ pub async fn record_override(
     .bind(now)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE delivery_tasks SET returns=0 WHERE task_id=$1")
+        .bind(task)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -181,15 +209,11 @@ pub async fn record_override(
 /// (logged).
 pub async fn post_override(
     pool: &PgPool,
-    project: Uuid,
-    task: Uuid,
+    thread: aq_task_comments::Thread,
     o: &Override,
     now: DateTime<Utc>,
 ) {
-    let thread = aq_task_comments::Thread {
-        project_id: project,
-        task_id: task,
-    };
+    let task = thread.task_id;
     let author = aq_task_comments::Author::System {
         component: "aq.swarm".into(),
     };
@@ -425,19 +449,8 @@ pub async fn note(
         return Err(Error::Invalid("a hold needs an attempt of its task"));
     };
     let (comment, body) = match comment {
-        Some(c) => c,
-        None => {
-            let earlier: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM task_holds WHERE task_id=$1")
-                    .bind(d.task)
-                    .fetch_one(&mut *conn)
-                    .await?;
-            let name = format!("aq.task-hold/{}/{earlier}", d.seen);
-            (
-                Uuid::new_v5(&d.task, name.as_bytes()),
-                comment_body(d.reason),
-            )
-        }
+        Some(custom) => custom,
+        None => default_comment(conn, d).await?,
     };
     // Only while the count the decision saw is current, in this one statement.
     let inserted = sqlx::query(
@@ -456,6 +469,21 @@ pub async fn note(
     .fetch_optional(&mut *conn)
     .await?;
     Ok(inserted.map(|r| noted(&r, true)))
+}
+
+async fn default_comment(
+    conn: &mut PgConnection,
+    d: &Decision<'_>,
+) -> Result<(Uuid, String), Error> {
+    let earlier: i64 = sqlx::query_scalar("SELECT count(*) FROM task_holds WHERE task_id=$1")
+        .bind(d.task)
+        .fetch_one(&mut *conn)
+        .await?;
+    let name = format!("aq.task-hold/{}/{earlier}", d.seen);
+    Ok((
+        Uuid::new_v5(&d.task, name.as_bytes()),
+        comment_body(d.reason),
+    ))
 }
 
 /// Posts a hold's stored comment (idempotent by its id) and marks it on record. A comment
@@ -495,15 +523,23 @@ pub async fn hold(pool: &PgPool, d: Option<Decision<'_>>, now: DateTime<Utc>) {
     record_hold(pool, d, None, now).await;
 }
 
+pub struct SelectionRefusal<'a> {
+    pub project: Uuid,
+    pub task: Uuid,
+    pub reason: &'a str,
+}
 /// Record selection's refusal only if its budget history is still current.
 pub async fn selection_hold(
     pool: &PgPool,
     history: Option<History>,
-    project: Uuid,
-    task: Uuid,
-    reason: &str,
+    refusal: SelectionRefusal<'_>,
     now: DateTime<Utc>,
 ) {
+    let SelectionRefusal {
+        project,
+        task,
+        reason,
+    } = refusal;
     if let Some(h) = history {
         let d = Decision {
             project,
@@ -881,6 +917,10 @@ mod tests {
         ] {
             assert!(is_budget_hold(code) && is_hold(code), "{code}");
         }
+        // A delivery hold is the playbook's, never recorded by the offer path.
+        for code in ["returns_exhausted", "delivery_policy_held"] {
+            assert!(is_budget_hold(code) && !is_hold(code), "{code}");
+        }
         // What happened to the task is never overridden.
         for code in [
             "stall_quarantined",
@@ -897,6 +937,8 @@ mod tests {
             "handoff_successor_stuck",
             "replacement_successor_stuck",
             "route_class_unassigned",
+            "delivery_result_held",
+            "replacement_delivery_effects_pending",
         ] {
             assert!(!is_budget_hold(code), "{code}");
         }

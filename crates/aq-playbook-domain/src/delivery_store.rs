@@ -11,6 +11,7 @@
 //! them.
 use crate::{
     Result,
+    delivery_runs::DeliveryOps,
     host9::WorkFacts,
     host10::{
         self, DELIVERY_BINDING, PullRequestFacts, ResultEmission, ResultFacts, ResultReady,
@@ -21,6 +22,7 @@ use crate::{
 use aq_playbook_host::model::{EventContract, EventEnvelope};
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// A task whose current attempt has stopped and recorded a result, and whose
@@ -95,21 +97,26 @@ pub struct PgDelivery(pub PgPool);
 #[async_trait::async_trait]
 impl DeliveryPort for PgDelivery {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(concat!(
             "SELECT a.task_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,a.attempt_id,h.report_id \
              FROM execution_attempts a \
              JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id \
              JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id \
              JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
+             JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) \
              JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
              LEFT JOIN delivery_tasks t ON t.task_id=a.task_id \
              WHERE a.kind='profiled_v1' AND a.holds_task AND ah.state#>>'{stop,kind}'='stopped' \
              AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')::uuid=$1) \
              AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+             AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements s WHERE s.report_id=h.report_id AND s.reason='workspace_expansion_requested') \
+             AND NOT ",
+             aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+             " \
              ORDER BY GREATEST(COALESCE(t.emitted_at_ms,0),COALESCE(t.checked_at_ms,0)),h.report_id \
              LIMIT $2",
-        )
+        ))
         .bind(project)
         .bind(i64::from(limit))
         .fetch_all(&self.0)
@@ -182,12 +189,23 @@ impl DeliveryPort for PgDelivery {
         .bind(event.project_id.to_string())
         .fetch_optional(&mut *db)
         .await?;
-        if held != Some(true) {
+        if held != Some(true)
+            || aq_machine_control::task_needs::blocks_observation(
+                db,
+                (event.project_id, event.task_id, event.version),
+            )
+            .await?
+        {
             return Ok(false);
         }
-        let current: Option<Uuid> = sqlx::query_scalar(
-            "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR UPDATE",
-        )
+        let current: Option<Uuid> = sqlx::query_scalar(concat!(
+            "SELECT h.report_id FROM profiled_result_heads h ",
+            "JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) ",
+            "WHERE h.attempt_id=$1 AND NOT ",
+            aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+            " AND NOT EXISTS (SELECT 1 FROM profiled_auto_settlements s WHERE s.report_id=h.report_id ",
+            "AND s.disposition='rework_required' AND s.reason='branch_publication_rejected') FOR UPDATE OF h",
+        ))
         .bind(event.attempt_id)
         .fetch_optional(db)
         .await?;
@@ -361,26 +379,206 @@ pub async fn observed(
             .await?
             .to_owned();
     }
+    if let Some(result) = latest.filter(|result| result.outcome == "failed")
+        && reported_agent_blocker(db, task, version, result).await?
+    {
+        facts.outcome = "agent_blocked".into();
+    }
     Ok(host10::read_output(task, version, &work, &facts))
 }
 
+/// The native worker writes the explicit Outcome field first, before any prose.
+/// This is an agent's declaration, with no authority to prove a grant or a wake.
+async fn reported_agent_blocker(
+    db: &mut PgConnection,
+    task: Uuid,
+    version: i64,
+    latest: &Latest,
+) -> Result<bool> {
+    let conclusion: Option<String> = sqlx::query_scalar(
+        "SELECT doc.report->>'conclusion'
+         FROM execution_attempts a
+         JOIN profiled_authority_hot ah USING(attempt_id)
+         JOIN profiled_launches l USING(attempt_id)
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id)
+         CROSS JOIN LATERAL (SELECT convert_from(r.report_bytes,'UTF8')::jsonb AS report) doc
+         WHERE a.task_id=$1 AND a.attempt_id=$2 AND h.report_id=$3 AND a.holds_task
+           AND l.execution_spec#>>'{lifecycle,project_id}'=$4
+           AND (l.execution_spec#>>'{task,version}')::bigint=$5
+           AND r.result_origin_kind IN ('phase_execution_v2','phase_refresh_execution_v1')
+           AND ah.state#>>'{stop,kind}'='stopped' AND ah.state->'revoked'='false'::jsonb
+           AND ah.state->>'cancellation_id' IS NULL
+           AND doc.report->>'outcome'='failed' AND doc.report#>>'{stop,disposition,kind}'='stopped'
+           AND doc.report#>>'{stop,reason}' IN ('reconciliation','completed','failed')",
+    )
+    .bind(task)
+    .bind(latest.attempt_id)
+    .bind(latest.result_id)
+    .bind(latest.project_id.to_string())
+    .bind(version)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    Ok(conclusion.as_deref().is_some_and(explicit_blocker_field))
+}
+
+fn explicit_blocker_field(conclusion: &str) -> bool {
+    conclusion.split(';').next() == Some("Outcome: blocked")
+}
+
 /// The results to announce now: none unless an artifact is active on the
-/// delivery binding of the namespace, else the pending results of `project`
-/// (all projects when `None`) that are due ([`due`]).
+/// delivery binding of the namespace. A held result can rejoin delivery after
+/// the forge verifies that the original publication or check barrier cleared.
 pub async fn plan(
     db: &mut PgConnection,
     namespace: (Uuid, i64),
-    port: &dyn DeliveryPort,
+    (port, operations): (&dyn DeliveryPort, &dyn DeliveryOps),
     project: Option<Uuid>,
     limit: u32,
     now_ms: i64,
-    (repeat_ms, run_bound_ms): (i64, i64),
+    limits: &aq_role_settings::delivery::DeliveryLimits,
 ) -> Result<Vec<Due>> {
+    let repeat_ms = limits.decision_repeat_ms as i64;
+    let timing = Timing {
+        repeat_ms,
+        run_bound_ms: (limits.longest_check_wait_ms as i64).saturating_add(repeat_ms),
+        rejection_repeat_ms: (limits.hold_followup_interval_ms as i64).max(repeat_ms),
+    };
     if !active(db, namespace).await? {
         return Ok(vec![]);
     }
-    let pending = port.pending(project, limit).await?;
-    due(db, namespace, pending, now_ms, repeat_ms, run_bound_ms).await
+    let resumed = recover_held_delivery(db, operations, project, now_ms, repeat_ms).await?;
+    let mut ready = due(
+        db,
+        (namespace, port),
+        resumed.into_iter().collect(),
+        now_ms,
+        timing,
+        true,
+    )
+    .await?;
+    let pending = port
+        .pending(project, limit.saturating_sub(ready.len() as u32))
+        .await?;
+    ready.extend(due(db, (namespace, port), pending, now_ms, timing, false).await?);
+    Ok(ready)
+}
+
+/// Recheck one held result per pass. Failed probes move behind other holds.
+async fn recover_held_delivery(
+    db: &mut PgConnection,
+    operations: &dyn DeliveryOps,
+    project: Option<Uuid>,
+    now_ms: i64,
+    repeat_ms: i64,
+) -> Result<Option<Pending>> {
+    let row = sqlx::query(
+        "SELECT a.task_id,a.attempt_id,h.report_id,p.head,g.repository_id,d.reason,check_run.request,
+         (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,
+         (l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,
+         l.execution_spec#>>'{source,repository_binding_generation}' AS repository_generation
+         FROM delivery_decisions d JOIN profiled_result_heads h ON h.report_id=d.result_id
+         JOIN execution_attempts a ON a.attempt_id=h.attempt_id AND a.task_id=d.task_id
+         JOIN profiled_launches l ON l.attempt_id=a.attempt_id
+         JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id
+         JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id
+         JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+         LEFT JOIN delivery_tasks t ON t.task_id=a.task_id
+         LEFT JOIN LATERAL (
+             SELECT o.request,o.status FROM playbook_host_operations o
+             JOIN profiled_result_reports r ON r.report_id=h.report_id AND r.attempt_id=a.attempt_id
+             JOIN delivery_pull_requests pr ON pr.task_id=a.task_id AND pr.state='open'
+             WHERE o.subject_id=a.task_id::text AND o.command_name='pull_request.await_checks'
+             AND o.status IN ('conflict','failed','passed') AND o.completed_at_ms<=d.decided_at_ms
+             AND ah.state->>'status'='finished' AND ah.state->'revoked'='false'::jsonb
+             AND o.request#>>'{result_ready,task_id}'=a.task_id::text
+             AND o.request#>>'{result_ready,project_id}'=l.execution_spec#>>'{lifecycle,project_id}'
+             AND o.request#>>'{result_ready,result_id}'=h.report_id::text
+             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+             AND o.request->>'result_head'=p.head
+             AND o.request->>'pull_request'=pr.number::text
+             AND jsonb_typeof(o.request->'check_target')='object' AND o.request?'required'
+             AND convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'='success'
+             ORDER BY o.completed_at_ms DESC,o.operation_id DESC LIMIT 1
+         ) check_run ON d.reason='returns_exhausted'
+         WHERE d.decision='held' AND a.holds_task
+         AND (d.reason='publish_conflict' OR (d.reason='returns_exhausted' AND check_run.status='failed'
+              AND NOT EXISTS(SELECT 1 FROM delivery_merge_evidence m WHERE m.attempt_id=a.attempt_id)
+              AND NOT EXISTS(SELECT 1 FROM playbook_host_operations m WHERE m.subject_id=a.task_id::text
+                  AND m.command_name='pull_request.merge' AND m.status NOT IN ('conflict','refused','not_mergeable')
+                  AND m.request#>>'{result_ready,result_id}'=h.report_id::text)))
+         AND ah.state#>>'{stop,kind}'='stopped' AND p.head IS NOT NULL
+         AND ($1::uuid IS NULL OR l.execution_spec#>>'{lifecycle,project_id}'=$1::uuid::text)
+         AND GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0))<=$2
+         ORDER BY GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0)),h.report_id
+         LIMIT 1 FOR UPDATE OF a SKIP LOCKED",
+    )
+    .bind(project)
+    .bind(now_ms.saturating_sub(repeat_ms))
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let task = row.get("task_id");
+    let project = row.get("project_id");
+    let repository: Uuid = row.get("repository_id");
+    let generation: Option<&str> = row.get("repository_generation");
+    let reason: &str = row.get("reason");
+    let check_request: Option<Value> = row.get("request");
+    sqlx::query("INSERT INTO delivery_tasks(task_id,checked_at_ms) VALUES($1,$2) ON CONFLICT(task_id) DO UPDATE SET checked_at_ms=$2")
+        .bind(task).bind(now_ms).execute(&mut *db).await?;
+    let old = aq_delivery::commands::published_head(&mut *db, task).await?;
+    let head: &str = row.get("head");
+    // A recorded refresh moved the pull request to a merge of this head and main.
+    let accepted = aq_delivery::commands::accepted_head(&mut *db, Some(task), head).await?;
+    let accepted = accepted.as_deref().unwrap_or(head);
+    let verified = tokio::time::timeout(Duration::from_secs(2), async {
+        let Some(target) = operations.target(project).await? else {
+            return Ok(false);
+        };
+        if target.git.repository_id != repository
+            || generation != Some(target.git.binding_generation.to_string().as_str())
+        {
+            return Ok(false);
+        }
+        let Some(commands) = operations.commands().await else {
+            return Ok(false);
+        };
+        if reason == "publish_conflict" {
+            return Ok(commands
+                .publish_lease_usable(&target, task, head, old.as_deref())
+                .await);
+        }
+        let Some(request) = check_request.filter(|request| {
+            old.as_deref() == Some(accepted)
+                && serde_json::to_value(&target)
+                    .is_ok_and(|target| request["check_target"] == target)
+        }) else {
+            return Ok(false);
+        };
+        let Some(pr) = request["pull_request"].as_u64() else {
+            return Ok(false);
+        };
+        let Ok(required) =
+            serde_json::from_value::<Option<Vec<String>>>(request["required"].clone())
+        else {
+            return Ok(false);
+        };
+        Ok::<_, crate::Error>(
+            commands
+                .held_checks_passed(&target, pr, accepted, required.as_deref())
+                .await,
+        )
+    })
+    .await
+    .is_ok_and(|result| matches!(result, Ok(true)));
+    Ok(verified.then(|| Pending {
+        task_id: task,
+        workspace_id: row.get("workspace_id"),
+        project_id: project,
+        attempt_id: row.get("attempt_id"),
+        result_id: row.get("report_id"),
+    }))
 }
 
 /// The latest result of `attempt` with no playbook decision on it and no
@@ -403,6 +601,64 @@ pub async fn result_wait(
          WHERE h.attempt_id=$1 AND (d.decision IS NULL OR d.decision='held')
          AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements a WHERE a.report_id=h.report_id \
          AND a.disposition IN ('prepared','possible','confirmed','rework_required'))",
+    )
+    .bind(attempt)
+    .fetch_optional(db)
+    .await?)
+}
+
+/// Whether an override recorded since the hold lets the task of `attempt` resume its held result
+/// (`aq_delivery::git_grant::held_gate`): the task then waits only for what Graph shows.
+pub async fn hold_overridden(db: &mut PgConnection, attempt: Uuid) -> Result<bool> {
+    let task = sqlx::query_scalar("SELECT task_id FROM execution_attempts WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&mut *db)
+        .await?;
+    Ok(aq_delivery::git_grant::held_gate(db, task).await?.is_none())
+}
+
+/// The still-pending delivery decision on the claim's exact result.
+pub async fn settlement_wait(
+    db: &mut PgConnection,
+    (namespace, generation): (Uuid, i64),
+    attempt: Uuid,
+    now_ms: i64,
+) -> Result<Option<(Uuid, Uuid, String, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,e.operation_id,e.command_name,
+           (g.revoked_at_ms IS NULL AND g.expires_at_ms>$4 AND g.revision=e.grant_revision)
+             OR playbook_delivery_resume_current(e.operation_id,$4)
+         FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
+         JOIN playbook_effects e ON e.receipt->>'result_id'=h.report_id::text
+           AND e.receipt->>'task'=a.task_id::text AND e.namespace_id=$1 AND e.generation=$2
+         JOIN playbook_grants g ON g.grant_id=e.grant_id AND g.namespace_id=$1 AND g.generation=$2
+         WHERE h.attempt_id=$3 AND a.holds_task AND e.status='pending'
+           AND e.command_name IN ('work.complete','work.return')
+           AND NOT playbook_run_finished($1,$2,e.run_id)
+         ORDER BY e.created_at_ms DESC,e.intent_id LIMIT 1",
+    )
+    .bind(namespace)
+    .bind(generation)
+    .bind(attempt)
+    .bind(now_ms)
+    .fetch_optional(db)
+    .await?)
+}
+
+/// Replacement evidence for a settled rework of the holding attempt's current result.
+pub async fn rework_wait(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> Result<Option<(Uuid, bool, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,
+           hot.state#>>'{retention,kind}' IS NOT DISTINCT FROM 'retained',
+           hot.state#>>'{effects,kind}' IS NOT DISTINCT FROM 'quiescent'
+         FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
+         JOIN profiled_authority_hot hot USING(attempt_id)
+         JOIN profiled_auto_settlements s USING(attempt_id,report_id)
+         WHERE h.attempt_id=$1 AND a.holds_task AND s.disposition='rework_required'
+         AND hot.state#>>'{stop,kind}' IN ('stopped','not_started')",
     )
     .bind(attempt)
     .fetch_optional(db)
@@ -539,12 +795,21 @@ pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Opt
 /// GitHub App when the check failed (`check_log_bytes`). Only the failure AQ
 /// recorded for this exact head counts; `None` without a log.
 pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT l.checks_log_tail FROM delivery_pushed_results p
-         JOIN profiled_result_heads h ON h.report_id=p.report_id
+    Ok(failed_check(db, result).await?.map(|(_, log)| log))
+}
+
+pub(crate) async fn failed_check(
+    db: &mut PgConnection,
+    result: Uuid,
+) -> Result<Option<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT p.head,l.checks_log_tail FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id AND h.attempt_id=p.attempt_id
          JOIN execution_attempts a ON a.attempt_id=h.attempt_id
-         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed' AND l.checks_log_head=p.head
-         WHERE p.report_id=$1 AND EXISTS(
+         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed'
+         LEFT JOIN delivery_branch_refreshes r ON r.task_id=a.task_id AND r.result_head=p.head
+         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL
+           AND l.checks_log_head IN (p.head,COALESCE(r.merged_head,r.from_head)) AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
              AND o.command_name='pull_request.await_checks' AND o.status='failed'
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text
@@ -553,8 +818,7 @@ pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Optio
     )
     .bind(result)
     .fetch_optional(db)
-    .await?
-    .flatten())
+    .await?)
 }
 
 /// The most bytes one message to a supervisor may carry.
@@ -624,42 +888,91 @@ impl Due {
             version,
         }
     }
-    /// The `aq.work.result_ready` event for the task at `version`, with its id.
+    /// The `aq.work.result_ready` event for the current Graph task, with its id.
     pub fn event(
         &self,
-        version: i64,
+        node: &Value,
         namespace: (Uuid, i64),
         now_ms: i64,
         contract: &EventContract,
-    ) -> Result<(Uuid, EventEnvelope)> {
-        // The facts are in the key: a send repeated at once because they moved
-        // may fall in the millisecond of the send before it.
-        let key = format!(
-            "{}/{}/{now_ms}/{}",
-            self.pending.task_id, self.pending.result_id, self.facts
-        );
-        let id = stable_id("aq.work.result_ready", namespace.0, namespace.1, &key)?;
+    ) -> Result<Option<(Uuid, EventEnvelope)>> {
+        if node["task_state"]
+            .as_str()
+            .is_some_and(|state| state != "active")
+        {
+            return Ok(None);
+        }
+        let version = node["version"].as_i64().ok_or(crate::Error::Unknown)?;
+        let id = result_event_id(namespace, &self.pending, now_ms, &self.facts)?;
         let event = host10::result_ready_event(id, &self.ready(version), now_ms, contract);
-        Ok((id, event.map_err(|_| crate::Error::Invalid)?))
+        Ok(Some((id, event.map_err(|_| crate::Error::Invalid)?)))
     }
+}
+
+fn result_event_id(
+    namespace: (Uuid, i64),
+    pending: &Pending,
+    at: i64,
+    facts: &str,
+) -> Result<Uuid> {
+    // Changed facts may call for a fresh event in the same millisecond.
+    let key = format!("{}/{}/{at}/{facts}", pending.task_id, pending.result_id);
+    stable_id("aq.work.result_ready", namespace.0, namespace.1, &key)
+}
+
+/// The last emitted event has a stable key even before its payload fans out.
+/// A missing row or a legacy acknowledgement uses the work.read history.
+async fn event_outstanding(
+    db: &mut PgConnection,
+    namespace: (Uuid, i64),
+    event: Uuid,
+) -> Result<Option<bool>> {
+    let status = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT CASE
+           WHEN status='pending' OR (status='engine_accepted' AND NOT fanout_complete) THEN TRUE
+           WHEN status='engine_accepted' AND jsonb_typeof(engine_receipt->'runs')='array' THEN
+             EXISTS (SELECT 1 FROM jsonb_array_elements_text(engine_receipt->'runs') AS r(id)
+                     WHERE NOT playbook_run_finished($1,$2,r.id))
+           WHEN status='unknown' THEN FALSE
+         END
+         FROM playbook_outbox
+         WHERE namespace_id=$1 AND generation=$2 AND producer='aq.host.bridge@1' AND event_id=$3",
+    )
+    .bind(namespace.0)
+    .bind(namespace.1)
+    .bind(event)
+    .fetch_optional(db)
+    .await?;
+    Ok(status.flatten())
+}
+
+#[derive(Clone, Copy)]
+struct Timing {
+    repeat_ms: i64,
+    run_bound_ms: i64,
+    rejection_repeat_ms: i64,
 }
 
 /// The pending results to send now ([`result_ready_due`]); the others are
 /// marked as looked at, so that they go behind those not looked at yet.
-/// `run_bound_ms` is how long a run that read the task still holds back a
-/// repeat, whether or not its end is on record.
+/// `run_bound_ms` bounds the work.read fallback for legacy emissions without
+/// an exact event receipt.
 async fn due(
     db: &mut PgConnection,
-    namespace: (Uuid, i64),
+    (namespace, port): ((Uuid, i64), &dyn DeliveryPort),
     pending: Vec<Pending>,
     now_ms: i64,
-    repeat_ms: i64,
-    run_bound_ms: i64,
+    timing: Timing,
+    recovering_hold: bool,
 ) -> Result<Vec<Due>> {
+    if pending.is_empty() {
+        return Ok(vec![]);
+    }
     let results: Vec<Uuid> = pending.iter().map(|p| p.result_id).collect();
     let decided: Vec<Uuid> =
-        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1)")
+        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1) AND ($2 IS FALSE OR decision<>'held' OR reason IS NULL OR reason NOT IN ('publish_conflict','returns_exhausted'))")
             .bind(&results)
+            .bind(recovering_hold)
             .fetch_all(&mut *db)
             .await?;
     let mut out = vec![];
@@ -667,10 +980,21 @@ async fn due(
         .into_iter()
         .filter(|p| !decided.contains(&p.result_id))
     {
-        let emission = emission(db, namespace, &p, (now_ms, run_bound_ms)).await?;
+        let emission = emission(db, namespace, &p, (now_ms, timing.run_bound_ms)).await?;
         let moving = result_facts(db, p.task_id, p.project_id, None).await?;
         let facts = facts_digest(&moving.main_head, moving.pull_request.as_ref());
-        if result_ready_due(&emission, p.result_id, &facts, now_ms, repeat_ms) {
+        let due = result_ready_due(&emission, p.result_id, &facts, now_ms, timing.repeat_ms);
+        let timer_repeat = emission.emitted_result == Some(p.result_id)
+            && emission.emitted_facts.as_deref() == Some(facts.as_str());
+        if due
+            && (!timer_repeat
+                || publication_rejected_at(db, namespace, port, &p)
+                    .await?
+                    .is_none_or(|at| {
+                        now_ms.saturating_sub(at.max(emission.emitted_at_ms))
+                            >= timing.rejection_repeat_ms
+                    }))
+        {
             out.push(Due { pending: p, facts });
         } else {
             sqlx::query("UPDATE delivery_tasks SET checked_at_ms=$2 WHERE task_id=$1")
@@ -681,6 +1005,49 @@ async fn due(
         }
     }
     Ok(out)
+}
+
+/// A finished result run whose latest publication of the same head and lease
+/// was definitively rejected by the remote retries at the follow-up cadence.
+/// That also lets it recover from authority changes that have no receipt.
+async fn publication_rejected_at(
+    db: &mut PgConnection,
+    (namespace, generation): (Uuid, i64),
+    port: &dyn DeliveryPort,
+    pending: &Pending,
+) -> Result<Option<i64>> {
+    let Some(latest) = port.latest_in(db, pending.task_id).await?.filter(|latest| {
+        latest.result_id == pending.result_id
+            && latest.attempt_id == pending.attempt_id
+            && latest.project_id == pending.project_id
+    }) else {
+        return Ok(None);
+    };
+    let lease = aq_delivery::commands::published_head(&mut *db, pending.task_id).await?;
+    let rejected: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT CASE WHEN status='refused' AND output->>'reason'='unreachable'
+           AND request->>'answer_note'='remote_rejected'
+           AND request->>'expected_old' IS NOT DISTINCT FROM $8
+           THEN completed_at_ms END
+         FROM playbook_host_operations
+         WHERE namespace_id=$1 AND generation=$2 AND subject_id=$3
+           AND command_name='branch.publish' AND request->>'result_head'=$4
+           AND request#>>'{result_ready,attempt_id}'=$5
+           AND request#>>'{result_ready,result_id}'=$6
+           AND request#>>'{result_ready,project_id}'=$7
+         ORDER BY created_at_ms DESC,operation_id DESC LIMIT 1",
+    )
+    .bind(namespace)
+    .bind(generation)
+    .bind(pending.task_id.to_string())
+    .bind(latest.head)
+    .bind(pending.attempt_id.to_string())
+    .bind(pending.result_id.to_string())
+    .bind(pending.project_id.to_string())
+    .bind(lease)
+    .fetch_optional(db)
+    .await?;
+    Ok(rejected.flatten())
 }
 
 /// Read the task's emission under its row lock, then check whether its run
@@ -702,18 +1069,28 @@ async fn emission(
         emission.emitted_facts = row.get("emitted_facts");
     }
     if emission.emitted_result == Some(pending.result_id) {
-        emission.run_unfinished = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
-             AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
-             AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
-        )
-        .bind(namespace.0)
-        .bind(namespace.1)
-        .bind(pending.task_id.to_string())
-        .bind(emission.emitted_at_ms)
-        .bind(now_ms - run_bound_ms)
-        .fetch_one(&mut *db)
-        .await?;
+        let exact = match emission.emitted_facts.as_deref() {
+            Some(facts) => {
+                let event = result_event_id(namespace, pending, emission.emitted_at_ms, facts)?;
+                event_outstanding(db, namespace, event).await?
+            }
+            None => None,
+        };
+        emission.run_unfinished = match exact {
+            Some(outstanding) => outstanding,
+            None => sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
+                 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
+                 AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
+            )
+            .bind(namespace.0)
+            .bind(namespace.1)
+            .bind(pending.task_id.to_string())
+            .bind(emission.emitted_at_ms)
+            .bind(now_ms - run_bound_ms)
+            .fetch_one(&mut *db)
+            .await?,
+        };
     }
     Ok(emission)
 }

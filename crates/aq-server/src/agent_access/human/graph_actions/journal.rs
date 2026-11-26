@@ -13,17 +13,60 @@ pub(super) struct Intent {
     pub guards: usize,
 }
 
-pub(super) async fn retain(
-    state: &AppState,
-    user: &User,
-    id: Uuid,
-    record: &ProjectRecord,
-    service: &Value,
-    body: &[u8],
-) -> Result<()> {
-    // An ambiguous insert is never a send license. A committed intent can be
-    // recovered by lookup; no intent means no native effect was dispatched.
-    let inserted = sqlx::query(
+impl Intent {
+    pub(super) fn matches(&self, scope: &Scope, record: &ProjectRecord, graph: &Runtime) -> bool {
+        let same_project = scope
+            == &(Scope::Project {
+                project_id: self.project,
+            })
+            && record.revision == self.revision;
+        same_project
+            && json!(record.binding) == self.binding
+            && crate::agent_access::settlement_service_identity(graph, self.workspace)
+                .ok()
+                .as_ref()
+                == Some(&self.service)
+    }
+}
+pub(super) struct Admission<'a> {
+    pub id: Uuid,
+    pub record: &'a ProjectRecord,
+    pub service: &'a Value,
+    pub body: &'a [u8],
+    #[cfg(feature = "project_environments")]
+    pub needs_task: Option<(Uuid, bool)>,
+}
+impl Admission<'_> {
+    pub(super) async fn retain(&self, state: &AppState, user: &User) -> Result<bool> {
+        let Admission {
+            id,
+            record,
+            service,
+            body,
+            #[cfg(feature = "project_environments")]
+            needs_task,
+        } = *self;
+        // An ambiguous insert is never a send license. A committed intent can be
+        // recovered by lookup; no intent means no native effect was dispatched.
+        let mut tx = state.store.pool.begin().await.map_err(|_| unavailable())?;
+        #[cfg(feature = "project_environments")]
+        if let Some((task, direct)) = needs_task {
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| unavailable())?;
+            if !needs::writable(
+                state,
+                &mut tx,
+                (record.binding.project_id, task, user.id),
+                (record.revision, direct),
+            )
+            .await?
+            {
+                return Ok(false);
+            }
+        }
+        let inserted = sqlx::query(
         "INSERT INTO dashboard_graph_intents(operation_id,project_id,project_revision,project_binding,workspace_id,service_identity,idempotency_key,body)
          SELECT operation_id,$3,$4,$5,$6,$7,$8,$9 FROM dashboard_operations
          WHERE operation_id=$1 AND principal_id=$2 AND disposition='pending' AND retired_at IS NULL",
@@ -37,16 +80,17 @@ pub(super) async fn retain(
     .bind(service)
     .bind(format!("aq-dashboard-action:{id}"))
     .bind(body)
-    .execute(&state.store.pool)
+    .execute(&mut *tx)
     .await
     .map_err(|_| unavailable())?
     .rows_affected();
-    if inserted != 1 {
-        return Err(unavailable());
+        if inserted != 1 {
+            return Err(unavailable());
+        }
+        tx.commit().await.map_err(|_| unavailable())?;
+        Ok(true)
     }
-    Ok(())
 }
-
 pub(super) async fn load(
     state: &AppState,
     user: &User,
@@ -69,10 +113,8 @@ pub(super) async fn load(
     let body: Vec<u8> = row.get("body");
     let raw = super::super::super::scheduling::parse::parse(&body).map_err(|_| unavailable())?;
     let key: String = row.get("idempotency_key");
-    if key != format!("aq-dashboard-action:{id}")
-        || raw["idempotency_key"] != key
-        || !contract::upstream_valid("MutationRequest", &raw)
-    {
+    let key_matches = key == format!("aq-dashboard-action:{id}") && raw["idempotency_key"] == key;
+    if !key_matches || !contract::upstream_valid("MutationRequest", &raw) {
         return Err(unavailable());
     }
     let operations = raw["operations"].as_array().ok_or_else(unavailable)?;

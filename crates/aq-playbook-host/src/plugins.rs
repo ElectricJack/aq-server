@@ -110,7 +110,7 @@ impl Plugins {
             if !entry.path().is_dir() {
                 continue;
             }
-            match Plugin::load(&name, &entry.path(), state_root, vault) {
+            match Plugin::load(&name, &entry.path(), &PluginStorage { state_root, vault }) {
                 Ok((plugin, version)) => {
                     tracing::info!(plugin = %name, %version, "playbook plugin loaded");
                     installed.insert(name, plugin);
@@ -143,11 +143,7 @@ impl Plugins {
 }
 
 fn contained(root: &Path, relative: &Path) -> Option<PathBuf> {
-    if relative.as_os_str().is_empty()
-        || !relative
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-    {
+    if !relative_path(relative) {
         return None;
     }
     let root = root.canonicalize().ok()?;
@@ -155,38 +151,70 @@ fn contained(root: &Path, relative: &Path) -> Option<PathBuf> {
     path.starts_with(root).then_some(path)
 }
 
+fn relative_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+}
+
 fn private_file(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o7777 == 0o600)
 }
 
-impl Plugin {
-    fn load(
-        name: &str,
-        package: &Path,
-        state_root: &Path,
-        vault: &Path,
-    ) -> Result<(Self, String), String> {
-        let manifest: Manifest = fs::read_to_string(package.join("plugin.toml"))
+struct PluginStorage<'a> {
+    state_root: &'a Path,
+    vault: &'a Path,
+}
+impl PluginStorage<'_> {
+    fn prepare(&self, name: &str) -> Result<PathBuf, String> {
+        let directory = self.state_root.join(name);
+        fs::create_dir_all(directory.join("tmp")).map_err(|_| "plugin state unavailable")?;
+        directory
+            .canonicalize()
+            .map_err(|_| "plugin state unavailable".into())
+    }
+}
+
+impl Manifest {
+    fn identifies(&self, name: &str) -> bool {
+        self.name == name && !self.version.is_empty() && self.protocol == PROTOCOL
+    }
+    fn read(package: &Path, name: &str) -> Result<Self, String> {
+        let manifest: Self = fs::read_to_string(package.join("plugin.toml"))
             .ok()
             .and_then(|text| toml::from_str(&text).ok())
             .ok_or("invalid plugin.toml")?;
-        if manifest.name != name || manifest.version.is_empty() || manifest.protocol != PROTOCOL {
+        if !manifest.identifies(name) {
             return Err("invalid plugin identity or protocol".into());
         }
-        let file = |relative: &Path| contained(package, relative).filter(|p| p.is_file());
-        let exe = file(&manifest.exe)
+        Ok(manifest)
+    }
+}
+
+struct Package<'a>(&'a Path);
+impl Package<'_> {
+    fn file(&self, relative: &Path) -> Option<PathBuf> {
+        contained(self.0, relative).filter(|p| p.is_file())
+    }
+    fn executable(&self, path: &Path) -> Result<PathBuf, String> {
+        self.file(path)
             .filter(|p| fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0))
-            .ok_or("plugin executable unavailable")?;
-        let registry: Registry = file(&manifest.contracts)
+            .ok_or_else(|| "plugin executable unavailable".into())
+    }
+    fn extension(&self, manifest: &Manifest) -> Result<CatalogExtension, String> {
+        let registry: Registry = self
+            .file(&manifest.contracts)
             .and_then(|p| fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or("invalid plugin registry")?;
-        let notes: Value = file(&manifest.notes)
+        let notes: Value = self
+            .file(&manifest.notes)
             .and_then(|p| fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or("invalid plugin notes")?;
-        let extension =
-            CatalogExtension::new(name, registry, notes).map_err(|error| error.to_string())?;
+        let extension = CatalogExtension::new(&manifest.name, registry, notes)
+            .map_err(|error| error.to_string())?;
         let refusal_bytes = r#"{"reason":"invalid_plugin_response"}"#.len();
         if extension
             .registry()
@@ -196,39 +224,52 @@ impl Plugin {
         {
             return Err("plugin command payload budget cannot encode a host refusal".into());
         }
-        let vault = vault
+        Ok(extension)
+    }
+}
+fn secret_paths(vault: &Path, entries: Vec<String>) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut secrets = BTreeMap::new();
+    for relative in entries {
+        let path = contained(vault, Path::new(&relative))
+            .filter(|p| private_file(p))
+            .ok_or("plugin secret unavailable or mode differs from 0600")?;
+        if secrets.insert(relative, path).is_some() {
+            return Err("duplicate plugin secret".into());
+        }
+    }
+    Ok(secrets)
+}
+
+impl Plugin {
+    fn load(
+        name: &str,
+        package: &Path,
+        storage: &PluginStorage<'_>,
+    ) -> Result<(Self, String), String> {
+        let manifest = Manifest::read(package, name)?;
+        let files = Package(package);
+        let exe = files.executable(&manifest.exe)?;
+        let extension = files.extension(&manifest)?;
+        let vault = storage
+            .vault
             .canonicalize()
             .map_err(|_| "plugin vault unavailable")?;
-        let mut secrets = BTreeMap::new();
-        for relative in manifest.secrets {
-            let path = contained(&vault, Path::new(&relative))
-                .filter(|p| private_file(p))
-                .ok_or("plugin secret unavailable or mode differs from 0600")?;
-            if secrets.insert(relative, path).is_some() {
-                return Err("duplicate plugin secret".into());
-            }
-        }
-        if manifest.bindings.as_ref().is_some_and(|path| {
-            path.as_os_str().is_empty()
-                || !path
-                    .components()
-                    .all(|part| matches!(part, Component::Normal(_)))
-        }) {
+        let secrets = secret_paths(&vault, manifest.secrets)?;
+        if manifest
+            .bindings
+            .as_ref()
+            .is_some_and(|p| !relative_path(p))
+        {
             return Err("invalid plugin bindings path".into());
         }
-        let bindings = manifest.bindings;
-        let state_dir = state_root.join(name);
-        fs::create_dir_all(state_dir.join("tmp")).map_err(|_| "plugin state unavailable")?;
-        let state_dir = state_dir
-            .canonicalize()
-            .map_err(|_| "plugin state unavailable")?;
+        let state_dir = storage.prepare(name)?;
         Ok((
             Self {
                 extension,
                 exe,
                 state_dir,
                 secrets,
-                bindings,
+                bindings: manifest.bindings,
                 vault,
             },
             manifest.version,
@@ -263,14 +304,12 @@ impl Plugin {
         }
     }
 
-    pub async fn invoke(&self, call: Call<'_>) -> Invocation {
-        let Some(binding) = self.binding(call.project_id) else {
-            return Invocation::Unavailable;
-        };
+    fn request<'a>(&'a self, call: &'a Call<'a>) -> Option<Request<'a>> {
+        let binding = self.binding(call.project_id)?;
         if self.secrets.values().any(|path| !private_file(path)) {
-            return Invocation::Unavailable;
+            return None;
         }
-        let request = Request {
+        Some(Request {
             protocol: PROTOCOL,
             command: &call.command.name,
             input: call.input,
@@ -280,12 +319,10 @@ impl Plugin {
             state_dir: &self.state_dir,
             secret_paths: &self.secrets,
             deadline_ms: (call.command.deadline_ms / 2).min(call.remaining_ms),
-        };
-        let Ok(mut bytes) = serde_json::to_vec(&request) else {
-            return Invocation::Unavailable;
-        };
-        bytes.push(b'\n');
-        let mut child = match Command::new(&self.exe)
+        })
+    }
+    fn spawn(&self) -> io::Result<tokio::process::Child> {
+        Command::new(&self.exe)
             .arg("invoke")
             .current_dir(&self.state_dir)
             .env_clear()
@@ -299,65 +336,91 @@ impl Plugin {
             .kill_on_drop(true)
             .process_group(0)
             .spawn()
-        {
-            Ok(child) => child,
-            Err(_) => return Invocation::Unavailable,
+    }
+
+    pub async fn invoke(&self, call: Call<'_>) -> Invocation {
+        let Some(request) = self.request(&call) else {
+            return Invocation::Unavailable;
         };
-        let mut stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
-        let stderr = child.stderr.take().expect("piped stderr");
+        let Ok(mut bytes) = serde_json::to_vec(&request) else {
+            return Invocation::Unavailable;
+        };
+        bytes.push(b'\n');
+        let Ok(mut child) = self.spawn() else {
+            return Invocation::Unavailable;
+        };
         let pid = child.id();
         let mut stderr_bytes = Vec::new();
-        let result = tokio::time::timeout(Duration::from_millis(request.deadline_ms), async {
-            let write = async move { stdin.write_all(&bytes).await };
-            let mut stdout_bytes = Vec::new();
-            let (written, stdout, stderr, status) = tokio::join!(
-                write,
-                capture(stdout, &mut stdout_bytes, STDOUT_BYTES),
-                capture(stderr, &mut stderr_bytes, STDERR_BYTES),
-                child.wait(),
-            );
-            (written.is_ok()
-                && stdout.is_ok_and(|overflow| !overflow)
-                && stderr.is_ok()
-                && status.is_ok_and(|status| status.success()))
-            .then_some(stdout_bytes)
-        })
+        let result = tokio::time::timeout(
+            Duration::from_millis(request.deadline_ms),
+            communicate(&mut child, bytes, &mut stderr_bytes),
+        )
         .await;
         if result.is_err() {
-            if let Some(pid) = pid {
-                let _ = nix::sys::signal::killpg(
-                    nix::unistd::Pid::from_raw(pid as i32),
-                    nix::sys::signal::Signal::SIGKILL,
-                );
-            }
-            let _ = child.kill().await;
+            terminate(&mut child, pid).await;
         }
         if !stderr_bytes.is_empty() {
             tracing::warn!(call_id = call.idempotency_key, stderr = %String::from_utf8_lossy(&stderr_bytes), "playbook plugin stderr");
         }
-        let Some(bytes) = result.ok().flatten() else {
-            return Invocation::Unknown;
-        };
-        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-            return Invocation::Unknown;
-        };
-        match serde_json::from_value(value) {
-            Ok(response) => Invocation::Response(response),
-            Err(_) => Invocation::Invalid,
-        }
+        decode(result.ok().flatten())
     }
 
     pub fn event(
         &self,
         intent_id: &str,
-        index: usize,
-        event: ProducedEvent,
+        (index, event): (usize, ProducedEvent),
         now_ms: i64,
     ) -> Option<EventEnvelope> {
         self.extension
             .event_envelope(intent_id, index, event.name, event.payload, now_ms)
             .ok()
+    }
+}
+
+async fn communicate(
+    child: &mut tokio::process::Child,
+    bytes: Vec<u8>,
+    stderr_bytes: &mut Vec<u8>,
+) -> Option<Vec<u8>> {
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+
+    let write = async move { stdin.write_all(&bytes).await };
+    let mut stdout_bytes = Vec::new();
+    let (written, stdout, stderr, status) = tokio::join!(
+        write,
+        capture(stdout, &mut stdout_bytes, STDOUT_BYTES),
+        capture(stderr, stderr_bytes, STDERR_BYTES),
+        child.wait(),
+    );
+    (written.is_ok()
+        && stdout.is_ok_and(|overflow| !overflow)
+        && stderr.is_ok()
+        && status.is_ok_and(|status| status.success()))
+    .then_some(stdout_bytes)
+}
+
+async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>) {
+    if let Some(pid) = pid {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.kill().await;
+}
+
+fn decode(bytes: Option<Vec<u8>>) -> Invocation {
+    let Some(bytes) = bytes else {
+        return Invocation::Unknown;
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Invocation::Unknown;
+    };
+    match serde_json::from_value(value) {
+        Ok(response) => Invocation::Response(response),
+        Err(_) => Invocation::Invalid,
     }
 }
 

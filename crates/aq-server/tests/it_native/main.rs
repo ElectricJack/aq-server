@@ -19,6 +19,7 @@ mod native_initial_grant;
 mod native_inventory;
 mod native_material_issuance;
 mod native_offers;
+mod native_placement;
 mod native_preparation;
 mod native_proposal_scope;
 mod native_reconciliation;

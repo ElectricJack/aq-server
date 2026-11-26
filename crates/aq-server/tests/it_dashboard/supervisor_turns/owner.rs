@@ -3,7 +3,7 @@
 //! supervisor bearer with the `owner` scope reaches the live owner app as the
 //! owner who approved the supervisor, and nothing else does.
 use super::Fixture;
-use crate::dashboard_task_knowledge::{Graph, action, change_set, graph_runtime, node};
+use crate::dashboard_task_knowledge::{Graph, Subject, action, change_set, graph_runtime, node};
 use aq_server::{
     agent_access::supervisor_conversation::reply, config::AuthConfig,
     identity::verifier_from_config, project_bindings::domain,
@@ -84,6 +84,10 @@ async fn build(scoped: bool) -> Owner {
     let (graph, server, dir) = graph_runtime(&mut f.state).await;
     let other = Uuid::new_v4();
     bind(&f, other, Uuid::new_v4()).await;
+    // Wired, so the owner routes can tell a supervisor (`supervisor.escalate`).
+    let clock = f.state.clock.clone();
+    f.state.internal_work =
+        aq_server::InternalWork::new(f.pool.clone(), clock, None, None).unwrap();
     let owner = aq_server::build_admin_router(f.state.clone());
     let machine = aq_server::build_worker_router_with_owner_app(f.state.clone(), owner.clone());
     Owner {
@@ -206,7 +210,7 @@ impl Owner {
         *self.graph.reply.lock().unwrap() = Some((200, change_set(vec![active])));
         let payload =
             json!({"operation_id":Uuid::new_v4(),"project_id":self.project,"expected_version":"3"});
-        (id, action("task.activate", "task", id, "3", payload))
+        (id, action("task.activate", Subject::Task(id, "3"), payload))
     }
 }
 
@@ -464,7 +468,7 @@ impl Owner {
         *self.graph.reply.lock().unwrap() = Some((200, created));
         let payload = json!({"operation_id":id,"expected_project_revision":"1","title":"Single",
             "body":"","acceptance_criteria":"","labels":[],"task_state":"active"});
-        action("task.create", "project", self.project, "1", payload)
+        action("task.create", Subject::Project(self.project, "1"), payload)
     }
 }
 
@@ -595,6 +599,56 @@ async fn project_supervisor_is_refused_outside_its_project() {
 }
 
 #[tokio::test]
+async fn project_supervisor_escalates_to_the_global_supervisor_for_its_own_project_only() {
+    let o = project_owner().await;
+    let who = As::Supervisor(&o.token);
+    let (_, listed) = call(&o.machine, "GET", "/api/v1/commands", who, None).await;
+    let listed = listed["commands"].as_array().unwrap();
+    let escalate = listed.iter().find(|c| c["name"] == "supervisor.escalate");
+    let summary = escalate.unwrap()["summary"].as_str().unwrap();
+    assert!(summary.starts_with("Escalate a decision"), "{summary}");
+    let task = Uuid::new_v4();
+    let decision = "Add PostgreSQL to the sandbox image? Thirteen tasks fail without it.";
+    let params = json!({"project_id":o.project,"task_id":task,"decision_needed":decision});
+    let (status, out) = o
+        .command("supervisor.escalate", json!({"params":params}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["disposition"], "confirmed", "{out}");
+    let message: Uuid = out["message_id"].as_str().unwrap().parse().unwrap();
+    let (thread, body): (Uuid, String) =
+        sqlx::query_as("SELECT thread_id,body FROM mailbox_messages WHERE message_id=$1")
+            .bind(message)
+            .fetch_one(&o.f.pool)
+            .await
+            .unwrap();
+    let global: Uuid = sqlx::query_scalar(
+        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id IS NULL",
+    )
+    .fetch_one(&o.f.pool)
+    .await
+    .unwrap();
+    assert_eq!(thread, global, "the global supervisor's conversation");
+    for want in [o.project.to_string(), task.to_string(), decision.into()] {
+        assert!(body.contains(&want), "{want} in {body}");
+    }
+    // Another project's id is refused, and nothing more is posted.
+    let count = "SELECT count(*) FROM mailbox_messages WHERE thread_id=$1";
+    let posted = async || -> i64 {
+        let query = sqlx::query_scalar(count).bind(global);
+        query.fetch_one(&o.f.pool).await.unwrap()
+    };
+    let before = posted().await;
+    let params = json!({"project_id":o.other,"decision_needed":decision});
+    let (status, out) = o
+        .command("supervisor.escalate", json!({"params":params}))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert_eq!(out["message"], REFUSAL, "{out}");
+    assert_eq!(posted().await, before);
+}
+
+#[tokio::test]
 async fn project_supervisor_action_body_bounds() {
     let o = project_owner().await;
     let path = format!("{PREFIX}/api/v1/actions");
@@ -644,8 +698,318 @@ async fn project_supervisor_cannot_replace_its_binding() {
 async fn project_supervisor_cannot_send_playbook_actions() {
     let o = project_owner().await;
     let payload = json!({"operation_id":Uuid::new_v4(),"project_id":o.project});
-    let start = action("playbook.run.start", "project", o.project, "1", payload);
+    let start = action(
+        "playbook.run.start",
+        Subject::Project(o.project, "1"),
+        payload,
+    );
     let (status, out) = o.supervisor("POST", "/api/v1/actions", Some(start)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
     assert_eq!(out["message"], REFUSAL, "{out}");
+}
+
+/// Read-only code access (`/v1/supervisor/git`), with feature
+/// `delivery_playbook`: aq-git's git socket is a fake served by
+/// `git http-backend` that holds both bound projects' repositories.
+#[cfg(feature = "delivery_playbook")]
+mod git {
+    use super::*;
+    use aq_delivery::git_grant::fake::{FakeGitHttp, git};
+
+    struct Git {
+        o: Owner,
+        fake: FakeGitHttp,
+        /// The repositories bound to `o.project` and `o.other`.
+        mine: Uuid,
+        other: Uuid,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn repository(o: &Owner, project: Uuid) -> Uuid {
+        let id: String = sqlx::query_scalar(
+            "SELECT binding->>'repository_id' FROM project_execution_bindings WHERE project_id=$1",
+        )
+        .bind(project)
+        .fetch_one(&o.f.pool)
+        .await
+        .unwrap();
+        id.parse().unwrap()
+    }
+
+    /// `o`'s machine listener with the server serving git through the fake.
+    async fn serve(mut o: Owner) -> Git {
+        let dir = tempfile::tempdir().unwrap();
+        let (mine, other) = (
+            repository(&o, o.project).await,
+            repository(&o, o.other).await,
+        );
+        let fake = FakeGitHttp::start(dir.path(), mine, "refs/heads/main").await;
+        let bare = dir
+            .path()
+            .join("git-http-repositories")
+            .join(other.to_string());
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "--bare", "-q"]);
+        let mut config = (*o.f.state.config).clone();
+        config.delivery = Some(aq_delivery::github::DeliveryConfig {
+            git_http_socket: Some(fake.socket.clone()),
+            ..Default::default()
+        });
+        o.f.state.config = std::sync::Arc::new(config);
+        o.machine =
+            aq_server::build_worker_router_with_owner_app(o.f.state.clone(), o.owner.clone());
+        Git {
+            o,
+            fake,
+            mine,
+            other,
+            _dir: dir,
+        }
+    }
+
+    fn refs(repository: impl std::fmt::Display) -> String {
+        format!("/v1/supervisor/git/{repository}/info/refs?service=git-upload-pack")
+    }
+
+    impl Git {
+        async fn get(&self, path: &str) -> StatusCode {
+            let who = As::Supervisor(&self.o.token);
+            call(&self.o.machine, "GET", path, who, None).await.0
+        }
+    }
+
+    #[tokio::test]
+    async fn global_supervisor_fetches_any_bound_repository() {
+        let g = serve(owner().await).await;
+        assert_eq!(g.get(&refs(g.mine)).await, StatusCode::OK);
+        assert_eq!(g.get(&refs(g.other)).await, StatusCode::OK);
+        // An uppercase id names the same repository.
+        let upper = g.other.to_string().to_uppercase();
+        assert_eq!(g.get(&refs(upper)).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn project_supervisor_fetches_only_its_repository() {
+        let g = serve(project_owner().await).await;
+        assert_eq!(g.get(&refs(g.mine)).await, StatusCode::OK);
+        let path = refs(g.other);
+        let who = As::Supervisor(&g.o.token);
+        let (status, out) = call(&g.o.machine, "GET", &path, who, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+        let why = "Supervisor can read only its projects' repositories";
+        assert_eq!(out["message"], why, "{out}");
+    }
+
+    #[tokio::test]
+    async fn supervisor_git_refuses_unbound_repositories_and_pushes() {
+        let g = serve(owner().await).await;
+        let before = git(&g.fake.repository, &["for-each-ref"]);
+        assert_eq!(g.get(&refs(Uuid::new_v4())).await, StatusCode::FORBIDDEN);
+        assert_eq!(g.get(&refs("not-a-uuid")).await, StatusCode::FORBIDDEN);
+        let seen = g.fake.seen.lock().unwrap().len();
+        let receive = format!("/v1/supervisor/git/{}/git-receive-pack", g.mine);
+        let advertise = format!(
+            "/v1/supervisor/git/{}/info/refs?service=git-receive-pack",
+            g.mine
+        );
+        for (method, path) in [("POST", &receive), ("GET", &advertise)] {
+            let who = As::Supervisor(&g.o.token);
+            let (status, out) = call(&g.o.machine, method, path, who, None).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {out}");
+            assert_eq!(out["message"], "Supervisors can only fetch", "{out}");
+        }
+        // Nothing reached aq-git, and its refs are unchanged.
+        assert_eq!(g.fake.seen.lock().unwrap().len(), seen);
+        assert_eq!(git(&g.fake.repository, &["for-each-ref"]), before);
+    }
+
+    #[tokio::test]
+    async fn supervisor_git_requires_a_live_credential() {
+        let g = serve(owner().await).await;
+        let path = refs(g.mine);
+        let who = As::Owner { csrf: true };
+        let (status, out) = call(&g.o.machine, "GET", &path, who, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{out}");
+        assert_eq!(g.get(&path).await, StatusCode::OK);
+        sqlx::query(
+            "UPDATE central_supervisor_credentials SET revoked_at_ms=999500 WHERE actor_id=$1",
+        )
+        .bind(g.o.f.actor)
+        .execute(&g.o.f.pool)
+        .await
+        .unwrap();
+        assert_eq!(g.get(&path).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn supervisor_git_refreshes_shallow_tips_over_smart_http() {
+        let g = serve(project_owner().await).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let machine = g.o.machine.clone();
+        let server = tokio::spawn(async move { axum::serve(listener, machine).await });
+        let remote = format!("http://{address}/v1/supervisor/git/{}", g.mine);
+        let auth = format!("http.extraHeader=Authorization: Bearer {}", g.o.token);
+        let repository = g.fake.repository.clone();
+        let base = g.fake.base.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let checkout = tempfile::tempdir().unwrap();
+            let checkout = checkout.path();
+            git(checkout, &["init", "--bare", "--template="]);
+            let tree = git(&repository, &["mktree"]);
+            let advance = |parent| {
+                let head = git(
+                    &repository,
+                    &["commit-tree", &tree, "-p", parent, "-m", "new tip"],
+                );
+                git(&repository, &["update-ref", "refs/heads/main", &head]);
+                head
+            };
+            let task_ref = format!("refs/heads/aq/{}", Uuid::new_v4());
+            let local_task_ref = task_ref.replacen("refs/heads/", "refs/remotes/origin/", 1);
+            let main_ref = "refs/remotes/origin/main";
+            let fetch = || {
+                git(
+                    checkout,
+                    &[
+                        "-c",
+                        &auth,
+                        "fetch",
+                        "--quiet",
+                        "--prune",
+                        "--depth=1",
+                        "--no-tags",
+                        "--no-auto-maintenance",
+                        "--",
+                        &remote,
+                        "+refs/heads/main:refs/remotes/origin/main",
+                        "+refs/heads/aq/*:refs/remotes/origin/aq/*",
+                    ],
+                );
+            };
+
+            let first = advance(&base);
+            git(&repository, &["update-ref", &task_ref, &first]);
+            fetch();
+            assert_eq!(
+                git(checkout, &["rev-parse", "--is-shallow-repository"]),
+                "true"
+            );
+            assert_eq!(git(checkout, &["rev-parse", main_ref]), first);
+            assert_eq!(git(checkout, &["rev-parse", &local_task_ref]), first);
+            assert_eq!(git(checkout, &["rev-list", "--count", main_ref]), "1");
+
+            let next = advance(&first);
+            git(&repository, &["update-ref", "-d", &task_ref]);
+            fetch();
+            assert_eq!(git(checkout, &["rev-parse", main_ref]), next);
+            assert_eq!(git(checkout, &["rev-list", "--count", main_ref]), "1");
+            assert!(git(checkout, &["for-each-ref", "refs/remotes/origin/aq"]).is_empty());
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn supervisor_git_passes_gzip_fetch_bodies() {
+        use std::io::Write as _;
+        let g = serve(owner().await).await;
+        let want = format!("want {}\n", g.fake.base);
+        let request = format!("{:04x}{want}00000009done\n", want.len() + 4);
+        let mut gzip = std::process::Command::new("gzip")
+            .arg("-c")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        gzip.stdin
+            .take()
+            .unwrap()
+            .write_all(request.as_bytes())
+            .unwrap();
+        let body = gzip.wait_with_output().unwrap().stdout;
+        let path = format!("/v1/supervisor/git/{}/git-upload-pack", g.mine);
+        let request = Request::post(path)
+            .header("authorization", format!("Bearer {}", g.o.token))
+            .header("content-type", "application/x-git-upload-pack-request")
+            .header("content-encoding", "gzip")
+            .body(Body::from(body))
+            .unwrap();
+        let response = g.o.machine.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // git http-backend inflated the body and answered the want with a pack.
+        let pack = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(pack.starts_with(b"0008NAK\n"), "{pack:?}");
+        let seen = g.fake.seen.lock().unwrap();
+        let header = |name: &str| seen[0][name].to_str().unwrap().to_owned();
+        assert_eq!(header("content-encoding"), "gzip");
+        assert_eq!(header("aq-repository"), g.mine.to_string());
+        assert_eq!(header("aq-base"), aq_delivery::git_grant::READ_BASE);
+        let task_ref = aq_delivery::git_grant::READ_TASK_REF;
+        assert_eq!(header("aq-task-ref"), task_ref);
+        assert_eq!(header("aq-max-push-bytes"), "1");
+        assert!(!seen[0].contains_key("authorization"));
+    }
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn project_supervisor_cannot_attest_or_publish_a_sibling_workspace() {
+    let o = project_owner().await;
+    let task = Uuid::new_v4();
+    let report = Uuid::new_v4();
+    let path = format!(
+        "/api/projects/{}/tasks/{task}/results/{report}/workspace-delivery",
+        o.project
+    );
+    let head = "a".repeat(40);
+    for action in [
+        json!({"kind":"integrated_checks","heads":{},"verdict":"passed","evidence":"checks"}),
+        json!({"kind":"owner_acceptance","target_project_id":o.other,"head":head,"evidence":"self"}),
+        json!({"kind":"external_delivery","target_project_id":o.other,"head":head,"evidence":"self"}),
+        json!({"kind":"publish","target_project_id":o.other,"head":head}),
+        json!({"kind":"verify_merge","target_project_id":o.other,"head":head,"pull_request":1}),
+    ] {
+        let command = json!({"operation_id":Uuid::new_v4(),"action":action});
+        let (status, body) = o.supervisor("POST", &path, Some(command)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(
+            body.to_string().contains("requires the human owner"),
+            "{body}"
+        );
+    }
+    let command = json!({"operation_id":Uuid::new_v4(),"action":{
+        "kind":"publish","target_project_id":o.other,"head":head
+    }});
+    let human = || {
+        call(
+            &o.owner,
+            "POST",
+            &path,
+            As::Owner { csrf: true },
+            Some(command.clone()),
+        )
+    };
+    assert_eq!(
+        human().await.0,
+        StatusCode::NOT_FOUND,
+        "the human reaches report lookup"
+    );
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(o.f.user.id)
+        .execute(&o.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        human().await.0,
+        StatusCode::FORBIDDEN,
+        "the same identity lost owner rights"
+    );
+    let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM task_workspace_target_acceptance")
+        .fetch_one(&o.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(actions, 0);
 }

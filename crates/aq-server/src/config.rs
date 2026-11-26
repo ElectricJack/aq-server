@@ -40,6 +40,10 @@ pub struct Config {
     /// C3b environment template allowlist (C4); absent means no sandbox pins.
     #[serde(default, deserialize_with = "aq_environment_templates::deserialize")]
     pub templates: Option<std::sync::Arc<aq_environment_templates::Allowlist>>,
+    /// Spec 0017 §6.4: the AQ base template, recorded at startup.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[serde(default)]
+    pub environment_base: Option<aq_environments::commands::Base>,
     #[serde(default)]
     pub intelligence_preferences_file: Option<PathBuf>,
     pub format_version: u32,
@@ -463,6 +467,8 @@ mod tests {
             notifications: None,
             profiled_execution: None,
             templates: None,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            environment_base: None,
             format_version: 1,
             environment: env,
             server: ServerConfig {

@@ -59,11 +59,18 @@ pub(super) fn has_heading(text: &str) -> bool {
     })
 }
 
+#[derive(Clone, Copy)]
+struct Field<'a> {
+    line: usize,
+    key: &'a str,
+    value: &'a str,
+}
+
 /// `key: value` entries of the frontmatter or of one list section.
 struct Fields<'a> {
     place: String,
     line: usize,
-    values: BTreeMap<&'a str, (usize, &'a str)>,
+    values: BTreeMap<&'a str, Field<'a>>,
 }
 impl<'a> Fields<'a> {
     fn new(place: impl Into<String>, line: usize) -> Self {
@@ -87,33 +94,34 @@ impl<'a> Fields<'a> {
         if allowed.is_some_and(|allowed| !allowed.contains(&key)) {
             return refuse(line, format!("unknown {} key `{key}`", self.place));
         }
-        if self.values.insert(key, (line, value.trim())).is_some() {
+        if self
+            .values
+            .insert(
+                key,
+                Field {
+                    line,
+                    key,
+                    value: value.trim(),
+                },
+            )
+            .is_some()
+        {
             return refuse(line, format!("duplicate {} key `{key}`", self.place));
         }
         Ok(())
     }
-    fn raw(&self, key: &str) -> Parsed<(usize, &'a str)> {
+    fn optional<T>(&self, key: &str, read: impl Fn(Field<'a>) -> Parsed<T>) -> Parsed<Option<T>> {
+        self.values.get(key).copied().map(read).transpose()
+    }
+    fn required<T>(&self, key: &str, read: impl Fn(Field<'a>) -> Parsed<T>) -> Parsed<T> {
         match self.values.get(key) {
-            Some(found) => Ok(*found),
+            Some(field) => read(*field),
             None => refuse(self.line, format!("{} is missing `{key}`", self.place)),
         }
     }
-    fn optional<T>(
-        &self,
-        key: &str,
-        read: impl Fn(usize, &str, &str) -> Parsed<T>,
-    ) -> Parsed<Option<T>> {
-        match self.values.get(key) {
-            Some((line, value)) => read(*line, key, value).map(Some),
-            None => Ok(None),
-        }
-    }
-    fn required<T>(&self, key: &str, read: impl Fn(usize, &str, &str) -> Parsed<T>) -> Parsed<T> {
-        let (line, value) = self.raw(key)?;
-        read(line, key, value)
-    }
 }
-fn text(line: usize, key: &str, value: &str) -> Parsed<String> {
+fn text(field: Field<'_>) -> Parsed<String> {
+    let Field { line, key, value } = field;
     if value.is_empty() {
         refuse(line, format!("`{key}` is empty"))
     } else if value.starts_with('"') {
@@ -128,7 +136,8 @@ fn text(line: usize, key: &str, value: &str) -> Parsed<String> {
         Ok(value.into())
     }
 }
-fn list(line: usize, key: &str, value: &str) -> Parsed<Vec<String>> {
+fn list(field: Field<'_>) -> Parsed<Vec<String>> {
+    let Field { line, key, value } = field;
     let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
         return refuse(line, format!("`{key}` expects a list such as `[a, b]`"));
     };
@@ -147,14 +156,16 @@ fn list(line: usize, key: &str, value: &str) -> Parsed<Vec<String>> {
         })
         .collect()
 }
-fn flag(line: usize, key: &str, value: &str) -> Parsed<bool> {
+fn flag(field: Field<'_>) -> Parsed<bool> {
+    let Field { line, key, value } = field;
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
         _ => refuse(line, format!("`{key}` expects `true` or `false`")),
     }
 }
-fn number(line: usize, key: &str, value: &str) -> Parsed<u64> {
+fn number(field: Field<'_>) -> Parsed<u64> {
+    let Field { line, key, value } = field;
     if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
         return refuse(line, format!("`{key}` expects a whole number"));
     }
@@ -163,7 +174,8 @@ fn number(line: usize, key: &str, value: &str) -> Parsed<u64> {
         .or_else(|_| refuse(line, format!("`{key}` is too large")))
 }
 /// A value of a serde enum written by its snake_case or kebab-case name.
-fn named<T: DeserializeOwned>(line: usize, key: &str, value: &str) -> Parsed<T> {
+fn named<T: DeserializeOwned>(field: Field<'_>) -> Parsed<T> {
+    let Field { line, key, value } = field;
     serde_json::from_value(serde_json::Value::String(value.into()))
         .or_else(|_| refuse(line, format!("`{key}` has an unknown value `{value}`")))
 }
@@ -213,16 +225,10 @@ impl<'a> Document<'a> {
         }
     }
 }
-fn split<'a>(
-    source: &'a str,
-    keys: &[&'static str],
-    headings: &[&'static str],
-) -> Parsed<Document<'a>> {
-    let mut lines = source
-        .split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-        .enumerate()
-        .map(|(index, line)| (index + 1, line));
+fn read_frontmatter<'a>(
+    lines: &mut impl Iterator<Item = (usize, &'a str)>,
+    keys: &[&str],
+) -> Parsed<Fields<'a>> {
     if lines.next().map(|(_, line)| line.trim_end()) != Some("---") {
         return refuse(1, "a document starts with a `---` line");
     }
@@ -238,6 +244,19 @@ fn split<'a>(
             front.insert(line, text, Some(keys))?;
         }
     }
+    Ok(front)
+}
+fn split<'a>(
+    source: &'a str,
+    keys: &[&'static str],
+    headings: &[&'static str],
+) -> Parsed<Document<'a>> {
+    let mut lines = source
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .enumerate()
+        .map(|(index, line)| (index + 1, line));
+    let front = read_frontmatter(&mut lines, keys)?;
     let mut sections = BTreeMap::new();
     let mut current: Option<&'static str> = None;
     let mut fenced = false;
@@ -246,22 +265,12 @@ fn split<'a>(
             fenced = !fenced;
         }
         if !fenced && is_heading(text) {
-            let title = text[2..].trim();
-            let Some(heading) = headings.iter().find(|h| **h == title) else {
-                let allowed: Vec<_> = headings.iter().map(|h| format!("`## {h}`")).collect();
-                return refuse(
-                    line,
-                    format!(
-                        "unknown heading `## {title}`; this document takes {}",
-                        allowed.join(" and ")
-                    ),
-                );
-            };
+            let heading = section_heading(line, text, headings)?;
             let section = Section {
                 line,
                 lines: Vec::new(),
             };
-            if sections.insert(*heading, section).is_some() {
+            if sections.insert(heading, section).is_some() {
                 return refuse(line, format!("duplicate heading `## {heading}`"));
             }
             current = Some(heading);
@@ -272,6 +281,20 @@ fn split<'a>(
         }
     }
     Ok(Document { front, sections })
+}
+fn section_heading(line: usize, text: &str, headings: &[&'static str]) -> Parsed<&'static str> {
+    let title = text[2..].trim();
+    if let Some(heading) = headings.iter().find(|h| **h == title) {
+        return Ok(*heading);
+    }
+    let allowed: Vec<_> = headings.iter().map(|h| format!("`## {h}`")).collect();
+    refuse(
+        line,
+        format!(
+            "unknown heading `## {title}`; this document takes {}",
+            allowed.join(" and ")
+        ),
+    )
 }
 fn identity(front: &Fields<'_>) -> Parsed<(String, String, String)> {
     Ok((
@@ -348,28 +371,32 @@ fn candidates(section: &Section<'_>) -> Parsed<Vec<Candidate>> {
     }
     let mut out = Vec::new();
     for (line, text) in rows {
-        let Some(row) = cells(text).filter(|row| row.len() == 4) else {
-            return refuse(
-                *line,
-                format!("a candidate row has four cells, as `{header}`; found `{text}`"),
-            );
-        };
-        for (column, cell) in CANDIDATE_COLUMNS.iter().zip(&row).take(3) {
-            if !is_token(cell) {
-                return refuse(
-                    *line,
-                    format!("candidate `{column}` is malformed: `{cell}`"),
-                );
-            }
-        }
-        out.push(Candidate {
-            provider: row[0].into(),
-            model: row[1].into(),
-            reasoning: row[2].into(),
-            harnesses: list(*line, "harnesses", &format!("[{}]", row[3]))?,
-        });
+        out.push(candidate_row(*line, text, &header)?);
     }
     Ok(out)
+}
+fn candidate_row(line: usize, text: &str, header: &str) -> Parsed<Candidate> {
+    let Some(row) = cells(text).filter(|row| row.len() == 4) else {
+        return refuse(
+            line,
+            format!("a candidate row has four cells, as `{header}`; found `{text}`"),
+        );
+    };
+    for (column, cell) in CANDIDATE_COLUMNS.iter().zip(&row).take(3) {
+        if !is_token(cell) {
+            return refuse(line, format!("candidate `{column}` is malformed: `{cell}`"));
+        }
+    }
+    Ok(Candidate {
+        provider: row[0].into(),
+        model: row[1].into(),
+        reasoning: row[2].into(),
+        harnesses: list(Field {
+            line,
+            key: "harnesses",
+            value: &format!("[{}]", row[3]),
+        })?,
+    })
 }
 const SELECTION_KEYS: [&str; 10] = [
     "max_attempts",
@@ -387,23 +414,28 @@ const SELECTION_KEYS: [&str; 10] = [
 const NONE: &str = "none";
 fn selection(section: &Section<'_>) -> Parsed<SelectionOverrides> {
     let fields = section.fields("Selection", Some(&SELECTION_KEYS))?;
-    let names = |line: usize, key: &str, value: &str| {
-        list(line, key, value)?
+    let names = |field: Field<'_>| {
+        list(field)?
             .iter()
-            .map(|item| named(line, key, item))
+            .map(|item| {
+                named(Field {
+                    value: item,
+                    ..field
+                })
+            })
             .collect::<Parsed<Vec<_>>>()
     };
-    let attempts = |line: usize, key: &str, value: &str| {
-        u32::try_from(number(line, key, value)?)
-            .or_else(|_| refuse(line, format!("`{key}` is too large")))
+    let attempts = |field: Field<'_>| {
+        u32::try_from(number(field)?)
+            .or_else(|_| refuse(field.line, format!("`{}` is too large", field.key)))
     };
-    let cost = |line: usize, key: &str, value: &str| match value {
+    let cost = |field: Field<'_>| match field.value {
         NONE => Ok(None),
-        _ => number(line, key, value).map(Some),
+        _ => number(field).map(Some),
     };
-    let currency = |line: usize, key: &str, value: &str| match value {
+    let currency = |field: Field<'_>| match field.value {
         NONE => Ok(None),
-        _ => text(line, key, value).map(Some),
+        _ => text(field).map(Some),
     };
     Ok(SelectionOverrides {
         max_attempts: fields.optional("max_attempts", attempts)?,
@@ -465,8 +497,8 @@ pub fn parse_execution(source: &str) -> Parsed<Execution> {
     let mut credentials = BTreeMap::new();
     if let Some(section) = document.sections.get("Credentials") {
         let fields = section.fields("Credentials", None)?;
-        for (harness, (line, value)) in &fields.values {
-            credentials.insert(harness.to_string(), text(*line, harness, value)?);
+        for field in fields.values.values() {
+            credentials.insert(field.key.to_owned(), text(*field)?);
         }
     }
     let limits = document

@@ -8,13 +8,16 @@ mod conversation;
 pub mod credentials;
 pub mod internal;
 mod journal;
+pub mod mcp;
+#[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+pub mod repo;
 pub mod service;
 pub mod subscription;
 pub mod tool;
 mod verifier;
 use anyhow::{Context, Result, bail, ensure};
 use aq_central_authority::{
-    owner::{Receipt, SessionOwner, Snapshot},
+    owner::{PermitWindow, Receipt, SessionOwner, Snapshot},
     *,
 };
 use aq_session_host::{
@@ -38,6 +41,17 @@ pub trait PlanAuthority: Send + Sync + 'static {
         host: &HostPlan,
     ) -> Result<()>;
 }
+pub struct Runtime {
+    pub root: PathBuf,
+    pub local: LocalEnvironment,
+}
+
+pub struct Startup {
+    pub central: CentralPlan,
+    pub host: HostPlan,
+    pub input: Vec<u8>,
+}
+
 pub struct Supervisor<A, H> {
     pool: PgPool,
     root: PathBuf,
@@ -45,6 +59,65 @@ pub struct Supervisor<A, H> {
     authority: Arc<A>,
     adapter: Arc<H>,
 }
+struct Launch {
+    id: Uuid,
+    state: Snapshot,
+}
+
+impl Launch {
+    async fn observe<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static>(
+        &self,
+        supervisor: &Supervisor<A, H>,
+        startup: Startup,
+        permit: aq_session_host::ExecutionPermit,
+    ) -> Result<HostObservation> {
+        let root = supervisor.root.clone();
+        let local = supervisor.local.clone();
+        let adapter = supervisor.adapter.clone();
+        let mut callbacks = journal::Callbacks {
+            authority: supervisor.authority.clone(),
+            pool: supervisor.pool.clone(),
+            runtime: tokio::runtime::Handle::current(),
+            launch: self.id,
+            plan: startup.host.clone(),
+        };
+        // Any error retains the reservation/callbacks. Only recovery may touch it.
+        let id = self.id;
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let handle = SessionHost::launch_plan(
+                &root,
+                id,
+                &startup.host,
+                &startup.input,
+                permit,
+                &local,
+                adapter.as_ref(),
+                &mut callbacks,
+            )?;
+            handle.observe()
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+    }
+}
+
+pub(crate) fn admission_clock(host: &HostPlan) -> Result<Clock> {
+    let now = clock()?;
+    ensure!(
+        now.machine_boot_id == host.machine_boot_id
+            && now.boot_ms >= host.admitted_boot_ms
+            && now.boot_ms < host.deadline_boot_ms,
+        "host admission boot/deadline"
+    );
+    // Reconciliation and preparation share the new plan's authenticated admission
+    // clock. Advancing the prior generation past it would invalidate this plan.
+    Ok(Clock {
+        machine_boot_id: host.machine_boot_id,
+        boot_ms: host.admitted_boot_ms,
+    })
+}
+
 struct Record {
     id: Uuid,
     host: HostPlan,
@@ -89,12 +162,21 @@ pub fn is_transient(error: &anyhow::Error) -> bool {
     })
 }
 
+pub struct RetryPolicy {
+    pub attempts: u32,
+    pub backoff: Duration,
+}
+
+pub const CONTROLLER_RETRY: RetryPolicy = RetryPolicy {
+    attempts: RETRY_ATTEMPTS,
+    backoff: RETRY_BACKOFF,
+};
+
 /// Run `op` up to `attempts` times with doubling `backoff` while `retry` accepts
 /// the error. A retry never sleeps to or past `deadline_boot_ms` (permit expiry),
 /// so a guardian is never left running on an expired permit by the retry itself.
 pub async fn retry_bounded<T, F, Fut>(
-    attempts: u32,
-    backoff: Duration,
+    policy: RetryPolicy,
     deadline_boot_ms: u64,
     retry: impl Fn(&anyhow::Error) -> bool,
     mut op: F,
@@ -103,6 +185,7 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
+    let RetryPolicy { attempts, backoff } = policy;
     let mut delay = backoff;
     let mut attempt = 1;
     loop {
@@ -113,7 +196,8 @@ where
         let wake = clock()?
             .boot_ms
             .saturating_add(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
-        if attempt >= attempts || !retry(&error) || wake >= deadline_boot_ms {
+        let exhausted = attempt >= attempts || !retry(&error);
+        if exhausted || wake >= deadline_boot_ms {
             return Err(error);
         }
         tokio::time::sleep(delay).await;
@@ -128,17 +212,11 @@ fn active(s: &Snapshot) -> bool {
     )
 }
 impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> {
-    pub fn new(
-        pool: PgPool,
-        root: PathBuf,
-        local: LocalEnvironment,
-        authority: Arc<A>,
-        adapter: Arc<H>,
-    ) -> Self {
+    pub fn new(pool: PgPool, runtime: Runtime, authority: Arc<A>, adapter: Arc<H>) -> Self {
         Self {
             pool,
-            root,
-            local,
+            root: runtime.root,
+            local: runtime.local,
             authority,
             adapter,
         }
@@ -209,109 +287,34 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
     }
     /// Start an authenticated exact plan once. Same-plan retries reconcile the
     /// existing physical attempt; a crash never turns into a second launch.
-    pub async fn start(
-        &self,
-        central: CentralPlan,
-        host: HostPlan,
-        startup: Vec<u8>,
-        ttl_ms: u64,
-    ) -> Result<Snapshot> {
-        validate_join(&central, &host)?;
-        host.verify_startup(&startup)?;
+    pub async fn start(&self, startup: Startup, ttl_ms: u64) -> Result<Snapshot> {
+        let central = &startup.central;
+        validate_join(central, &startup.host)?;
+        startup.host.verify_startup(&startup.input)?;
         let actor = central.subject.actor_id();
         let _fence = self.fence(actor).await?;
         let old = Box::pin(self.owner(None).inspect(actor)).await?;
-        if old.as_ref().is_some_and(|s| s.run.plan() == &central) {
+        if old.as_ref().is_some_and(|s| s.run.plan() == central) {
             let s = Box::pin(self.reconcile_locked(actor)).await?;
             ensure!(active(&s), "existing generation is not live");
             return Ok(s);
         }
-        let now = clock()?;
-        ensure!(
-            now.machine_boot_id == host.machine_boot_id
-                && now.boot_ms >= host.admitted_boot_ms
-                && now.boot_ms < host.deadline_boot_ms,
-            "host admission boot/deadline"
-        );
-        // Reconciliation and preparation share the new plan's authenticated admission
-        // clock. Advancing the prior generation past it would invalidate this plan.
-        let admitted = Clock {
-            machine_boot_id: host.machine_boot_id,
-            boot_ms: host.admitted_boot_ms,
-        };
-        if let Some(old) = old
-            && old.run.plan().generation.checked_add(1) == Some(central.generation)
-            && old.run.phase() == Phase::StoppedReported
-            && matches!(old.run.dispatch(), DispatchState::Unknown { .. })
-        {
-            let mut tx = self.pool.begin().await?;
-            let evidence = verifier::not_started(&mut tx, &old.run).await?;
-            tx.rollback().await?;
-            if let Some(evidence) = evidence {
-                accepted(
-                    self.owner(None)
-                        .report(
-                            &old.run.plan().binding()?,
-                            Event::ReconcileHandoff { evidence },
-                            admitted.clone(),
-                        )
-                        .await?,
-                )?;
-            }
-        }
-        let owner = self.owner(Some(host.clone()));
-        let prepared = Box::pin(owner.prepare(central.clone(), admitted)).await?;
-        ensure!(
-            prepared.run.original_deadline_boot_ms() == host.deadline_boot_ms,
-            "original deadline join"
-        );
-        let id = Uuid::new_v4();
-        let reservation = journal::reservation(&central, &host, id, &self.root)?;
-        sqlx::query("INSERT INTO central_host_launches(actor_id,generation,launch_id,root,host_plan,reservation) VALUES($1,$2,$3,$4,$5,$6)")
-            .bind(actor).bind(central.generation as i64).bind(id).bind(self.root.to_str().context("host root UTF8")?).bind(journal::bytes(&host)?).bind(&reservation).execute(&self.pool).await?;
-        let started = accepted(
-            Box::pin(owner.start(
-                &central.binding()?,
-                journal::launch_ref(&central, id, &reservation)?,
-                ttl_ms,
-                clock()?,
-            ))
-            .await?,
-        )?;
+        let admitted = admission_clock(&startup.host)?;
+        self.reconcile_previous(old, central.generation, &admitted)
+            .await?;
+        let launch = self.commit_start(&startup, ttl_ms, admitted).await?;
         let permit = bridge::permit(
-            &central,
-            &host,
-            started.run.permit().context("missing central permit")?,
+            &startup.central,
+            &startup.host,
+            launch
+                .state
+                .run
+                .permit()
+                .context("missing central permit")?,
         )?;
-        let root = self.root.clone();
-        let local = self.local.clone();
-        let adapter = self.adapter.clone();
-        let mut callbacks = journal::Callbacks {
-            authority: self.authority.clone(),
-            pool: self.pool.clone(),
-            runtime: tokio::runtime::Handle::current(),
-            launch: id,
-            plan: host.clone(),
-        };
-        // Any error retains the reservation/callbacks. Only recovery may touch it.
-        let observation = tokio::task::spawn_blocking(move || -> Result<_> {
-            let handle = SessionHost::launch_plan(
-                &root,
-                id,
-                &host,
-                &startup,
-                permit,
-                &local,
-                adapter.as_ref(),
-                &mut callbacks,
-            )?;
-            handle.observe()
-        })
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
+        let observation = launch.observe(self, startup, permit).await;
         let result = match observation {
-            Ok(observation) => Box::pin(self.running(&started, &observation)).await,
+            Ok(observation) => Box::pin(self.running(&launch.state, &observation)).await,
             Err(error) => Err(error),
         };
         let result = match result {
@@ -327,6 +330,63 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
             return Box::pin(self.stop_locked(actor)).await;
         }
         Ok(result)
+    }
+    async fn reconcile_previous(
+        &self,
+        old: Option<Snapshot>,
+        generation: u64,
+        admitted: &Clock,
+    ) -> Result<()> {
+        let Some(old) = old else {
+            return Ok(());
+        };
+        let successor = old.run.plan().generation.checked_add(1) == Some(generation);
+        let stopped_unknown = old.run.phase() == Phase::StoppedReported
+            && matches!(old.run.dispatch(), DispatchState::Unknown { .. });
+        if successor && stopped_unknown {
+            let mut tx = self.pool.begin().await?;
+            let evidence = verifier::not_started(&mut tx, &old.run).await?;
+            tx.rollback().await?;
+            if let Some(evidence) = evidence {
+                accepted(
+                    self.owner(None)
+                        .report(
+                            &old.run.plan().binding()?,
+                            Event::ReconcileHandoff { evidence },
+                            admitted.clone(),
+                        )
+                        .await?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    async fn commit_start(
+        &self,
+        startup: &Startup,
+        ttl_ms: u64,
+        admitted: Clock,
+    ) -> Result<Launch> {
+        let (central, host) = (&startup.central, &startup.host);
+        let owner = self.owner(Some(host.clone()));
+        let prepared = Box::pin(owner.prepare(central.clone(), admitted)).await?;
+        ensure!(
+            prepared.run.original_deadline_boot_ms() == host.deadline_boot_ms,
+            "original deadline join"
+        );
+        let id = Uuid::new_v4();
+        let reservation = journal::reservation(central, host, id, &self.root)?;
+        sqlx::query("INSERT INTO central_host_launches(actor_id,generation,launch_id,root,host_plan,reservation) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(central.subject.actor_id()).bind(central.generation as i64).bind(id).bind(self.root.to_str().context("host root UTF8")?).bind(journal::bytes(host)?).bind(&reservation).execute(&self.pool).await?;
+        let started = accepted(
+            Box::pin(owner.start(
+                &central.binding()?,
+                journal::launch_ref(central, id, &reservation)?,
+                PermitWindow::new(ttl_ms, clock()?),
+            ))
+            .await?,
+        )?;
+        Ok(Launch { id, state: started })
     }
     async fn running(&self, s: &Snapshot, o: &HostObservation) -> Result<Snapshot> {
         let g = journal::append(
@@ -391,64 +451,74 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
             )
             .await?,
         )?;
-        if active(&tick) {
-            let record = self.record(&tick).await?;
-            let mut tx = self.pool.begin().await?;
-            let authorized = self
-                .authority
-                .authorize(&mut tx, tick.run.plan(), &record.host)
-                .await
-                .is_ok();
-            tx.rollback().await?;
-            if !authorized {
-                return Box::pin(self.stop_locked(actor)).await;
-            }
-            if let (Ok(permit), Some(g)) = (
-                bridge::permit(
-                    tick.run.plan(),
-                    &record.host,
-                    tick.run.permit().context("missing permit")?,
-                ),
-                journal::fact::<GuardianIdentity>(&self.pool, record.id, "guardian").await?,
-            ) {
-                // One failed physical observation is not proof of loss: retry
-                // inside the current permit before stopping the session.
-                let expires = tick.run.permit().context("missing permit")?.expires_boot_ms;
-                let observed = retry_bounded(
-                    RETRY_ATTEMPTS,
-                    RETRY_BACKOFF,
-                    expires,
-                    |_| true,
-                    || {
-                        let root = self.root.clone();
-                        let (g, permit) = (g.clone(), permit.clone());
-                        async move {
-                            tokio::task::spawn_blocking(move || -> Result<_> {
-                                let handle = SessionHost::observe_existing(&root, &g)?;
-                                let observation = handle.observe()?;
-                                ensure!(
-                                    observation.permit_sequence <= permit.sequence,
-                                    "physical permit ahead of central owner"
-                                );
-                                if observation.permit_sequence < permit.sequence {
-                                    handle.renew(&permit)?;
-                                }
-                                Ok(observation)
-                            })
-                            .await?
-                        }
-                    },
-                )
-                .await;
-                if let Ok(o) = observed {
-                    if tick.run.phase() == Phase::StartCommitted {
-                        return Box::pin(self.running(&tick, &o)).await;
-                    }
-                    return Ok(tick);
-                }
-            }
+        if !active(&tick) {
+            return Box::pin(self.stop_locked(actor)).await;
         }
-        Box::pin(self.stop_locked(actor)).await
+        let record = self.record(&tick).await?;
+        if !self.authorized(&tick, &record).await? {
+            return Box::pin(self.stop_locked(actor)).await;
+        }
+        let permit = bridge::permit(
+            tick.run.plan(),
+            &record.host,
+            tick.run.permit().context("missing permit")?,
+        );
+        let guardian = journal::fact::<GuardianIdentity>(&self.pool, record.id, "guardian").await?;
+        let (Ok(permit), Some(guardian)) = (permit, guardian) else {
+            return Box::pin(self.stop_locked(actor)).await;
+        };
+        let Ok(observation) = self.observe_permit(&tick, permit, guardian).await else {
+            return Box::pin(self.stop_locked(actor)).await;
+        };
+        if tick.run.phase() == Phase::StartCommitted {
+            return Box::pin(self.running(&tick, &observation)).await;
+        }
+        Ok(tick)
+    }
+    async fn authorized(&self, tick: &Snapshot, record: &Record) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let authorized = self
+            .authority
+            .authorize(&mut tx, tick.run.plan(), &record.host)
+            .await
+            .is_ok();
+        tx.rollback().await?;
+        Ok(authorized)
+    }
+    async fn observe_permit(
+        &self,
+        tick: &Snapshot,
+        permit: aq_session_host::ExecutionPermit,
+        g: GuardianIdentity,
+    ) -> Result<HostObservation> {
+        // One failed physical observation is not proof of loss: retry
+        // inside the current permit before stopping the session.
+        let expires = tick.run.permit().context("missing permit")?.expires_boot_ms;
+        retry_bounded(
+            crate::CONTROLLER_RETRY,
+            expires,
+            |_| true,
+            || {
+                let root = self.root.clone();
+                let (g, permit) = (g.clone(), permit.clone());
+                async move {
+                    tokio::task::spawn_blocking(move || -> Result<_> {
+                        let handle = SessionHost::observe_existing(&root, &g)?;
+                        let observation = handle.observe()?;
+                        ensure!(
+                            observation.permit_sequence <= permit.sequence,
+                            "physical permit ahead of central owner"
+                        );
+                        if observation.permit_sequence < permit.sequence {
+                            handle.renew(&permit)?;
+                        }
+                        Ok(observation)
+                    })
+                    .await?
+                }
+            },
+        )
+        .await
     }
     pub async fn renew(&self, actor: Uuid, prior_sequence: u64, ttl_ms: u64) -> Result<Snapshot> {
         let _fence = self.fence(actor).await?;
@@ -458,8 +528,7 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
             Box::pin(self.owner(None).renew(
                 &current.run.plan().binding()?,
                 prior_sequence,
-                ttl_ms,
-                clock()?,
+                PermitWindow::new(ttl_ms, clock()?),
             ))
             .await?,
         )?;
@@ -614,28 +683,7 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
         })
         .await?;
         match stopped {
-            Ok(o) => {
-                let guardian = journal::append(&self.pool, r.id, "guardian", &o.guardian).await?;
-                let proof = journal::append(&self.pool, r.id, "stopped", &o).await?;
-                accepted(
-                    Box::pin(self.owner(None).report(
-                        &s.run.plan().binding()?,
-                        Event::Stopped {
-                            evidence: StopEvidenceRef {
-                                host: HostObservationRef {
-                                    binding: s.run.plan().binding()?,
-                                    launch_id: r.id,
-                                    guardian,
-                                    observation: proof.clone(),
-                                },
-                                stopped_writers: proof,
-                            },
-                        },
-                        clock()?,
-                    ))
-                    .await?,
-                )
-            }
+            Ok(o) => self.report_stopped(&s, r.id, &o).await,
             Err(_) => {
                 let report=journal::append(&self.pool,r.id,"lost",&serde_json::json!({"launch_id":r.id,"reason":"stopped-writer proof unavailable"})).await?;
                 accepted(
@@ -654,6 +702,33 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
             }
         }
     }
+    async fn report_stopped(
+        &self,
+        s: &Snapshot,
+        id: Uuid,
+        o: &HostObservation,
+    ) -> Result<Snapshot> {
+        let guardian = journal::append(&self.pool, id, "guardian", &o.guardian).await?;
+        let proof = journal::append(&self.pool, id, "stopped", o).await?;
+        accepted(
+            Box::pin(self.owner(None).report(
+                &s.run.plan().binding()?,
+                Event::Stopped {
+                    evidence: StopEvidenceRef {
+                        host: HostObservationRef {
+                            binding: s.run.plan().binding()?,
+                            launch_id: id,
+                            guardian,
+                            observation: proof.clone(),
+                        },
+                        stopped_writers: proof,
+                    },
+                },
+                clock()?,
+            ))
+            .await?,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -665,12 +740,18 @@ mod tests {
         anyhow::Error::from(sqlx::Error::PoolTimedOut).context("reconcile")
     }
 
+    fn rapid_retries() -> RetryPolicy {
+        RetryPolicy {
+            attempts: RETRY_ATTEMPTS,
+            backoff: Duration::from_millis(1),
+        }
+    }
+
     #[tokio::test]
     async fn transient_controller_error_is_retried_then_bounded() {
         let calls = AtomicU32::new(0);
-        let tiny = Duration::from_millis(1);
         // Two transient failures, then success: the controller survives.
-        let ok = retry_bounded(RETRY_ATTEMPTS, tiny, u64::MAX, is_transient, || {
+        let ok = retry_bounded(rapid_retries(), u64::MAX, is_transient, || {
             let n = calls.fetch_add(1, Ordering::SeqCst);
             async move { if n < 2 { Err(transient()) } else { Ok(n) } }
         })
@@ -679,7 +760,7 @@ mod tests {
         assert_eq!((ok, calls.load(Ordering::SeqCst)), (2, 3));
         // Persistent transient failure gives up after exactly RETRY_ATTEMPTS.
         calls.store(0, Ordering::SeqCst);
-        let r: Result<()> = retry_bounded(RETRY_ATTEMPTS, tiny, u64::MAX, is_transient, || {
+        let r: Result<()> = retry_bounded(rapid_retries(), u64::MAX, is_transient, || {
             calls.fetch_add(1, Ordering::SeqCst);
             async { Err(transient()) }
         })
@@ -693,7 +774,7 @@ mod tests {
             owner::OwnerError::Conflict
         )));
         calls.store(0, Ordering::SeqCst);
-        let r: Result<()> = retry_bounded(RETRY_ATTEMPTS, tiny, u64::MAX, is_transient, || {
+        let r: Result<()> = retry_bounded(rapid_retries(), u64::MAX, is_transient, || {
             calls.fetch_add(1, Ordering::SeqCst);
             async { Err(anyhow::anyhow!("stop uncertain; successor prohibited")) }
         })
@@ -703,8 +784,7 @@ mod tests {
         calls.store(0, Ordering::SeqCst);
         let expired = clock().unwrap().boot_ms;
         let r: Result<()> = retry_bounded(
-            RETRY_ATTEMPTS,
-            tiny,
+            rapid_retries(),
             expired,
             |_| true,
             || {

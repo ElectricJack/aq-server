@@ -38,6 +38,16 @@ fn protected_factory(
         )
     }
 }
+async fn start_driver(service: Service, url: &reqwest::Url) -> Driver {
+    Driver::start(
+        service,
+        aq_playbook_host::Limits::default(),
+        protected_factory(url.to_string()),
+    )
+    .await
+    .unwrap()
+}
+
 fn pure_artifact() -> aq_playbook_host::model::Artifact {
     use aq_playbook_host::model::*;
     use std::collections::BTreeMap;
@@ -89,15 +99,11 @@ fn pure_artifact() -> aq_playbook_host::model::Artifact {
     .unwrap()
 }
 
-#[tokio::test]
-async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
-    let c = Box::pin(setup()).await;
-    let f = &c.env.f;
-    let pool = f.db.pool().await;
-    let path = c.env._directory.path().join("completion-outbox-key");
+fn completion_keys(directory: &std::path::Path) -> Arc<Keyring> {
+    let path = directory.join("completion-outbox-key");
     std::fs::write(&path, [9_u8; 32]).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Arc::new(
+    Arc::new(
         Keyring::load(&ProtectionConfig {
             active_key_id: "fixture".into(),
             keys: vec![KeyFile {
@@ -106,7 +112,15 @@ async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
             }],
         })
         .unwrap(),
-    );
+    )
+}
+
+#[tokio::test]
+async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
+    let c = Box::pin(setup()).await;
+    let f = &c.env.f;
+    let pool = f.db.pool().await;
+    let keys = completion_keys(c.env._directory.path());
     let namespace = Namespace {
         namespace_id: Uuid::new_v4(),
         generation: 1,
@@ -122,13 +136,7 @@ async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
     let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
     assert!(matches!(url.host_str(), Some("127.0.0.1" | "localhost")));
     url.set_path(f.db.options().get_database().unwrap());
-    let driver = Driver::start(
-        service.clone(),
-        aq_playbook_host::Limits::default(),
-        protected_factory(url.to_string()),
-    )
-    .await
-    .unwrap();
+    let driver = start_driver(service.clone(), &url).await;
     let mut artifact = pure_artifact();
     artifact.content.registry = CatalogProfile::SettlementEvents4.registry();
     let artifact = aq_playbook_host::model::Artifact::seal(artifact.content).unwrap();
@@ -196,13 +204,7 @@ async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
     .await
     .unwrap();
     foreign.initialize(c.actor.id).await.unwrap();
-    let foreign_driver = Driver::start(
-        foreign,
-        aq_playbook_host::Limits::default(),
-        protected_factory(url.to_string()),
-    )
-    .await
-    .unwrap();
+    let foreign_driver = start_driver(foreign, &url).await;
     assert_eq!(
         foreign_driver
             .test_collect_settlement_events()
@@ -218,13 +220,7 @@ async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
     assert!(!first.duplicate);
     assert!(!acknowledged().await, "an omitted AQ ACK remains pending");
     driver.stop().await.unwrap();
-    let driver = Driver::start(
-        service,
-        aq_playbook_host::Limits::default(),
-        protected_factory(url.to_string()),
-    )
-    .await
-    .unwrap();
+    let driver = start_driver(service, &url).await;
     driver.install(artifact).await.unwrap();
     let replay = driver.test_commit_event_without_aq_ack().await.unwrap();
     assert!(replay.duplicate);

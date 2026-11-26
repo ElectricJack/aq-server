@@ -104,6 +104,19 @@ async fn advisory_lock(url: &str, key: i64) -> Option<PgConnection> {
 static TEMPLATES: tokio::sync::Mutex<Option<HashMap<u32, String>>> =
     tokio::sync::Mutex::const_new(None);
 
+fn template_name(version: u32) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut digest = Sha256::new();
+    for (number, sql) in crate::migration_catalog::MIGRATIONS {
+        if *number as u32 > version {
+            break;
+        }
+        digest.update(number.to_be_bytes());
+        digest.update(sql.as_bytes());
+    }
+    format!("aq_tpl_{}_{version}", &hex::encode(digest.finalize())[..16])
+}
+
 /// A database migrated to `version`, cloned by `CREATE DATABASE ... TEMPLATE`.
 /// A fresh migration takes ~2.5k locks in one transaction and PostgreSQL's
 /// shared lock table holds ~8k at default settings, so concurrent fresh test
@@ -116,16 +129,7 @@ async fn template(admin_url: &str, version: u32) -> Result<String, String> {
     if let Some(name) = templates.get(&version) {
         return Ok(name.clone());
     }
-    use sha2::{Digest as _, Sha256};
-    let mut digest = Sha256::new();
-    for (number, sql) in crate::migration_catalog::MIGRATIONS {
-        if *number as u32 > version {
-            break;
-        }
-        digest.update(number.to_be_bytes());
-        digest.update(sql.as_bytes());
-    }
-    let name = format!("aq_tpl_{}_{version}", &hex::encode(digest.finalize())[..16]);
+    let name = template_name(version);
     let fail = |step: &str, e: &dyn std::fmt::Display| format!("template {name}: {step}: {e}");
     let mut admin = PgConnection::connect(admin_url)
         .await
@@ -148,56 +152,68 @@ async fn template(admin_url: &str, version: u32) -> Result<String, String> {
             .map_err(|e| fail("lookup", &e))?;
     }
     if !exists {
-        // Build under a private name; only a completely migrated database is
-        // ever renamed to the shared template name.
-        let building = format!("aq_tplb_{}", Uuid::new_v4().simple());
-        sqlx::query(&format!("CREATE DATABASE {building}"))
-            .execute(&mut admin)
-            .await
-            .map_err(|e| fail("create", &e))?;
-        let options = PgConnectOptions::from_str(admin_url)
-            .map_err(|e| fail("url", &e))?
-            .database(&building);
-        let built = async {
-            let pool = PgPoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
-                .map_err(|e| fail("connect build", &e))?;
-            let migrated = crate::store::migrate_fixture_profile(&pool, version).await;
-            pool.close().await;
-            migrated.map_err(|e| fail("migrate", &e))?;
-            sqlx::query(&format!(
-                "ALTER DATABASE {building} WITH ALLOW_CONNECTIONS false"
-            ))
-            .execute(&mut admin)
-            .await
-            .map_err(|e| fail("seal", &e))?;
-            sqlx::query(&format!("ALTER DATABASE {building} RENAME TO {name}"))
-                .execute(&mut admin)
-                .await
-                .map_err(|e| fail("publish", &e))
-        }
-        .await;
-        if let Err(error) = built {
-            // Another process may have published the same template first.
-            let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {building} WITH (FORCE)"))
-                .execute(&mut admin)
-                .await;
-            let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)")
-                    .bind(&name)
-                    .fetch_one(&mut admin)
-                    .await
-                    .map_err(|e| fail("lookup", &e))?;
-            if !exists {
-                return Err(error);
-            }
-        }
+        build_template(&mut admin, admin_url, &name, version).await?;
     }
     let _ = admin.close().await;
     templates.insert(version, name.clone());
     Ok(name)
+}
+
+async fn build_template(
+    admin: &mut PgConnection,
+    admin_url: &str,
+    name: &str,
+    version: u32,
+) -> Result<(), String> {
+    let fail = |step: &str, e: &dyn std::fmt::Display| format!("template {name}: {step}: {e}");
+    // Build under a private name; only a completely migrated database is
+    // ever renamed to the shared template name. The caller keeps any template
+    // advisory lock alive through publication.
+    let building = format!("aq_tplb_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE DATABASE {building}"))
+        .execute(&mut *admin)
+        .await
+        .map_err(|e| fail("create", &e))?;
+    let options = PgConnectOptions::from_str(admin_url)
+        .map_err(|e| fail("url", &e))?
+        .database(&building);
+    let built = async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(|e| fail("connect build", &e))?;
+        let migrated = crate::store::migrate_fixture_profile(&pool, version).await;
+        pool.close().await;
+        migrated.map_err(|e| fail("migrate", &e))?;
+        sqlx::query(&format!(
+            "ALTER DATABASE {building} WITH ALLOW_CONNECTIONS false"
+        ))
+        .execute(&mut *admin)
+        .await
+        .map_err(|e| fail("seal", &e))?;
+        sqlx::query(&format!("ALTER DATABASE {building} RENAME TO {name}"))
+            .execute(&mut *admin)
+            .await
+            .map_err(|e| fail("publish", &e))
+    }
+    .await;
+    if let Err(error) = built {
+        // Another process may have published the same template first.
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {building} WITH (FORCE)"))
+            .execute(&mut *admin)
+            .await;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)")
+                .bind(name)
+                .fetch_one(&mut *admin)
+                .await
+                .map_err(|e| fail("lookup", &e))?;
+        if !exists {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 impl TestDb {

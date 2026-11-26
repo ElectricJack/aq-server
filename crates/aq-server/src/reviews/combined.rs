@@ -40,11 +40,12 @@ pub struct ExternalDeclaration {
     pub residual_uncertainty: String,
 }
 fn text(value: &str, max: usize) -> Result<()> {
-    if value.trim().is_empty()
-        || value.len() > max
-        || value
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    if value.trim().is_empty() || value.len() > max {
+        return Err(invalid());
+    }
+    if value
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
     {
         Err(invalid())
     } else {
@@ -53,26 +54,37 @@ fn text(value: &str, max: usize) -> Result<()> {
 }
 impl ExternalDeclaration {
     pub fn validate(&self, attempt: Uuid) -> Result<()> {
-        if self.worktree_attempt_id != attempt || attempt.is_nil() || self.known_effects.len() > 16
-        {
+        if self.worktree_attempt_id != attempt || attempt.is_nil() {
+            return Err(invalid());
+        }
+        if self.known_effects.len() > 16 {
             return Err(invalid());
         }
         text(&self.reason, 2048)?;
         text(&self.residual_uncertainty, 2048)?;
         let mut resources = std::collections::BTreeSet::new();
         for e in &self.known_effects {
-            text(&e.resource, 512)?;
-            text(&e.reason, 2048)?;
-            if !resources.insert(&e.resource) || e.evidence.len() > 8 {
-                return Err(invalid());
-            }
-            for r in &e.evidence {
-                r.id.validate().map_err(|_| invalid())?;
-                r.version.validate().map_err(|_| invalid())?;
-            }
+            e.validate(&mut resources)?;
         }
         if encode(self)?.len() > 8192 {
             return Err(invalid());
+        }
+        Ok(())
+    }
+}
+impl ExternalEffect {
+    fn validate<'a>(
+        &'a self,
+        resources: &mut std::collections::BTreeSet<&'a String>,
+    ) -> Result<()> {
+        text(&self.resource, 512)?;
+        text(&self.reason, 2048)?;
+        if !resources.insert(&self.resource) || self.evidence.len() > 8 {
+            return Err(invalid());
+        }
+        for r in &self.evidence {
+            r.id.validate().map_err(|_| invalid())?;
+            r.version.validate().map_err(|_| invalid())?;
         }
         Ok(())
     }
@@ -99,12 +111,13 @@ impl CombinedSubject {
     pub fn validate(&self) -> Result<()> {
         self.code.validate().map_err(|_| invalid())?;
         self.external.validate(self.code.binding.attempt_id)?;
-        if self.schema_version != 1
-            || !self.aq_ledger.messaging_disabled
-            || self.aq_ledger.operation_count > 4096
-            || self.aq_ledger.inspected_bytes > 33554432
-            || self.aq_ledger.profile.digest != self.code.binding.graph_access_profile_digest
-        {
+        if self.schema_version != 1 || !self.aq_ledger.messaging_disabled {
+            return Err(invalid());
+        }
+        if self.aq_ledger.operation_count > 4096 || self.aq_ledger.inspected_bytes > 33554432 {
+            return Err(invalid());
+        }
+        if self.aq_ledger.profile.digest != self.code.binding.graph_access_profile_digest {
             return Err(invalid());
         }
         encode(self)?;
@@ -157,6 +170,13 @@ impl VerifiedCombinedDecision {
     }
 }
 impl Service {
+    async fn observe_principal(
+        &self,
+        actor: &crate::store::User,
+    ) -> Result<crate::profiled_execution::settlement::actor::ActorPin> {
+        crate::profiled_execution::settlement::actor::ActorPin::observe(&self.state, actor).await
+    }
+
     async fn prepare_combined(
         &self,
         report: Uuid,
@@ -208,13 +228,12 @@ impl Service {
             return Err(forbidden());
         }
         let mut tx = self.tx().await?;
+        let mut proposal = prepared.code.proposal(request);
+        proposal.combined = Some(&prepared.subject);
         self.admit_subject_in_tx(
             &mut tx,
-            actor,
-            &prepared.code,
-            request,
-            Some(&prepared.subject),
-            prepared.principal.as_ref(),
+            ReviewActor::new(actor, prepared.principal.as_ref()),
+            proposal,
         )
         .await?;
         tx.commit().await.map_err(db)
@@ -226,9 +245,7 @@ impl Service {
         source: Uuid,
         external: ExternalDeclaration,
     ) -> Result<PreparedCombined> {
-        let principal =
-            crate::profiled_execution::settlement::actor::ActorPin::observe(&self.state, actor)
-                .await?;
+        let principal = self.observe_principal(actor).await?;
         let mut prepared = self.prepare_combined(report, source, external).await?;
         // Preparation itself exposes private subject data, even without later
         // admission. Fence the original principal AFTER Git I/O, preserving the
@@ -252,15 +269,11 @@ impl Service {
         answer: &ResolveRequest,
         expected_subject: &ArtifactRef,
     ) -> Result<DecisionReceipt> {
-        let principal =
-            crate::profiled_execution::settlement::actor::ActorPin::observe(&self.state, actor)
-                .await?;
+        let principal = self.observe_principal(actor).await?;
         self.resolve_subject(
-            actor.id,
+            ReviewActor::new(actor.id, Some(&principal)),
             answer,
-            Profile::SourceAndEffects,
-            Some(expected_subject),
-            Some(&principal),
+            ReviewScope::new(Profile::SourceAndEffects, Some(expected_subject)),
         )
         .await
     }
@@ -269,14 +282,11 @@ impl Service {
         actor: &crate::store::User,
         decision: Uuid,
     ) -> Result<serde_json::Value> {
-        let principal =
-            crate::profiled_execution::settlement::actor::ActorPin::observe(&self.state, actor)
-                .await?;
+        let principal = self.observe_principal(actor).await?;
         self.inspect_subject(
-            actor.id,
+            ReviewActor::new(actor.id, Some(&principal)),
             decision,
             Profile::SourceAndEffects,
-            Some(&principal),
         )
         .await
     }
@@ -296,9 +306,7 @@ impl Service {
         // A valid pending combined question is a normal unavailable requirement,
         // not corrupted finality. Keep the old code-only callback reader intact.
         let progress=sqlx::query("SELECT decision_revision,state FROM human_decision_requests WHERE decision_id=$1 FOR SHARE").bind(decision).fetch_one(&mut **tx).await.map_err(db)?;
-        if progress.get::<i64, _>("decision_revision") == 1
-            && progress.get::<String, _>("state") == "pending"
-        {
+        if records::pending(&progress) {
             return Err(AppError::UpdatesUnavailable(
                 "combined review has no recorded answer".into(),
             ));
@@ -331,17 +339,7 @@ impl Service {
         )
         .await?;
         let row=sqlx::query("SELECT combined_actor_digest,combined_actor_revision FROM human_decision_finality WHERE decision_id=$1 FOR SHARE").bind(decision).fetch_one(&mut **tx).await.map_err(db)?;
-        if row
-            .get::<Option<String>, _>("combined_actor_digest")
-            .as_deref()
-            != Some(actor.identity_digest()?.as_str())
-            || row
-                .get::<Option<String>, _>("combined_actor_revision")
-                .as_deref()
-                != Some(actor.revision())
-        {
-            return Err(forbidden());
-        }
+        records::validate_actor_pin(&row, &actor)?;
         Ok(VerifiedCombinedDecision {
             subject: *subject,
             receipt,

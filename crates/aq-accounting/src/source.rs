@@ -26,14 +26,15 @@ impl OwnerSource {
         self.native_session_key.validate()?;
         self.account_claim.validate()?;
         self.policy.validate()?;
-        if self.source_id.is_nil()
-            || self.generation == 0
-            || i64::try_from(self.generation).is_err()
+        if !self.has_identity()
             || serde_json::to_vec(self).map_err(|_| Error::Invalid)?.len() > 32768
         {
             return Err(Error::Invalid);
         }
         Ok(())
+    }
+    fn has_identity(&self) -> bool {
+        !self.source_id.is_nil() && (1..=i64::MAX as u64).contains(&self.generation)
     }
     pub fn digest(&self) -> Result<Digest> {
         Ok(Digest::of(

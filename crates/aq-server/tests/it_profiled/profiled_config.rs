@@ -15,6 +15,7 @@ fn config() -> ProfiledConfig {
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: artifact("synthetic-runtime"),
             qualification: artifact("synthetic-qualification"),
             capabilities: vec![],

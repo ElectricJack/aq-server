@@ -17,16 +17,9 @@ fn validate(metadata: &NativeRegistration) -> Result<(), AppError> {
     TransportDocument::Register(metadata.request.clone())
         .validate()
         .map_err(|_| conflict())?;
-    metadata
-        .qualification
-        .id
-        .validate()
-        .map_err(|_| conflict())?;
-    metadata
-        .qualification
-        .version
-        .validate()
-        .map_err(|_| conflict())?;
+    for text in [&metadata.qualification.id, &metadata.qualification.version] {
+        text.validate().map_err(|_| conflict())?;
+    }
     if metadata.schema_version != 1
         || metadata.configuration_revision == 0
         || metadata.configuration_revision > i64::MAX as u64
@@ -40,7 +33,13 @@ fn validate(metadata: &NativeRegistration) -> Result<(), AppError> {
 }
 fn identity(metadata: &NativeRegistration) -> Result<Digest, AppError> {
     validate(metadata)?;
-    aq_selection::digest(&serde_json::json!({"identity":metadata.request.identity,"semantic_registration":metadata.semantic_digest,"runtime":metadata.request.runtime,"qualification":metadata.qualification})).map_err(|_|AppError::Internal)
+    aq_selection::digest(&serde_json::json!({
+        "identity": metadata.request.identity,
+        "semantic_registration": metadata.semantic_digest,
+        "runtime": metadata.request.runtime,
+        "qualification": metadata.qualification,
+    }))
+    .map_err(|_| AppError::Internal)
 }
 fn decode(row: sqlx::postgres::PgRow) -> Result<RegistrationHistory, AppError> {
     let bytes: Vec<u8> = row.get("metadata_bytes");
@@ -106,7 +105,19 @@ pub(crate) async fn capture_locked(
         return Err(conflict());
     }
     // No quota (architecture 0006): row retention keeps each node's newest rows.
-    sqlx::query("INSERT INTO profiled_native_registration_history(registration_id,node_id,boot_id,identity_digest,semantic_digest,metadata_bytes) VALUES($1,$2,$3,$4,$5,$6)").bind(id).bind(metadata.request.identity.node_id).bind(metadata.request.identity.boot_id).bind(key.as_str()).bind(metadata.semantic_digest.as_str()).bind(bytes).execute(&mut **tx).await.map_err(database)?;
+    sqlx::query(
+        "INSERT INTO profiled_native_registration_history(registration_id,node_id,boot_id,\
+         identity_digest,semantic_digest,metadata_bytes) VALUES($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(id)
+    .bind(metadata.request.identity.node_id)
+    .bind(metadata.request.identity.boot_id)
+    .bind(key.as_str())
+    .bind(metadata.semantic_digest.as_str())
+    .bind(bytes)
+    .execute(&mut **tx)
+    .await
+    .map_err(database)?;
     load_locked(tx, id).await
 }
 /// Existing links are authoritative. A missing older link may only capture the
@@ -121,30 +132,92 @@ pub(crate) async fn for_attempt_locked(
     else {
         return Err(conflict());
     };
-    if let Some(row)=sqlx::query("SELECT registration_id,node_id,boot_id FROM profiled_launch_registrations WHERE attempt_id=$1 FOR SHARE").bind(binding.attempt_id).fetch_optional(&mut **tx).await.map_err(database)?{
-        if row.get::<Uuid,_>("node_id")!=node_id||row.get::<Uuid,_>("boot_id")!=boot_id{return Err(conflict())}
-        let history=load_locked(tx,row.get("registration_id")).await?;
-        if history.metadata.request.identity.node_id!=node_id||history.metadata.request.identity.boot_id!=boot_id{return Err(conflict())}return Ok(history)
+    if let Some(history) = linked_attempt_locked(tx, binding.attempt_id, node_id, boot_id).await? {
+        return Ok(history);
     }
-    let held:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 AND kind='profiled_v1' AND holds_task)").bind(binding.attempt_id).bind(node_id).fetch_one(&mut **tx).await.map_err(database)?;
+    let held: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 AND \
+         kind='profiled_v1' AND holds_task)",
+    )
+    .bind(binding.attempt_id)
+    .bind(node_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
     if !held {
         return Err(conflict());
     }
     let current = registration::admitted_runtime_locked(tx, node_id, boot_id).await?;
     let history = capture_locked(tx, &current).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-native-attempt-registration-link-v1',0))").execute(&mut **tx).await.map_err(database)?;
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended(\
+         'aq-native-attempt-registration-link-v1',0))",
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(database)?;
+    check_link_capacity_locked(tx, node_id).await?;
+    sqlx::query(
+        "INSERT INTO profiled_launch_registrations(attempt_id,registration_id,node_id,boot_id) \
+         VALUES($1,$2,$3,$4)",
+    )
+    .bind(binding.attempt_id)
+    .bind(history.id)
+    .bind(node_id)
+    .bind(boot_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(database)?;
+    Ok(history)
+}
+
+async fn linked_attempt_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    node: Uuid,
+    boot: Uuid,
+) -> Result<Option<RegistrationHistory>, AppError> {
+    let row = sqlx::query(
+        "SELECT registration_id,node_id,boot_id FROM profiled_launch_registrations WHERE \
+         attempt_id=$1 FOR SHARE",
+    )
+    .bind(attempt)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(database)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    if row.get::<Uuid, _>("node_id") != node || row.get::<Uuid, _>("boot_id") != boot {
+        return Err(conflict());
+    }
+    let history = load_locked(tx, row.get("registration_id")).await?;
+    if history.metadata.request.identity.node_id != node
+        || history.metadata.request.identity.boot_id != boot
+    {
+        return Err(conflict());
+    }
+    Ok(Some(history))
+}
+
+async fn check_link_capacity_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+) -> Result<(), AppError> {
     let kind = aq_history_caps::Kind::LaunchRegistrations;
-    let u = aq_history_caps::usage(tx, kind, Some(node_id), 0)
+    let usage = aq_history_caps::usage(tx, kind, Some(node), 0)
         .await
         .map_err(database)?;
-    let quota = (u.total_rows, u.total_bytes, u.scope_rows, u.scope_bytes);
-    if quota.0 >= 4096 || quota.1 + 64 > 262144 || quota.2 >= 256 || quota.3 + 64 > 16384 {
+    if usage.total_rows >= 4096
+        || usage.total_bytes + 64 > 262144
+        || usage.scope_rows >= 256
+        || usage.scope_bytes + 64 > 16384
+    {
         return Err(AppError::Conflict(
             "native attempt registration link capacity exhausted".into(),
         ));
     }
-    sqlx::query("INSERT INTO profiled_launch_registrations(attempt_id,registration_id,node_id,boot_id) VALUES($1,$2,$3,$4)").bind(binding.attempt_id).bind(history.id).bind(node_id).bind(boot_id).execute(&mut **tx).await.map_err(database)?;
-    Ok(history)
+    Ok(())
 }
 
 /// A superseded boot supplies terminal evidence only, never current launch authority.
@@ -153,8 +226,15 @@ pub(crate) async fn for_boot_locked(
     node: Uuid,
     boot: Uuid,
 ) -> Result<NativeRegistration, AppError> {
-    let rows=sqlx::query("SELECT * FROM profiled_native_registration_history WHERE node_id=$1 AND boot_id=$2 ORDER BY registration_id LIMIT 2 FOR SHARE")
-        .bind(node).bind(boot).fetch_all(&mut **tx).await.map_err(database)?;
+    let rows = sqlx::query(
+        "SELECT * FROM profiled_native_registration_history WHERE node_id=$1 AND boot_id=$2 \
+         ORDER BY registration_id LIMIT 2 FOR SHARE",
+    )
+    .bind(node)
+    .bind(boot)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(database)?;
     if rows.len() != 1 {
         return Err(conflict());
     }
