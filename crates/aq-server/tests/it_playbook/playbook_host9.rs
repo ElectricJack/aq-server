@@ -1786,9 +1786,8 @@ mod delivery {
         );
         // Without environments (spec 0017, see playbook_environments) the
         // record's catalog is 2.6.0 whole.
-        #[cfg(not(feature = "project_environments"))]
         {
-            let record = aq_playbook_authoring::builtin::delivery();
+            let record = aq_playbook_authoring::builtin::delivery(false);
             let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
             assert_eq!(pinned, v2_6);
             let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();

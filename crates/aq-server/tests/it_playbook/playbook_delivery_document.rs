@@ -127,7 +127,7 @@ fn delivery_artifact(delivery: &authoring::SourceRecord) -> aq_playbook_host::mo
     draft::seal(&workspace).unwrap_or_else(|faults| panic!("{faults:?}"))
 }
 
-async fn assert_delivery_authoring_request(pool: &sqlx::PgPool) {
+async fn assert_delivery_authoring_request(pool: &sqlx::PgPool, environments: bool) {
     let runs = authoring::in_flight(pool).await.unwrap();
     assert_eq!(runs.len(), 1, "one authoring run for the delivery source");
     let internal = runs[0].internal_task_id.unwrap();
@@ -145,7 +145,7 @@ async fn assert_delivery_authoring_request(pool: &sqlx::PgPool) {
     let record: Value = serde_json::from_str(&files["record.json"]).unwrap();
     assert_eq!(record["id"], DELIVERY);
     assert_eq!(record["binding"], DELIVERY_BINDING);
-    let events = if cfg!(feature = "project_environments") {
+    let events = if environments {
         json!(["aq.environment.base_changed", "aq.work.result_ready"])
     } else {
         json!(["aq.work.result_ready"])
@@ -191,6 +191,26 @@ async fn assert_result_held(driver: &Driver, pool: &sqlx::PgPool, task_id: Uuid,
 #[tokio::test]
 async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_receives_result_ready()
  {
+    // Spec 0017: with environments the namespace is Host12, catalog 2.5.0.
+    let profile = if cfg!(feature = "project_environments") {
+        CatalogProfile::from_number(12).unwrap()
+    } else {
+        CatalogProfile::Host10
+    };
+    delivery_document_on(profile).await;
+}
+
+/// A build with environments may run a Host10 namespace (aq-ms1 does): the
+/// delivery record must ask only what that namespace grants, or every save is
+/// refused with `playbook_invalid_request` and no run starts.
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn a_saved_delivery_document_is_authored_on_a_host10_namespace_of_an_environments_build() {
+    delivery_document_on(CatalogProfile::Host10).await;
+}
+
+async fn delivery_document_on(profile: CatalogProfile) {
+    let environments = profile.has_environments();
     let c = setup().await;
     let wired = aq_server::InternalWork::new(
         c.env.env.pool.clone(),
@@ -202,7 +222,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     state.internal_work = wired.unwrap();
     let (pool, actor, lineage) = (c.env.env.pool.clone(), c.env.actor, c.env.lineage.clone());
 
-    // A host_v10 namespace on the server's own ports, announcing one result.
+    // A namespace of `profile` on the server's own ports, announcing one result.
     let directory = tempfile::tempdir().unwrap();
     let keys = protection_keys(directory.path());
     let namespace = Namespace {
@@ -236,12 +256,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
         &state,
         namespace,
         Arc::new(keys),
-        // Spec 0017: with environments the delivery record is on catalog 2.5.0.
-        if cfg!(feature = "project_environments") {
-            CatalogProfile::from_number(12).unwrap()
-        } else {
-            CatalogProfile::Host10
-        },
+        profile,
         graph,
         None,
         None,
@@ -257,11 +272,14 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     let driver = start_driver(service, url).await;
     state.internal_work.test_engine(driver.clone());
 
-    // (1) The built-in source exists, with the delivery record; no document, no run.
-    authoring::author_document(&state, &authoring::builtin::delivery()).await;
+    // (1) The built-in source exists, with the namespace's delivery record;
+    // no document, no run.
+    let delivery = authoring::Server::delivery(&state).unwrap();
+    assert_eq!(delivery, authoring::builtin::delivery(environments));
+    authoring::author_document(&state, &delivery).await;
     let record = authoring::get(&pool, DELIVERY).await.unwrap().unwrap();
     assert_eq!(record, {
-        let mut expected = authoring::builtin::delivery();
+        let mut expected = delivery.clone();
         expected.revision = record.revision;
         expected
     });
@@ -277,9 +295,9 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     let app = aq_server::build_admin_router(state.clone());
     let (status, saved) = put(&app, DOCUMENT, 0).await;
     assert_eq!(status, 200, "{saved}");
-    assert_delivery_authoring_request(&pool).await;
+    assert_delivery_authoring_request(&pool, environments).await;
     // Saving the same document again, or other settings, starts no second run.
-    authoring::author_document(&state, &authoring::builtin::delivery()).await;
+    authoring::author_document(&state, &delivery).await;
     assert_eq!(authoring::in_flight(&pool).await.unwrap().len(), 1);
     // The document is the Settings value; nothing else needs saving.
     let (read, revision) = aq_role_settings::delivery_document(&pool).await.unwrap();
@@ -289,7 +307,6 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
 
     // (3) The artifact the agent saves is put into effect on `aq.delivery`
     // under the source's grant: the server's deployer installs and activates it.
-    let delivery = authoring::builtin::delivery();
     let artifact = delivery_artifact(&delivery);
     state
         .ensure_grant(DELIVERY, &delivery.capabilities)
