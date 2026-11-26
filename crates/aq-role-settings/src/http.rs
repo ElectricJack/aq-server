@@ -10,6 +10,7 @@
 //! | `/profiles/snapshot` | the active digest and store revision | | |
 //! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
 //! | `/observation-limits` | the node observation limits: `{limits, revision}` | replace | |
+//! | `/node-limits` | the node limits (headroom, build-cache keys, deferral attention): `{limits, revision}` | replace | |
 //! | `/supervisor-document` | the project supervisor's role text: `{markdown, revision}`; empty means the compiled text | replace | |
 //! | `/delivery-document` | the delivery document: `{markdown, revision}` (feature `delivery_playbook`) | replace | |
 //! | `/delivery-limits` | the delivery limits: `{limits, revision}` (feature `delivery_playbook`) | replace | |
@@ -58,6 +59,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/profiles/limits", value.clone())
         .route("/api/settings/routing-document", value.clone())
         .route("/api/settings/observation-limits", value.clone())
+        .route("/api/settings/node-limits", value.clone())
         .route("/api/settings/supervisor-document", value.clone())
         .route("/api/settings/profiles/snapshot", read);
     #[cfg(feature = "delivery_playbook")]
@@ -75,6 +77,7 @@ enum Target {
     Snapshot,
     RoutingDocument,
     ObservationLimits,
+    NodeLimits,
     SupervisorDocument,
     #[cfg(feature = "delivery_playbook")]
     DeliveryDocument,
@@ -95,6 +98,7 @@ fn target(path: &str) -> Result<Target> {
         ("selection-defaults", None) => Ok(Target::SelectionDefaults),
         ("routing-document", None) => Ok(Target::RoutingDocument),
         ("observation-limits", None) => Ok(Target::ObservationLimits),
+        ("node-limits", None) => Ok(Target::NodeLimits),
         ("supervisor-document", None) => Ok(Target::SupervisorDocument),
         #[cfg(feature = "delivery_playbook")]
         ("delivery-document", None) => Ok(Target::DeliveryDocument),
@@ -192,6 +196,10 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
             let (limits, revision) = store::observation_limits(&mut *pool.acquire().await?).await?;
             Ok(json!({"limits": limits, "revision": revision.to_string()}))
         }
+        Target::NodeLimits => {
+            let (limits, revision) = store::node_limits(&mut *pool.acquire().await?).await?;
+            Ok(json!({"limits": limits, "revision": revision.to_string()}))
+        }
         Target::SupervisorDocument => {
             let (markdown, revision) =
                 store::supervisor_document(&mut *pool.acquire().await?).await?;
@@ -252,6 +260,9 @@ pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result
         }
         (Target::ObservationLimits, None, None, Some(limits)) => {
             Change::ObservationLimits(serde_json::from_value(limits).map_err(|_| bad())?)
+        }
+        (Target::NodeLimits, None, None, Some(limits)) => {
+            Change::NodeLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
         #[cfg(feature = "delivery_playbook")]
         (Target::DeliveryDocument, Some(markdown), None, None) => {
