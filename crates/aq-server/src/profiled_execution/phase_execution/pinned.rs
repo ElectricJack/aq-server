@@ -101,34 +101,18 @@ async fn load_for_locked(
     q: &PrepareRequest,
     mode: LoadMode<'_>,
 ) -> Result<Pinned, AppError> {
-    // Kept as one body on purpose: unoptimized builds give every nested async
-    // helper its own poll frame (boxing does not remove the caller's
-    // temporary), which overflowed the stack of deep database test callers.
+    // The awaits stay in this one body; only synchronous checks are helpers, so
+    // no extra nested future is laid out in an unoptimized poll frame.
     // Authenticate preparation or retained issuance before consulting current
     // runtime and authority, all under the same authenticated node lock.
-    use aq_session_protocol::Validate;
-    q.original.binding.validate().map_err(|_| refused())?;
-    let session_matches = matches!(
-        q.original.binding.session,
-        aq_admission::SessionIdentity::Remote { node_id, boot_id, .. }
-            if node_id == auth.id() && boot_id == q.original.identity.boot_id
-    );
-    if auth.id() != q.original.identity.node_id || !session_matches {
-        return Err(refused());
-    }
+    require_remote_session(auth, q)?;
     crate::worker_api::lock_current_node(tx, auth).await?;
     let h = accepted_owner::load_accepted_history_locked(tx, &q.original.binding).await?;
     q.validate_for(&h.receipt, &h.request, &h.proposal)
         .map_err(|_| refused())?;
     let issued = mode.issued();
     if let Some(issued) = issued {
-        if !same(&issued.request, q)?
-            || !same(&issued.accepted.receipt, &h.receipt)?
-            || !same(&issued.accepted.request, &h.request)?
-            || !same(&issued.accepted.proposal, &h.proposal)?
-        {
-            return Err(refused());
-        }
+        require_same_issuance(issued, q, &h)?;
         // This validates the same actual current material row and policy. No
         // lease bytes, expiry, operation or installation receipt are rewritten.
         accepted_owner::require_installed_material_locked(state, auth, tx, &h).await?;
@@ -157,19 +141,7 @@ async fn load_for_locked(
     let view = authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
         .await?;
     super::super::closure::ensure_launch_open_locked(tx, &q.original.binding).await?;
-    let (expected_status, expected_grant) = match issued {
-        Some(issued) => (Status::Granted, Some(issued.receipt.grant.grant_id)),
-        None => (Status::Preparing, None),
-    };
-    if !view.holds_task
-        || view.status != expected_status
-        || view.grant_id != expected_grant
-        || view.cancellation_id.is_some()
-        || view.revoked
-        || view.stopped
-    {
-        return Err(refused());
-    }
+    require_expected_authority(&view, issued)?;
     let (hot, versions) = support::load_hot_locked(tx, &q.original.binding, &h.receipt.versions)
         .await
         .map_err(history::helper_error)?;
@@ -198,61 +170,15 @@ async fn load_for_locked(
     .await
     .map_err(db)?;
     let spec = pinned_spec_from_row(&row, q, &h)?;
-    let decision: crate::intelligence::resolver::Decision =
-        serde_json::from_value(row.get("decision")).map_err(|_| refused())?;
-    let selection: aq_selection::ResolvedSelection =
-        serde_json::from_value(row.get("selection")).map_err(|_| refused())?;
-    if decision.decision_id != row.get::<Uuid, _>("decision_id")
-        || decision
-            .outcome
-            .resolved
-            .as_ref()
-            .is_none_or(|s| !same(s, &selection).unwrap_or(false))
-        || digest(&selection)? != spec.selection_digest
-        || spec.selection_digest != h.proposal.choice.selection_digest
-        || row.get::<String, _>("selection_digest") != spec.selection_digest.as_str()
-        || selection.target
-            != (aq_selection::ExecutionTarget::Worker {
-                node_id: auth.id(),
-                boot_id: q.original.identity.boot_id,
-            })
-        || selection.lineage.project_id != view.project_id
-        || selection.lineage.task_id != view.task_id
-        || selection.lineage.workspace_id != spec.task.workspace_id
-    {
-        return Err(refused());
-    }
+    let (decision, selection) = pinned_selection_from_row(&row, auth, q, &h, &view, &spec)?;
     let material = h.receipt.lease.materials[0].clone();
-    if material.credential_profile != selection.choice.credential_profile
-        || material.credential_revision != selection.credential_revision
-        || material.provider.as_str() != selection.choice.provider
-        || material.account_reference.as_str() != selection.choice.account_reference
-        || material.endpoint_reference.as_str() != selection.choice.endpoint_reference
-    {
-        return Err(refused());
-    }
+    require_selected_material(&material, &selection)?;
     let source = source_exports::load_linked_locked(tx, q.original.binding.attempt_id).await?;
-    if source.manifest().attempt != view.attempt
-        || source.manifest().source != view.source.ok_or_else(|| refused())?
-        || source.manifest().resolved_spec_digest != view.execution_spec_digest
-        || source.token().request().project_revision != spec.project_revision
-        || source.token().request().project_id != view.project_id
-    {
-        return Err(refused());
-    }
-    let ceiling = match issued {
-        Some(issued) => hot
-            .grant
-            .as_ref()
-            .ok_or_else(|| refused())?
-            .expires_at_ms
-            .min(issued.receipt.execution_deadline_ms),
-        None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
-    };
+    require_linked_source(&source, &view, &spec)?;
     let mut pinned = PinnedArtifacts {
         receipts: Vec::new(),
         context: None,
-        ceiling,
+        ceiling: issuance_ceiling(issued, &hot, &h, &material)?,
     };
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127",
@@ -307,6 +233,153 @@ async fn load_for_locked(
         registration_id,
         qualification,
         issuance_ceiling: pinned.ceiling,
+    })
+}
+
+// The prepare request must name this authenticated node's remote session.
+fn require_remote_session(auth: &AuthenticatedNode, q: &PrepareRequest) -> Result<(), AppError> {
+    use aq_session_protocol::Validate;
+    q.original.binding.validate().map_err(|_| refused())?;
+    let session_matches = matches!(
+        q.original.binding.session,
+        aq_admission::SessionIdentity::Remote { node_id, boot_id, .. }
+            if node_id == auth.id() && boot_id == q.original.identity.boot_id
+    );
+    if auth.id() != q.original.identity.node_id || !session_matches {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+// Retained issuance must be for this request and its exact accepted history.
+fn require_same_issuance(
+    issued: &history::PhaseExecutionHistory,
+    q: &PrepareRequest,
+    h: &AcceptedHistory,
+) -> Result<(), AppError> {
+    if !same(&issued.request, q)?
+        || !same(&issued.accepted.receipt, &h.receipt)?
+        || !same(&issued.accepted.request, &h.request)?
+        || !same(&issued.accepted.proposal, &h.proposal)?
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+// Preparation needs a preparing attempt; retained issuance needs its own grant.
+fn require_expected_authority(
+    view: &authority::AuthorityView,
+    issued: Option<&history::PhaseExecutionHistory>,
+) -> Result<(), AppError> {
+    let (expected_status, expected_grant) = match issued {
+        Some(issued) => (Status::Granted, Some(issued.receipt.grant.grant_id)),
+        None => (Status::Preparing, None),
+    };
+    if !view.holds_task
+        || view.status != expected_status
+        || view.grant_id != expected_grant
+        || view.cancellation_id.is_some()
+        || view.revoked
+        || view.stopped
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+// Decode the decision and selection from the locked launch row and tie them to
+// the accepted proposal, this worker target and the attempt's lineage.
+fn pinned_selection_from_row(
+    row: &sqlx::postgres::PgRow,
+    auth: &AuthenticatedNode,
+    q: &PrepareRequest,
+    h: &AcceptedHistory,
+    view: &authority::AuthorityView,
+    spec: &aq_admission::execution_spec::ProfiledExecutionSpec,
+) -> Result<
+    (
+        crate::intelligence::resolver::Decision,
+        aq_selection::ResolvedSelection,
+    ),
+    AppError,
+> {
+    let decision: crate::intelligence::resolver::Decision =
+        serde_json::from_value(row.get("decision")).map_err(|_| refused())?;
+    let selection: aq_selection::ResolvedSelection =
+        serde_json::from_value(row.get("selection")).map_err(|_| refused())?;
+    if decision.decision_id != row.get::<Uuid, _>("decision_id")
+        || decision
+            .outcome
+            .resolved
+            .as_ref()
+            .is_none_or(|s| !same(s, &selection).unwrap_or(false))
+        || digest(&selection)? != spec.selection_digest
+        || spec.selection_digest != h.proposal.choice.selection_digest
+        || row.get::<String, _>("selection_digest") != spec.selection_digest.as_str()
+        || selection.target
+            != (aq_selection::ExecutionTarget::Worker {
+                node_id: auth.id(),
+                boot_id: q.original.identity.boot_id,
+            })
+        || selection.lineage.project_id != view.project_id
+        || selection.lineage.task_id != view.task_id
+        || selection.lineage.workspace_id != spec.task.workspace_id
+    {
+        return Err(refused());
+    }
+    Ok((decision, selection))
+}
+
+// The leased private material must be the selected credential and endpoint.
+fn require_selected_material(
+    material: &aq_admission::MaterialLease,
+    selection: &aq_selection::ResolvedSelection,
+) -> Result<(), AppError> {
+    if material.credential_profile != selection.choice.credential_profile
+        || material.credential_revision != selection.credential_revision
+        || material.provider.as_str() != selection.choice.provider
+        || material.account_reference.as_str() != selection.choice.account_reference
+        || material.endpoint_reference.as_str() != selection.choice.endpoint_reference
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+// The linked source export must belong to this attempt, spec and project.
+fn require_linked_source(
+    source: &source_exports::LinkedExport,
+    view: &authority::AuthorityView,
+    spec: &aq_admission::execution_spec::ProfiledExecutionSpec,
+) -> Result<(), AppError> {
+    if source.manifest().attempt != view.attempt
+        || source.manifest().source != *view.source.as_ref().ok_or_else(|| refused())?
+        || source.manifest().resolved_spec_digest != view.execution_spec_digest
+        || source.token().request().project_revision != spec.project_revision
+        || source.token().request().project_id != view.project_id
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+// Retained issuance stays within its live grant and original execution
+// deadline; preparation stays within the accepted lease and material expiry.
+fn issuance_ceiling(
+    issued: Option<&history::PhaseExecutionHistory>,
+    hot: &HotState,
+    h: &AcceptedHistory,
+    material: &aq_admission::MaterialLease,
+) -> Result<u64, AppError> {
+    Ok(match issued {
+        Some(issued) => hot
+            .grant
+            .as_ref()
+            .ok_or_else(|| refused())?
+            .expires_at_ms
+            .min(issued.receipt.execution_deadline_ms),
+        None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
     })
 }
 

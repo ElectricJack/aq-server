@@ -3,7 +3,7 @@ pub(super) use super::Provenance;
 use super::accepted_owner::{self, AcceptedHistory};
 use super::phase::{ExecutionReceipt, PrepareRequest};
 use super::*;
-use crate::profiled_execution::initial_grant;
+use crate::profiled_execution::{initial_grant, on_heap};
 use aq_admission::{LaunchBinding, MaterialReceipt};
 use sqlx::Row;
 use uuid::Uuid;
@@ -16,6 +16,18 @@ pub(crate) struct PhaseExecutionHistory {
     pub installation: MaterialReceipt,
 }
 pub(crate) async fn load_optional_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    binding: &LaunchBinding,
+    grant: Uuid,
+) -> Result<Option<PhaseExecutionHistory>, AppError> {
+    // Result recording and settlement await this inline through several
+    // owners. Keeping the decoded documents on the heap stops every caller's
+    // future and unoptimized poll frame from carrying a copy of them.
+    on_heap(|| load_documents_locked(tx, node, binding, grant)).await
+}
+
+async fn load_documents_locked(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
     binding: &LaunchBinding,
