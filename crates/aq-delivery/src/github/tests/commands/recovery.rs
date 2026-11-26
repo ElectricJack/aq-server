@@ -38,6 +38,8 @@ pub(super) async fn reconcile(delivery: &Delivery, target: &DeliveryTarget) -> C
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
                     result_head: None,
+                    queue: Default::default(),
+                    check_log_bytes: 0,
                 },
             )
             .await,

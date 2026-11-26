@@ -100,6 +100,23 @@ async fn handle(State(mock): State<Mock>, request: Request) -> Response {
     }
     response
 }
+/// GraphQL's look at pull request 7's merge queue: whether its base has one,
+/// its entry, and its last queue event (`[typename, reason, createdAt]`).
+fn queue_look(enabled: bool, entry: Option<&str>, last: Option<(&str, &str, &str)>) -> Value {
+    let nodes: Vec<Value> = last
+        .into_iter()
+        .map(|(kind, reason, at)| json!({"__typename": kind, "reason": reason, "createdAt": at}))
+        .collect();
+    json!({"data": {"repository": {"pullRequest": {
+        "id": "PR_7", "isMergeQueueEnabled": enabled,
+        "mergeQueueEntry": entry.map(|state| json!({"state": state})),
+        "timelineItems": {"nodes": nodes}
+    }}}})
+}
+/// The base branch has no merge queue: a direct merge follows.
+fn no_queue(mock: &Mock) {
+    mock.reply(200, vec![], queue_look(false, None, None));
+}
 /// A local GitHub stand-in and an App pointed at it, with installation 77
 /// for owner `Acme`.
 async fn app() -> (GitHubApp, Mock) {

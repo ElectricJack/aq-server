@@ -211,7 +211,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         "decision_repeat_ms": 120000, "longest_check_wait_ms": 3600000,
         "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456,
         "require_landed_results": true, "check_log_bytes": 16384,
-        "hold_followup_interval_ms": 86400000});
+        "hold_followup_interval_ms": 86400000, "longest_merge_queue_wait_ms": 14400000});
     let (status, body) = f.owner().get(PATH).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
@@ -315,6 +315,7 @@ fn invalid_delivery_limits(defaults: &Value) -> Vec<Value> {
             "require_landed_results",
             "check_log_bytes",
             "hold_followup_interval_ms",
+            "longest_merge_queue_wait_ms",
         ]
         .contains(&field.as_str())
         {

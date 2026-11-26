@@ -565,6 +565,18 @@ async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_
             .unwrap();
         assert_eq!(evidence(predecessor).await.is_some(), matches);
     }
+    // A merge the queue took out for failed merge-group checks carries the
+    // log as well; another merge conflict does not.
+    for (note, matches) in [(None, false), (Some("merge_group_failed"), true)] {
+        sqlx::query("UPDATE playbook_host_operations SET command_name='pull_request.merge',status='conflict',request=(request-'result_head'-'answer_note')||jsonb_build_object('expected_head_sha',$2::text,'answer_note',$3::text) WHERE subject_id=$1::uuid::text")
+            .bind(scope.2)
+            .bind(&grant.base)
+            .bind(note)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(evidence(predecessor).await.is_some(), matches, "{note:?}");
+    }
 
     let (successor, _) = super::git_grant::granted_offer(&mut c, &git).await;
     assert_ne!(successor.offered.lifecycle_binding.attempt_id, predecessor);

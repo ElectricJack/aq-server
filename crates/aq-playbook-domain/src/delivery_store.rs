@@ -792,7 +792,8 @@ pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Opt
 
 /// The redacted log tail of the failed required check on this result's
 /// published head (spec 0021 section 5.3), as the host read it through the
-/// GitHub App when the check failed (`check_log_bytes`). Only the failure AQ
+/// GitHub App when the check failed (`check_log_bytes`): on the head itself,
+/// or on the merge group the merge queue built of it. Only the failure AQ
 /// recorded for this exact head counts; `None` without a log.
 pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
     Ok(failed_check(db, result).await?.map(|(_, log)| log))
@@ -811,10 +812,13 @@ pub(crate) async fn failed_check(
          WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL
            AND l.checks_log_head IN (p.head,COALESCE(r.merged_head,r.from_head)) AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
-             AND o.command_name='pull_request.await_checks' AND o.status='failed'
+             AND ((o.command_name='pull_request.await_checks' AND o.status='failed'
+                   AND o.request->>'result_head'=p.head)
+               OR (o.command_name='pull_request.merge' AND o.status='conflict'
+                   AND o.request->>'answer_note'='merge_group_failed'
+                   AND o.request->>'expected_head_sha'=p.head))
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text
-             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
-             AND o.request->>'result_head'=p.head)",
+             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text)",
     )
     .bind(result)
     .fetch_optional(db)

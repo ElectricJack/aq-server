@@ -2596,6 +2596,7 @@ mod delivery {
                     failed,
                     required: vec![],
                     pull_request: self.pull_request(repo, pr).await?,
+                    merge_queue: false,
                 })
             }
             async fn merge(
@@ -2605,6 +2606,7 @@ mod delivery {
                 method: MergeMethod,
                 expected_head_sha: &str,
                 _: &str,
+                _: aq_delivery::QueueWait,
             ) -> GitHubResult<MergeOutcome> {
                 self.log
                     .lock()

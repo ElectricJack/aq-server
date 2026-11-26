@@ -5,6 +5,7 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
     let git = FakeGit::start(healthy);
     let (delivery, mock) = delivery(&git).await;
     mock.reply(200, vec![], pull(7, json!({})));
+    no_queue(&mock);
     mock.reply(
         200,
         vec![],
@@ -19,6 +20,8 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
                     result_head: None,
+                    queue: Default::default(),
+                    check_log_bytes: 0,
                 },
             )
             .await,
@@ -28,7 +31,7 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
         ("merged", json!({}), "merged")
     );
     assert_eq!(
-        mock.seen()[2].body,
+        mock.seen()[3].body,
         json!({"merge_method": "merge", "sha": sha('a')})
     );
     assert_eq!(git.operations(), ["ref.delete"]);
@@ -52,6 +55,8 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
                         method: MergeMethod::Squash,
                         expected_head: &sha('a'),
                         result_head: None,
+                        queue: Default::default(),
+                        check_log_bytes: 0,
                     },
                 )
                 .await,
@@ -64,6 +69,7 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
     );
     assert_eq!(merge().await.outcome, "conflict");
     mock.reply(200, vec![], pull(7, json!({})));
+    no_queue(&mock);
     mock.reply(
         405,
         vec![],
@@ -117,11 +123,14 @@ async fn a_merged_pull_request_whose_branch_is_not_deleted_yet_is_retried_not_re
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
                     result_head: None,
+                    queue: Default::default(),
+                    check_log_bytes: 0,
                 },
             )
             .await
     };
     mock.reply(200, vec![], pull(7, json!({})));
+    no_queue(&mock);
     mock.reply(
         200,
         vec![],
@@ -161,11 +170,14 @@ async fn merge_recovers_after_an_unknown_reply() {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
                     result_head: None,
+                    queue: Default::default(),
+                    check_log_bytes: 0,
                 },
             )
             .await
     };
     mock.reply(200, vec![], pull(7, json!({})));
+    no_queue(&mock);
     mock.reply(503, vec![], json!({"message": "reply lost"}));
     assert!(matches!(merge().await, Step::Retry(_)));
     assert!(git.operations().is_empty());
@@ -189,6 +201,7 @@ async fn merge_recovers_after_an_unknown_reply() {
         paths(&mock),
         [
             ("GET".into(), "/pulls/7".into()),
+            ("POST".into(), "/api/graphql".into()),
             ("PUT".into(), "/pulls/7/merge".into()),
             ("GET".into(), "/pulls/7".into()),
         ]
