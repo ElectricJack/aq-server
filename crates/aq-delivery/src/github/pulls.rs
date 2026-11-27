@@ -2,11 +2,11 @@
 //! checks, mergeability, merge, close and branch deletion. Each call uses an
 //! installation token for the one repository it touches. Every refusal comes
 //! back as a typed outcome or [`GitHubApiError`]; nothing retries or waits.
-use super::log_tail;
 use super::{
     ApiRequest, Auth, GitHubApiError, GitHubApp, GitHubResult, InstallationToken, valid_login,
     valid_repository,
 };
+use super::{log_excerpt, log_tail};
 use crate::policy::{
     BranchDeletion, Checks, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod,
     MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState, QueueWait,
@@ -288,25 +288,36 @@ impl GitHubAdapter for GitHubApp {
         // The bound is for the whole record: the failed jobs share it.
         let share = bytes / runs.len();
         let mut sections = Vec::new();
-        for (name, job) in runs {
+        for (name, (job, page)) in runs {
             let title: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
-            let header = format!("== {title} ==\n");
+            let page: String = (page.iter().flat_map(|p| p.chars()))
+                .take_while(|c| !c.is_control() && !c.is_whitespace())
+                .take(200)
+                .collect();
+            let header = match page.is_empty() {
+                true => format!("== {title} ==\n"),
+                false => format!("== {title} ==\n{page}\n"),
+            };
             let Some(room) = share.checked_sub(header.len() + 1).filter(|r| *r > 0) else {
                 continue;
             };
-            let fetched = s
-                .app
-                .client()
-                .send_text_tail(
+            let mut excerpt = log_excerpt::Excerpt::new(room);
+            // A log that cannot be read (no Actions read permission, gone)
+            // leaves the check's name and page; one cut short, what it showed.
+            let _ = (s.app.client())
+                .send_text_lines(
                     &format!("{}/actions/jobs/{job}/logs", s.path),
                     Auth::Installation(&s.token),
                     room,
+                    |line| excerpt.line(line),
                 )
                 .await;
-            // A job whose log cannot be read leaves the others.
-            if let Some(tail) = fetched.ok().and_then(|w| log_tail::log_tail(&w, room)) {
-                sections.push(format!("{header}{tail}\n"));
-            }
+            sections.push(
+                match log_tail::log_tail(excerpt.finish().as_bytes(), room) {
+                    Some(text) => format!("{header}{text}\n"),
+                    None => header,
+                },
+            );
         }
         let joined = sections.concat();
         Ok((!joined.is_empty()).then(|| joined.trim_end().to_owned()))

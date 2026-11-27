@@ -940,3 +940,58 @@ async fn successor_needs_requires_an_exact_quiescent_predecessor() {
     assert_eq!(retry["data"]["disposition"], "confirmed", "{retry}");
     assert!(!env.holds_task().await);
 }
+
+/// A result returned because its required checks failed leaves the next
+/// attempt a task comment with what the checks showed: the check's name and
+/// page, the failed test and its panic line. Once per result.
+#[tokio::test]
+async fn a_checks_failed_return_posts_what_the_failed_checks_showed() {
+    let env = Box::pin(held_retry_env(
+        aq_admission::transport::ProcessOutcome::Failed,
+    ))
+    .await;
+    let history = RetryHistory::of(env).await;
+    let thread = aq_task_comments::Thread {
+        project_id: history.env.f.selection.lineage.project_id,
+        task_id: history.task,
+    };
+    history
+        .record("pull_request.await_checks", "failed", history.result)
+        .await;
+    let page = "https://github.com/Acme/widgets/actions/runs/5/job/9";
+    let panic = "thread 'playbook_host9::delivery::posts' panicked at crates/aq-server/tests/it_playbook/playbook_host9/delivery.rs:212:5:";
+    let log = format!(
+        "== tests (feature-on runs) ==\n{page}\nFAIL [   1.034s] aq-server::it_playbook playbook_host9::delivery::posts\n{panic}\nassertion failed: posted"
+    );
+    history.failed_log("4".repeat(40), log).await;
+    for _ in 0..2 {
+        assert_eq!(
+            super::send_back(&history.env, "checks_failed").await,
+            Settled::Returned
+        );
+    }
+    let (comments, _) = aq_task_comments::list(&history.pool, thread, None, 20)
+        .await
+        .unwrap();
+    let posted: Vec<_> = (comments.iter())
+        .filter(|c| (c.body.as_deref()).is_some_and(|b| b.contains("required checks failed")))
+        .collect();
+    assert_eq!(posted.len(), 1, "{comments:?}");
+    let body = posted[0].body.as_deref().unwrap();
+    for shown in [
+        "tests (feature-on runs)",
+        page,
+        "playbook_host9::delivery::posts",
+        panic,
+        "untrusted",
+        &"4".repeat(40),
+    ] {
+        assert!(body.contains(shown), "{shown} not in {body}");
+    }
+    assert_eq!(
+        posted[0].author,
+        aq_task_comments::Author::System {
+            component: "aq.swarm".into()
+        }
+    );
+}

@@ -23,13 +23,13 @@ impl Session<'_> {
         Ok((required, merge_queue))
     }
 
-    /// The ids of the failed check runs on `sha` named in `names`, by name. A
-    /// GitHub Actions check run's id is its job's id.
+    /// The ids and pages (`html_url`) of the failed check runs on `sha` named
+    /// in `names`, by name. A GitHub Actions check run's id is its job's id.
     pub(super) async fn failed_runs(
         &self,
         sha: &str,
         names: &[String],
-    ) -> GitHubResult<BTreeMap<String, u64>> {
+    ) -> GitHubResult<BTreeMap<String, (u64, Option<String>)>> {
         let runs = self
             .pages(&format!("/commits/{sha}/check-runs"), |v| {
                 array(v, Some("check_runs"))
@@ -45,7 +45,8 @@ impl Session<'_> {
             if let (true, Some(name), Some(id)) = (broken, run["name"].as_str(), run["id"].as_u64())
                 && names.iter().any(|n| n == name)
             {
-                failed.entry(name.to_string()).or_insert(id);
+                let page = run["html_url"].as_str().map(str::to_owned);
+                failed.entry(name.to_string()).or_insert((id, page));
             }
         }
         Ok(failed)
