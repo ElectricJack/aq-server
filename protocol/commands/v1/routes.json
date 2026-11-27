@@ -10,6 +10,8 @@
       "infra": "Health and readiness probes."
   },
   "routes": [
+    {"path": "/api/v1/attention", "class": "owner_admin", "note": "Dashboard attention list scoped to the current owner through DashboardRequest and the overview authorization fence."},
+    {"path": "/api/v1/attention/{attention_id}/dismiss", "class": "owner_admin", "note": "Owner-only per-principal attention dismissal; rechecks current owner authorization on every call, including replay, and uses the existing CSRF guard. Never changes the underlying subject."},
     {"path": "/api/agent-access/provision", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/agent-access/{attempt}/revoke", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/agent-operations/{operation}", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},

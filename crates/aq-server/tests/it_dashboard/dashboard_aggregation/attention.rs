@@ -294,7 +294,23 @@ async fn escalated_internal_runs_are_listed_in_full_and_can_be_cleared() {
     let (status, list) = read(&app, "/api/v1/attention").await;
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(ids(&list, "items"), ids(&overview, "attention"));
-    assert_eq!(list["data"]["items"].as_array().unwrap().len(), 3);
+    // The fixture's worker has never sent a heartbeat, so it also needs attention.
+    let items = list["data"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 4);
+    assert_eq!(
+        items
+            .iter()
+            .filter(|v| v["kind"] == "internal_work")
+            .count(),
+        3
+    );
+    let worker = items
+        .iter()
+        .find(|v| v["kind"] == "worker_offline")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(list["data"]["total"]["value"].is_null(), "{list}");
     assert!(list["data"]["items"][0]["dismissible"] == true);
     let (_, page) = read(&app, "/api/v1/attention?limit=2").await;
@@ -302,8 +318,12 @@ async fn escalated_internal_runs_are_listed_in_full_and_can_be_cleared() {
     assert_eq!(page["data"]["has_more"], true);
     let cursor = page["data"]["next_cursor"].as_str().unwrap();
     let (_, rest) = read(&app, &format!("/api/v1/attention?limit=2&cursor={cursor}")).await;
-    assert_eq!(rest["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(rest["data"]["items"].as_array().unwrap().len(), 2);
     assert_eq!(rest["data"]["has_more"], false);
+    let mut paged = ids(&page, "items");
+    paged.extend(ids(&rest, "items"));
+    paged.sort();
+    assert_eq!(paged, ids(&list, "items"));
 
     let cleared = format!("internal_work:{}", runs[0]);
     let revision = |body: &Value, id: &str| -> String {
@@ -333,9 +353,10 @@ async fn escalated_internal_runs_are_listed_in_full_and_can_be_cleared() {
     let app = aq_server::build_admin_router(f.state.clone());
     let (_, refreshed) = read(&app, "/api/v1/overview").await;
     let (_, list) = read(&app, "/api/v1/attention").await;
-    assert_eq!(ids(&refreshed, "attention").len(), 2);
+    assert_eq!(ids(&refreshed, "attention").len(), 3);
     assert_eq!(ids(&list, "items"), ids(&refreshed, "attention"));
     assert!(!ids(&list, "items").contains(&cleared));
+    assert!(ids(&list, "items").contains(&worker));
     assert_eq!(
         refreshed["data"]["counts"]["needs_you"]["value"],
         list["data"]["total"]["value"]
