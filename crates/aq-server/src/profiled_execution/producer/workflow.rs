@@ -749,16 +749,12 @@ async fn offers(
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
-<<<<<<< HEAD
-=======
                         match (&a, print) {
                             (Assessment::Blocked(reason), Some(print)) => {
                                 hold_memo::remember(task, revision, print, reason, polled_at)
                             }
                             _ => hold_memo::forget(task),
                         }
-                        #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
                         if let Some(replacement) = a.replacement() {
                             let mut connection = pool.acquire().await.map_err(db)?;
                             if replacement::pending_publication_owner(

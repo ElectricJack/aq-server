@@ -813,7 +813,6 @@ async fn return_once(state: &AppState, report_id: Uuid, reason: &str) -> Result<
 
 /// The system comment naming what the result's failed required checks
 /// showed, once per result. Best effort: it never fails the return.
-#[cfg(feature = "delivery_playbook")]
 async fn post_failed_checks(state: &AppState, report_id: Uuid, thread: aq_task_comments::Thread) {
     let pool = &state.store.pool;
     let max = aq_task_comments::MAX_BODY_BYTES;

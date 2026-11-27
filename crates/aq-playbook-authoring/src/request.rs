@@ -80,31 +80,16 @@ pub fn catalog_2_3() -> Result<Registry> {
         .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()))
 }
 
-<<<<<<< HEAD
-/// Catalog 2.6.0: 2.3.0 with the `work.read` whose facts add the task's
-/// acceptance criteria and its latest result's conclusion.
-pub const CATALOG_2_6_REGISTRY: &str =
-    include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
-const CATALOG_2_6_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.6.0/notes.json");
-
-pub fn catalog_2_6() -> Result<Registry> {
-    serde_json::from_str(CATALOG_2_6_REGISTRY)
-        .map_err(|_| Error::Invalid("catalog 2.6.0 does not parse".into()))
-=======
 /// Catalog 2.7.0: 2.3.0 with the `work.read` whose facts add the task's
 /// acceptance criteria and its latest result's conclusion (2.6.0), the
 /// conclusion up to the result report's 4096 bytes.
-#[cfg(feature = "delivery_playbook")]
 pub const CATALOG_2_7_REGISTRY: &str =
     include_str!("../../../vendor/aq-host-catalog-2.7.0/registry.json");
-#[cfg(feature = "delivery_playbook")]
 const CATALOG_2_7_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.7.0/notes.json");
 
-#[cfg(feature = "delivery_playbook")]
 pub fn catalog_2_7() -> Result<Registry> {
     serde_json::from_str(CATALOG_2_7_REGISTRY)
         .map_err(|_| Error::Invalid("catalog 2.7.0 does not parse".into()))
->>>>>>> refs/remotes/central/main
 }
 
 /// Catalog 2.5.0 (spec 0017).

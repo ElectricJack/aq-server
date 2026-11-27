@@ -269,13 +269,8 @@ impl Service {
 
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
     /// those of its latest result, for a task of any bound project. The 2.6.0
-<<<<<<< HEAD
-    /// one adds the task's acceptance criteria and the result's conclusion.
-=======
     /// and 2.7.0 ones add the task's acceptance criteria and the result's
     /// conclusion (2.7.0's up to 4096 bytes).
-    #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -334,7 +329,6 @@ impl Service {
 
     /// The whole final message the worker posted as a task comment for the
     /// attempt of `latest` (the report's conclusion is bounded to 512 bytes).
-    #[cfg(feature = "delivery_playbook")]
     async fn final_message(
         &self,
         task: Uuid,
