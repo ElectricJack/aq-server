@@ -14,6 +14,7 @@ pub mod attempts;
 pub mod closed_launch;
 pub mod fresh;
 mod handoffs;
+pub mod hold_memo;
 pub mod holds;
 pub use handoffs::{
     HandoffCandidate, MAX_LINEAGE_HOPS, export_scope, handoff_of, lineage_base, pending_counts,
