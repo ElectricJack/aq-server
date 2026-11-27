@@ -175,6 +175,7 @@ impl PullRequestObserved {
             mergeable: "unknown",
             checks_state: "none",
             checks_failed: vec![],
+            checks_head: None,
             checks_log: None,
         }
     }
@@ -185,6 +186,7 @@ impl PullRequestObserved {
             .take(FAILED_NAMES)
             .map(|n| n.chars().take(NAME_BYTES).collect())
             .collect();
+        self.checks_head = Some(checks.pull_request.head_sha.clone());
         self.checks_state = match checks.state {
             ChecksState::Passed => "passed",
             ChecksState::Failed => "failed",

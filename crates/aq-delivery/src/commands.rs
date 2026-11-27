@@ -89,6 +89,9 @@ pub struct PullRequestObserved {
     /// `none`, `pending`, `passed` or `failed`.
     pub checks_state: &'static str,
     pub checks_failed: Vec<String>,
+    /// The pull request head `checks_state` was evaluated on, when this
+    /// command evaluated checks (`work.read` `pull_request.checks_head`).
+    pub checks_head: Option<String>,
     /// The redacted log tail of the failed checks on the head that was
     /// checked, when the forge gave one.
     pub checks_log: Option<CheckLog>,
@@ -405,6 +408,7 @@ impl Delivery {
                         mergeable: "unknown",
                         checks_state: "none",
                         checks_failed: vec![],
+                        checks_head: None,
                         checks_log: None,
                     },
                 )
@@ -420,6 +424,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "none",
                 checks_failed: vec![],
+                checks_head: None,
                 checks_log: None,
             }),
             // GitHub answers 422 when the head branch is not there.
@@ -574,6 +579,7 @@ impl Delivery {
                 .take(FAILED_NAMES)
                 .map(|n| n.chars().take(NAME_BYTES).collect())
                 .collect(),
+            checks_head: Some(head.to_owned()),
             checks_log: log.map(|tail| CheckLog {
                 head: head.to_owned(),
                 tail,
@@ -620,6 +626,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "passed",
                 checks_failed: vec![],
+                checks_head: None,
                 checks_log: None,
             }),
         )
@@ -662,6 +669,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "none",
                 checks_failed: vec![],
+                checks_head: None,
                 checks_log: None,
             }),
         )

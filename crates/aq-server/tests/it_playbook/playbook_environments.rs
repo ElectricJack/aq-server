@@ -57,11 +57,11 @@ fn host12_is_catalog_2_5_0_and_serves_the_delivery_record() {
     assert!(host12.validate_scope(&scope).is_ok());
     assert!(CatalogProfile::Host10.validate_scope(&scope).is_err());
     // Every contract the built-in delivery record is authored against is
-    // accepted, its 2.7.0 work.read included; 2.2.0's and 2.3.0's are not.
+    // accepted, its 2.8.0 work.read included; 2.2.0's and 2.3.0's are not.
     let record = aq_playbook_authoring::builtin::delivery(true);
     let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
     let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
-    assert_eq!(kept.commands["work.read"].version, "2.7.0");
+    assert_eq!(kept.commands["work.read"].version, "2.8.0");
     for contract in kept.commands.values() {
         assert!(
             aq_playbook_host::accepts_command(&registry, contract),

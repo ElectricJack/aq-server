@@ -46,6 +46,10 @@ pub struct PullRequestFacts {
     pub checks_state: String,
     /// The names of the failed checks.
     pub checks_failed: Vec<String>,
+    /// The head `checks_state` was evaluated on (catalog 2.8.0), when the
+    /// host recorded one. A row written before it, or by a command that
+    /// evaluated no checks, has none.
+    pub checks_head: Option<String>,
 }
 
 impl PullRequestFacts {
@@ -72,14 +76,24 @@ impl PullRequestFacts {
                 .take(CHECK_NAMES)
                 .map(|n| truncate(n, CHECK_NAME_BYTES).to_owned())
                 .collect(),
+            checks_head: (self.checks_head.as_deref())
+                .map(|h| truncate(h, OBJECT_BYTES).to_owned()),
         })
     }
+    /// The facts up to catalog 2.7.0: what [`facts_digest`] is taken over.
     fn output(&self) -> Value {
         json!({
             "number": self.number, "url": self.url, "state": self.state,
             "mergeable": self.mergeable,
             "checks": {"state": self.checks_state, "failed": self.checks_failed},
         })
+    }
+    /// The facts of catalog 2.8.0: [`Self::output`] and `checks_head`, `null`
+    /// when none is recorded.
+    fn output_2_8(&self) -> Value {
+        let mut output = self.output();
+        output["checks_head"] = self.checks_head.as_deref().map_or(Value::Null, Value::from);
+        output
     }
 }
 
@@ -115,13 +129,25 @@ impl ResultFacts {
             "main_head": truncate(&self.main_head, OBJECT_BYTES),
             "returns": self.returns.min(RETURNS_MAX),
             "pull_request": self.pull_request.as_ref().and_then(PullRequestFacts::normalized)
-                .map_or(Value::Null, |p| p.output()),
+                .map_or(Value::Null, |p| p.output_2_8()),
         })
     }
 }
 
+/// `output` as catalog `version` declares it: the pull request's
+/// `checks_head` is 2.8.0's, so an older catalog's answer leaves it out.
+pub fn for_catalog(mut output: Value, version: &str) -> Value {
+    if version != "2.8.0"
+        && let Some(pull_request) = output["facts"]["pull_request"].as_object_mut()
+    {
+        pull_request.remove("checks_head");
+    }
+    output
+}
+
 /// The `observed` output of `work.read` under catalog 2.3.0: the task's facts
-/// of 2.2.0 and those of its latest result.
+/// of 2.2.0 and those of its latest result. Its pull request carries 2.8.0's
+/// `checks_head`; [`for_catalog`] leaves it out for an older catalog.
 pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultFacts) -> Value {
     let mut output = host9::read_output(task, version, facts);
     if let (Some(all), Some(more)) = (output["facts"].as_object_mut(), result.output().as_object())
@@ -131,10 +157,10 @@ pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultF
     output
 }
 
-/// The `observed` output of `work.read` `version` (catalog 2.6.0 or 2.7.0):
+/// The `observed` output of `work.read` `version` (catalog 2.6.0, 2.7.0 or 2.8.0):
 /// the 2.3.0 `output` with the acceptance criteria of the graph node `node`
 /// and the `conclusion` of the latest result (`""` when there is none), cut to
-/// that catalog's bound.
+/// that catalog's bound (2.8.0's is 2.7.0's).
 pub fn with_judgment_facts(
     mut output: Value,
     node: &Value,
@@ -357,6 +383,7 @@ mod tests {
             mergeable: "unknown".into(),
             checks_state: "failed".into(),
             checks_failed: vec!["unit".into()],
+            checks_head: Some("a".repeat(40)),
         }
     }
 
@@ -473,7 +500,7 @@ mod tests {
             returns: 2,
             pull_request: Some(pull_request()),
         };
-        let some = read_output(task, 3, &work, &result);
+        let some = for_catalog(read_output(task, 3, &work, &result), "2.3.0");
         observed.validate(&some).unwrap();
         assert_eq!(some["facts"]["returns"], 2);
         assert_eq!(some["facts"]["pull_request"]["number"], 7);
@@ -527,6 +554,66 @@ mod tests {
         let cut = with_judgment_facts(base, &node, &"é".repeat(2100), "2.7.0");
         observed.validate(&cut).unwrap();
         assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 4096);
+    }
+
+    /// Catalog 2.8.0 `work.read` reports the head the pull request's checks
+    /// were evaluated on; every older catalog's answer leaves it out.
+    #[test]
+    fn work_read_2_8_0_reports_the_head_the_checks_were_evaluated_on() {
+        let v2_8: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.8.0/registry.json"
+        ))
+        .unwrap();
+        let v2_7: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.7.0/registry.json"
+        ))
+        .unwrap();
+        let (new, old) = (
+            &v2_8.commands["work.read"].outcomes["observed"],
+            &v2_7.commands["work.read"].outcomes["observed"],
+        );
+        let task = Uuid::from_u128(1);
+        let node = json!({"title": "t", "body": "b", "acceptance_criteria": "c", "metadata": {}});
+        let work = WorkFacts::of(&node, false, 0, 0);
+        let head = "4".repeat(40);
+        let mut result = ResultFacts {
+            outcome: "success".into(),
+            head: head.clone(),
+            pull_request: Some(pull_request()),
+            ..Default::default()
+        };
+        result.pull_request.as_mut().unwrap().checks_head = Some(head.clone());
+        let read = |result: &ResultFacts, version: &str| {
+            let output = read_output(task, 3, &work, result);
+            let output = with_judgment_facts(output, &node, "Outcome: done", version);
+            for_catalog(output, version)
+        };
+        let answer = read(&result, "2.8.0");
+        new.validate(&answer).unwrap();
+        assert_eq!(answer["facts"]["pull_request"]["checks_head"], head);
+        assert_eq!(answer["facts"]["pull_request"]["checks"]["state"], "failed");
+        // A pull request whose checks were never evaluated has no head.
+        result.pull_request.as_mut().unwrap().checks_head = None;
+        let unknown = read(&result, "2.8.0");
+        new.validate(&unknown).unwrap();
+        assert!(unknown["facts"]["pull_request"]["checks_head"].is_null());
+        // No pull request: still null, as before.
+        let none = read(&ResultFacts::default(), "2.8.0");
+        new.validate(&none).unwrap();
+        // An older catalog's answer has no checks_head, and fits its contract.
+        let older = read(&result, "2.7.0");
+        assert!(older["facts"]["pull_request"]["checks_head"].is_null());
+        assert!(older["facts"]["pull_request"].get("checks_head").is_none());
+        old.validate(&older).unwrap();
+        // The facts digest does not move with checks_head.
+        let moved = PullRequestFacts {
+            checks_head: Some("5".repeat(40)),
+            ..pull_request()
+        };
+        assert_eq!(
+            facts_digest("m", Some(&moved)),
+            facts_digest("m", Some(&pull_request()))
+        );
     }
 
     #[test]
