@@ -12,6 +12,9 @@ use uuid::Uuid;
 pub const MAX_ID_BYTES: usize = 256;
 pub const DEFAULT_LIMIT: usize = 25;
 pub const MAX_LIMIT: usize = 100;
+// New owner attention kinds sort after the established priorities. Keep this
+// rank valid in cursors too, including when integrating newer owner variants.
+const OTHER_KIND_RANK: u8 = 7;
 /// Notification families eligible for dismissal. The server must additionally
 /// check current revisions, affected kinds, authorization and unresolved gates.
 const DISMISSIBLE_PREFIXES: [&str; 4] = ["result:", "internal_work:", "operation:", "worker:"];
@@ -79,15 +82,18 @@ impl AttentionKind {
     }
     /// Display order: what blocks the owner first.
     fn rank(&self) -> u8 {
-        match self {
-            Self::Decision => 0,
-            Self::Question => 1,
-            Self::UncertainOperation => 2,
-            Self::Blocked => 3,
-            Self::Failed => 4,
-            Self::InternalWork => 5,
-            Self::WorkerOffline => 6,
-        }
+        [
+            Self::Decision,
+            Self::Question,
+            Self::UncertainOperation,
+            Self::Blocked,
+            Self::Failed,
+            Self::InternalWork,
+            Self::WorkerOffline,
+        ]
+        .iter()
+        .position(|kind| kind == self)
+        .map_or(OTHER_KIND_RANK, |rank| rank as u8)
     }
 }
 
@@ -134,7 +140,7 @@ fn encode(item: &AttentionItem) -> String {
 fn decode(cursor: &str) -> Result<(u8, &str), PageError> {
     let (rank, id) = cursor.split_once(':').ok_or(PageError::Cursor)?;
     let rank = rank.parse::<u8>().map_err(|_| PageError::Cursor)?;
-    if rank > 6 || !valid_id(id) {
+    if rank > OTHER_KIND_RANK || !valid_id(id) {
         return Err(PageError::Cursor);
     }
     Ok((rank, id))
@@ -283,13 +289,30 @@ mod tests {
 
     #[test]
     fn malformed_cursors_are_refused() {
-        for cursor in ["", "x", "9:abc", "0:", "0:a b", "a:b"] {
+        for cursor in ["", "x", "8:abc", "9:abc", "0:", "0:a b", "a:b"] {
             assert_eq!(
                 page(vec![], None, Some(cursor), 1).unwrap_err(),
                 PageError::Cursor,
                 "{cursor}"
             );
         }
+    }
+
+    #[test]
+    fn owner_kind_extensions_have_a_valid_cursor_rank() {
+        assert_eq!(decode("7:admission:abc"), Ok((7, "admission:abc")));
+        // Older readers can continue past a newer owner's kind even when that
+        // kind's last entry has disappeared between requests.
+        let (items, next, matching) = page(
+            vec![item(AttentionKind::WorkerOffline, "worker:abc")],
+            None,
+            Some("7:admission:abc"),
+            1,
+        )
+        .unwrap();
+        assert!(items.is_empty());
+        assert_eq!(next, None);
+        assert_eq!(matching, 1);
     }
 
     fn sources(items: Vec<AttentionItem>) -> overview::OverviewSources {
