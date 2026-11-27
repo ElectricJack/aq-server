@@ -426,7 +426,7 @@ async fn concurrent_mint_and_revoke_leave_no_live_sibling() {
             let mut tx = pool.begin().await.unwrap();
             let n = mc::revoke_machine(&mut tx, "desk", now()).await.unwrap();
             tx.commit().await.unwrap();
-            n
+            n.len()
         }
     });
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -469,7 +469,13 @@ async fn key_is_not_adopted_while_a_sibling_lives() {
         mc::claim_key(&mut c, other, "desk").await,
         Err(Error::KeyInUse)
     ));
-    assert_eq!(mc::revoke_machine(&mut c, "desk", now()).await.unwrap(), 2);
+    assert_eq!(
+        mc::revoke_machine(&mut c, "desk", now())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(
         mc::claim_key(&mut c, other, "desk").await.unwrap().slot,
         Some(1)
@@ -574,7 +580,7 @@ async fn publishing_node_lock_holds_after_a_switch_change_or_a_lock_timeout() {
     );
     drop((publish, switch));
     let mut holder = pool.begin().await.unwrap();
-    sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE")
         .bind(ids[0])
         .execute(&mut *holder)
         .await
@@ -682,7 +688,13 @@ async fn revoke_machine_revokes_every_slot_and_clears_control() {
     )
     .await
     .unwrap();
-    assert_eq!(mc::revoke_machine(&mut c, "desk", now()).await.unwrap(), 3);
+    assert_eq!(
+        mc::revoke_machine(&mut c, "desk", now())
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
     let live: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM nodes WHERE machine_key='desk' AND revoked_at IS NULL",
     )
@@ -695,7 +707,8 @@ async fn revoke_machine_revokes_every_slot_and_clears_control() {
     assert_eq!(
         mc::revoke_machine(&mut c, &format!("node:{legacy}"), now())
             .await
-            .unwrap(),
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -842,7 +855,13 @@ async fn act(c: &mut sqlx::PgConnection, locker: Locker, who: Uuid) -> Result<()
 async fn locks_lowest_first(pool: &PgPool, ids: &[Uuid], locker: Locker, who: Uuid) -> bool {
     let (low, high) = (ids[0], *ids.last().unwrap());
     let mut holder = pool.begin().await.unwrap();
-    let lock = "SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE";
+    // Fences lock the allocation rows (0185); revocation and the old touch the node rows.
+    let lock = match locker {
+        Locker::Switch | Locker::Stop => {
+            "SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE"
+        }
+        Locker::UnorderedTouch | Locker::Revoke => "SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE",
+    };
     sqlx::query(lock)
         .bind(low)
         .execute(&mut *holder)
@@ -1030,7 +1049,7 @@ async fn no_op_switch_writes_and_locks_no_node_row() {
         .await
         .unwrap();
     let xmins = || async {
-        let sql = "SELECT xmin::text FROM nodes WHERE revoked_at IS NULL ORDER BY id";
+        let sql = "SELECT a.xmin::text FROM node_allocation a JOIN nodes n ON n.id=a.node_id WHERE n.revoked_at IS NULL ORDER BY a.node_id";
         sqlx::query_scalar::<_, String>(sql)
             .fetch_all(&pool)
             .await
@@ -1039,7 +1058,7 @@ async fn no_op_switch_writes_and_locks_no_node_row() {
     let before = xmins().await;
     assert_eq!(before.len(), 3);
     let mut holder = pool.begin().await.unwrap();
-    sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE")
         .bind(ids[1])
         .execute(&mut *holder)
         .await

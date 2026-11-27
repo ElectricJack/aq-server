@@ -20,6 +20,11 @@ const URL_BYTES: usize = 2048;
 const CHECK_NAME_BYTES: usize = 256;
 const CHECK_NAMES: usize = 64;
 const RETURNS_MAX: u32 = 1000;
+/// Catalog 2.6.0's bounds: the graph's on acceptance criteria and the result
+/// report's on its conclusion, which 2.7.0 raises to the report's new bound.
+const ACCEPTANCE_CRITERIA_BYTES: usize = 8192;
+const CONCLUSION_BYTES_2_6: usize = 512;
+const CONCLUSION_BYTES_2_7: usize = 4096;
 const PULL_REQUEST_MAX: u64 = 1_000_000_000;
 
 /// The branch of a task's result in the central git (`aq/<task-id>`).
@@ -124,6 +129,38 @@ pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultF
         all.extend(more.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
     output
+}
+
+/// The `observed` output of `work.read` `version` (catalog 2.6.0 or 2.7.0):
+/// the 2.3.0 `output` with the acceptance criteria of the graph node `node`
+/// and the `conclusion` of the latest result (`""` when there is none), cut to
+/// that catalog's bound.
+pub fn with_judgment_facts(
+    mut output: Value,
+    node: &Value,
+    conclusion: &str,
+    version: &str,
+) -> Value {
+    let criteria = node["acceptance_criteria"].as_str().unwrap_or("");
+    let bound = if version == "2.6.0" {
+        CONCLUSION_BYTES_2_6
+    } else {
+        CONCLUSION_BYTES_2_7
+    };
+    output["facts"]["acceptance_criteria"] = truncate(criteria, ACCEPTANCE_CRITERIA_BYTES).into();
+    output["facts"]["conclusion"] = truncate(conclusion, bound).into();
+    output
+}
+
+/// The agent's whole final message when `body` is the comment the worker
+/// posts for `attempt` (aq-worker `aq_handoff_note::final_message`): the
+/// text after its header, out of its ```` ```text ```` fence.
+pub fn final_message(body: &str, attempt: Uuid) -> Option<&str> {
+    let text = body
+        .strip_prefix(&format!("Final message of attempt {attempt}:"))?
+        .trim_start();
+    let text = text.strip_prefix("```text\n").unwrap_or(text).trim_end();
+    Some(text.strip_suffix("```").unwrap_or(text).trim_end()).filter(|t| !t.is_empty())
 }
 
 /// What a playbook can read that moves without the result changing: the
@@ -444,5 +481,72 @@ mod tests {
         assert_eq!(some["facts"]["branch"], format!("aq/{task}"));
         // The 2.2.0 facts are unchanged.
         assert_eq!(some["facts"]["title"], "t");
+    }
+
+    #[test]
+    fn work_read_2_6_0_and_2_7_0_add_the_acceptance_criteria_and_the_conclusion_within_bounds() {
+        let registry: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.6.0/registry.json"
+        ))
+        .unwrap();
+        let observed = &registry.commands["work.read"].outcomes["observed"];
+        let task = Uuid::from_u128(1);
+        let node =
+            json!({"title": "t", "body": "b", "acceptance_criteria": "It runs.", "metadata": {}});
+        let work = WorkFacts::of(&node, false, 0, 0);
+        let base = read_output(task, 3, &work, &ResultFacts::default());
+        // Without the two facts the 2.3.0 answer does not fit 2.6.0.
+        assert!(observed.validate(&base).is_err());
+        let read =
+            with_judgment_facts(base.clone(), &node, "Outcome: done; Changes: none", "2.6.0");
+        observed.validate(&read).unwrap();
+        assert_eq!(read["facts"]["acceptance_criteria"], "It runs.");
+        assert_eq!(read["facts"]["conclusion"], "Outcome: done; Changes: none");
+        // A node without criteria and no result: both empty.
+        let empty = with_judgment_facts(base.clone(), &json!({}), "", "2.6.0");
+        observed.validate(&empty).unwrap();
+        assert_eq!(empty["facts"]["acceptance_criteria"], "");
+        // Longer values are cut to the catalog's byte bounds at a character boundary.
+        let long = json!({"acceptance_criteria": "é".repeat(5000)});
+        let cut = with_judgment_facts(base.clone(), &long, &"é".repeat(300), "2.6.0");
+        observed.validate(&cut).unwrap();
+        assert_eq!(
+            cut["facts"]["acceptance_criteria"].as_str().unwrap().len(),
+            8192
+        );
+        assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 512);
+        // 2.7.0 keeps up to 4096 bytes of the conclusion, and cuts the rest.
+        let v2_7: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.7.0/registry.json"
+        ))
+        .unwrap();
+        let observed = &v2_7.commands["work.read"].outcomes["observed"];
+        let kept = with_judgment_facts(base.clone(), &node, &"é".repeat(2048), "2.7.0");
+        observed.validate(&kept).unwrap();
+        assert_eq!(kept["facts"]["conclusion"].as_str().unwrap().len(), 4096);
+        let cut = with_judgment_facts(base, &node, &"é".repeat(2100), "2.7.0");
+        observed.validate(&cut).unwrap();
+        assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 4096);
+    }
+
+    #[test]
+    fn final_message_is_the_text_of_the_attempts_final_message_comment() {
+        let attempt = Uuid::new_v4();
+        let body = format!(
+            "Final message of attempt {attempt}:\n\n```text\nDone.\nAll checks ran.\n```\n"
+        );
+        assert_eq!(
+            final_message(&body, attempt),
+            Some("Done.\nAll checks ran.")
+        );
+        // Without the fence the text after the header.
+        let bare = format!("Final message of attempt {attempt}: Done.");
+        assert_eq!(final_message(&bare, attempt), Some("Done."));
+        // Another attempt's, or any other comment, is not.
+        assert_eq!(final_message(&body, Uuid::new_v4()), None);
+        assert_eq!(final_message("Looks good to me.", attempt), None);
+        // An empty one leaves the report's conclusion in place.
+        let empty = format!("Final message of attempt {attempt}:\n\n```text\n\n```\n");
+        assert_eq!(final_message(&empty, attempt), None);
     }
 }

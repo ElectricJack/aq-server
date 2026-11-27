@@ -39,15 +39,24 @@ impl ExecutionQualification {
         }
         Ok(())
     }
+    fn has_qualified_owners(&self, config: &super::super::config::ProfiledConfig) -> bool {
+        config
+            .qualified_runtimes
+            .iter()
+            .any(|r| r.runtime == self.runtime && r.qualification == self.runtime_qualification)
+            && config.definition_bodies.iter().any(|p| {
+                p.artifact() == &self.proposal_policy
+                    && serde_json::from_str::<serde_json::Value>(p.body())
+                        .ok()
+                        .is_some_and(|value| value["contract"] == serde_json::json!(self.contract))
+            })
+    }
 }
 pub(crate) fn validate_catalog(
     config: &super::super::config::ProfiledConfig,
 ) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
-    for d in &config.definition_bodies {
-        if !d.artifact().id.as_str().starts_with(PREFIX) {
-            continue;
-        }
+    for d in execution_definitions(config) {
         if d.body().len() > 8192 {
             return Err("execution qualification byte bound".into());
         }
@@ -55,16 +64,7 @@ pub(crate) fn validate_catalog(
             serde_json::from_str(d.body()).map_err(|_| "execution qualification body")?;
         q.validate()?;
         if !seen.insert((q.runtime.id.clone(), q.runtime.version.clone()))
-            || !config
-                .qualified_runtimes
-                .iter()
-                .any(|r| r.runtime == q.runtime && r.qualification == q.runtime_qualification)
-            || !config.definition_bodies.iter().any(|p| {
-                p.artifact() == &q.proposal_policy
-                    && serde_json::from_str::<serde_json::Value>(p.body())
-                        .ok()
-                        .is_some_and(|value| value["contract"] == serde_json::json!(q.contract))
-            })
+            || !q.has_qualified_owners(config)
         {
             return Err("unqualified execution runtime/proposal policy".into());
         }
@@ -82,10 +82,7 @@ pub(super) fn current(
         .as_ref()
         .ok_or_else(|| refused())?;
     validate_catalog(config).map_err(|_| refused())?;
-    for d in &config.definition_bodies {
-        if !d.artifact().id.as_str().starts_with(PREFIX) {
-            continue;
-        }
+    for d in execution_definitions(config) {
         let q: ExecutionQualification = serde_json::from_str(d.body()).map_err(|_| refused())?;
         if q.runtime == runtime.runtime
             && q.runtime_qualification == runtime.qualification
@@ -108,10 +105,7 @@ pub(crate) fn transport_enabled(state: &AppState) -> bool {
         return false;
     }
     let mut found = false;
-    for d in &c.definition_bodies {
-        if !d.artifact().id.as_str().starts_with(PREFIX) {
-            continue;
-        }
+    for d in execution_definitions(c) {
         let Ok(q) = serde_json::from_str::<ExecutionQualification>(d.body()) else {
             return false;
         };
@@ -124,4 +118,13 @@ pub(crate) fn transport_enabled(state: &AppState) -> bool {
         found = true;
     }
     found
+}
+
+fn execution_definitions(
+    config: &super::super::config::ProfiledConfig,
+) -> impl Iterator<Item = &super::super::definitions::Definition> {
+    config
+        .definition_bodies
+        .iter()
+        .filter(|definition| definition.artifact().id.as_str().starts_with(PREFIX))
 }

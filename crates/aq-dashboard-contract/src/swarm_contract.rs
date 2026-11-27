@@ -293,6 +293,8 @@ pub enum HoldCode {
     NodeSpendCeilingReached,
     NodeSpendUnaccounted,
     NodeDiskPressure,
+    // The machine cannot admit a sandbox now (disk headroom, daemon); it rechecks automatically.
+    SandboxAdmissionDeferred,
     CpuAboveThreshold,
     MemoryAboveThreshold,
     AgentMaximumReached,

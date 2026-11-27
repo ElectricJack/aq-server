@@ -85,6 +85,27 @@ fn key_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
 }
+fn read_key(item: &KeyFile) -> Result<[u8; 32], Error> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
+        .open(&item.file)
+        .map_err(|_| Error::KeyFile)?;
+    let metadata = file.metadata().map_err(|_| Error::KeyFile)?;
+    if !metadata.is_file()
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != nix::unistd::geteuid().as_raw()
+        || metadata.nlink() != 1
+    {
+        return Err(Error::KeyFile);
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(33)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Error::KeyFile)?;
+    bytes.as_slice().try_into().map_err(|_| Error::KeyFile)
+}
+
 impl Keyring {
     pub fn load(config: &ProtectionConfig) -> Result<Self, Error> {
         if config.keys.is_empty() || config.keys.len() > 8 || !key_id(&config.active_key_id) {
@@ -95,25 +116,7 @@ impl Keyring {
             if !key_id(&item.id) || !item.file.is_absolute() || keys.contains_key(&item.id) {
                 return Err(Error::Config);
             }
-            let file = OpenOptions::new()
-                .read(true)
-                .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
-                .open(&item.file)
-                .map_err(|_| Error::KeyFile)?;
-            let metadata = file.metadata().map_err(|_| Error::KeyFile)?;
-            if !metadata.is_file()
-                || metadata.mode() & 0o077 != 0
-                || metadata.uid() != nix::unistd::geteuid().as_raw()
-                || metadata.nlink() != 1
-            {
-                return Err(Error::KeyFile);
-            }
-            let mut bytes = Zeroizing::new(Vec::new());
-            file.take(33)
-                .read_to_end(&mut bytes)
-                .map_err(|_| Error::KeyFile)?;
-            let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| Error::KeyFile)?;
-            keys.insert(item.id.clone(), Zeroizing::new(key));
+            keys.insert(item.id.clone(), Zeroizing::new(read_key(item)?));
         }
         if !keys.contains_key(&config.active_key_id) {
             return Err(Error::Config);
@@ -189,6 +192,32 @@ impl Keyring {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn key_files_require_private_permissions_exact_length_and_single_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+        let config = ProtectionConfig {
+            active_key_id: "one".into(),
+            keys: vec![KeyFile {
+                id: "one".into(),
+                file: path.clone(),
+            }],
+        };
+        for (mode, length) in [(0o644, 32), (0o600, 31), (0o600, 33)] {
+            std::fs::write(&path, vec![19u8; length]).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(Keyring::load(&config).unwrap_err(), Error::KeyFile);
+        }
+        std::fs::write(&path, [19u8; 32]).unwrap();
+        Keyring::load(&config).unwrap();
+        let link = dir.path().join("link");
+        std::fs::hard_link(&path, &link).unwrap();
+        assert_eq!(Keyring::load(&config).unwrap_err(), Error::KeyFile);
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&link, &path).unwrap();
+        assert_eq!(Keyring::load(&config).unwrap_err(), Error::KeyFile);
+    }
+
     #[test]
     fn typed_domains_are_independent_and_aad_is_bounded() {
         let dir = tempfile::tempdir().unwrap();

@@ -73,7 +73,7 @@ pub async fn cancel(
     ] {
         sqlx::query(setting).execute(&mut *tx).await.map_err(db)?;
     }
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_one(&mut *tx)
         .await
@@ -133,13 +133,7 @@ pub async fn cancel(
                 .ok_or(AppError::Internal)?;
             sqlx::query("INSERT INTO profiled_cancellations(attempt_id,cancellation_id,binding,reason,authority_revision,recorded_at_ms) VALUES($1,$2,$3,$4,$5,$6)")
                 .bind(attempt).bind(operation).bind(json!(binding)).bind(reason).bind(revision).bind(now as i64).execute(&mut *tx).await.map_err(db)?;
-            hot.cancellation_id = Some(operation);
-            hot.revoked = true;
-            if hot.grant.is_some() && !hot.stop.known_stopped() {
-                hot.status = Status::Cancelling;
-            }
-            hot.validate_against(&binding)
-                .map_err(|_| AppError::Internal)?;
+            revoke_hot(&mut hot, &binding, operation)?;
             sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
                 .bind(attempt)
                 .bind(json!(hot))
@@ -185,6 +179,21 @@ pub async fn cancel(
     Ok(receipt)
 }
 
+fn revoke_hot(
+    hot: &mut HotState,
+    binding: &LaunchBinding,
+    operation: Uuid,
+) -> Result<(), AppError> {
+    hot.cancellation_id = Some(operation);
+    hot.revoked = true;
+    if hot.grant.is_some() && !hot.stop.known_stopped() {
+        hot.status = Status::Cancelling;
+    }
+    hot.validate_against(binding)
+        .map_err(|_| AppError::Internal)?;
+    Ok(())
+}
+
 /// Called only with the common node/attempt locks held, after the actual stop
 /// owner committed its verified row and hot projection in this transaction.
 /// Also covers cancellation arriving after a previously recorded actual stop.
@@ -209,7 +218,7 @@ pub(crate) async fn pending(
         return Err(AppError::Forbidden("cancellation node differs".into()));
     }
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::read_current_node(&mut tx, auth).await?;
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
     super::registration::admitted_runtime_locked(&mut tx, auth.id(), identity.boot_id).await?;
     // Frozen fixture binaries predate cancellation delivery. Only explicit
     // historical construction selects this path; current startup still refuses

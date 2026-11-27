@@ -96,6 +96,64 @@ fn byte_budget(count: usize, sizes: impl IntoIterator<Item = i64>) -> Result<u64
     })
 }
 
+fn validate_launch_binding(
+    current: &results::RecordedResult,
+    binding: &Value,
+    profile: &Value,
+) -> Result<Uuid, AppError> {
+    let attempt = current.report.binding.attempt_id;
+    let expected = &current.report.binding;
+    let aq_admission::SessionIdentity::Remote {
+        node_id,
+        boot_id,
+        session_id,
+        ..
+    } = expected.session
+    else {
+        return Err(refused());
+    };
+    if !aq_agent_api::valid("Binding", binding)
+        || !aq_agent_api::valid("ResolvedProfile", profile)
+        || binding["attempt_id"] != json!(attempt)
+        || binding["session_id"] != json!(session_id)
+        || binding["generation"] != json!(expected.assignment_generation)
+        || binding["node_id"] != json!(node_id)
+        || binding["boot_id"] != json!(boot_id)
+        || binding["task_id"] != json!(current.spec.task.task_id)
+        || binding["workspace_id"] != json!(current.spec.task.workspace_id)
+        || binding["project_id"] != json!(current.spec.lifecycle.project_id)
+        || binding["resolved_spec_digest"] != json!(expected.execution_spec_digest.as_str())
+        || binding["profile_digest"] != digest(profile)?
+        || digest(profile)? != current.spec.graph_access_profile.digest.as_str()
+    {
+        return Err(refused());
+    }
+    Ok(node_id)
+}
+
+fn operation_bytes(
+    meta: &sqlx::postgres::PgRow,
+    row: &Value,
+    attempt: Uuid,
+    node: Uuid,
+) -> Result<Vec<u8>, AppError> {
+    let operation: Uuid = meta.get("operation_id");
+    if row["attempt_id"] != json!(attempt)
+        || row["node_id"] != json!(node)
+        || row["operation_id"] != json!(operation)
+        || row["operation_seq"] != json!(meta.get::<i64, _>("operation_seq"))
+    {
+        return Err(refused());
+    }
+    let encoded = canonical(row)?;
+    // Recheck actual serialized bytes too; metadata's fixed margin includes
+    // finite scalar fields. Refusal never truncates or silently skips a row.
+    if encoded.len() as u64 > meta.get::<i64, _>("inspected_bytes") as u64 {
+        return Err(refused());
+    }
+    Ok(encoded)
+}
+
 /// Load the actual B1/stop owners FIRST, then sealed agent binding, then bounded
 /// operation rows. Neither the caller's pending_effect_ids nor an empty supplied
 /// list establishes completeness. The returned digest includes every row.
@@ -134,32 +192,7 @@ pub async fn inspect_aq_effects_locked(
     .ok_or_else(|| refused())?;
     let binding: Value = launch.get("binding");
     let profile: Value = launch.get("profile");
-    let expected = &current.report.binding;
-    let aq_admission::SessionIdentity::Remote {
-        node_id,
-        boot_id,
-        session_id,
-        ..
-    } = expected.session
-    else {
-        return Err(refused());
-    };
-    if !aq_agent_api::valid("Binding", &binding)
-        || !aq_agent_api::valid("ResolvedProfile", &profile)
-        || binding["attempt_id"] != json!(attempt)
-        || binding["session_id"] != json!(session_id)
-        || binding["generation"] != json!(expected.assignment_generation)
-        || binding["node_id"] != json!(node_id)
-        || binding["boot_id"] != json!(boot_id)
-        || binding["task_id"] != json!(current.spec.task.task_id)
-        || binding["workspace_id"] != json!(current.spec.task.workspace_id)
-        || binding["project_id"] != json!(current.spec.lifecycle.project_id)
-        || binding["resolved_spec_digest"] != json!(expected.execution_spec_digest.as_str())
-        || binding["profile_digest"] != digest(&profile)?
-        || digest(&profile)? != current.spec.graph_access_profile.digest.as_str()
-    {
-        return Err(refused());
-    }
+    let node_id = validate_launch_binding(&current, &binding, &profile)?;
     // Lock metadata first: JSON/TOAST payloads are not fetched until total bytes
     // have been checked. Existing attempt admission and these row locks keep the
     // subsequent bounded payload read on this exact stable retained set.
@@ -188,20 +221,7 @@ pub async fn inspect_aq_effects_locked(
         return Err(refused());
     }
     for (meta, row) in metadata.iter().zip(&rows) {
-        let operation: Uuid = meta.get("operation_id");
-        if row["attempt_id"] != json!(attempt)
-            || row["node_id"] != json!(node_id)
-            || row["operation_id"] != json!(operation)
-            || row["operation_seq"] != json!(meta.get::<i64, _>("operation_seq"))
-        {
-            return Err(refused());
-        }
-        let encoded = canonical(row)?;
-        // Recheck actual serialized bytes too; metadata's fixed margin includes
-        // finite scalar fields. Refusal never truncates or silently skips a row.
-        if encoded.len() as u64 > meta.get::<i64, _>("inspected_bytes") as u64 {
-            return Err(refused());
-        }
+        let encoded = operation_bytes(meta, row, attempt, node_id)?;
         hasher.update((encoded.len() as u64).to_be_bytes());
         hasher.update(&encoded);
         terminal &=

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "source_repository": "aq-playbooks",
+  "source_revision": "e87108d",
+  "publication_profile": "Exact AQ host catalog 2.7.0 data bundle (contracts/aq-host-2.7.0 of aq-playbooks e87108d). The delivery lineage of 2.6.0 with work.read 2.7.0, whose conclusion fact holds up to 4096 bytes; supersedes 2.6.0; compiled in only with the cargo feature delivery_playbook.",
+  "catalog_version": "2.7.0",
+  "catalog_fingerprint": "sha256:0d2b18e4c165cabff540142bb9207b31ea376c24e8be3738882a86a07d11366d",
+  "vendor_root": "vendor/aq-host-catalog-2.7.0",
+  "files": [
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "bytes": 1092,
+      "sha256": "c0dd8286541006b013518a92b64d8c53bc75e81a118d78445be9c335e748825d"
+    },
+    {
+      "path": "fixtures.json",
+      "mode": "100644",
+      "bytes": 16394,
+      "sha256": "1aa5601369fe4ed87430d7f91ee57c571c03d7ba81db7e082627ed23fd65ddfb"
+    },
+    {
+      "path": "manifest.json",
+      "mode": "100644",
+      "bytes": 771,
+      "sha256": "745af5e9f15e6d8e71612df291e28269a79cc05910b8f4eadaf2a9da3e58c336"
+    },
+    {
+      "path": "notes.json",
+      "mode": "100644",
+      "bytes": 39464,
+      "sha256": "341fada40bff3f6c7769a99e4c92d7da363cdf0221a5e8de926d04e48663593f"
+    },
+    {
+      "path": "registry.json",
+      "mode": "100644",
+      "bytes": 316192,
+      "sha256": "b095616ebad39a45e8199505cb98e757e29752cf33d6bd74b3f7234f593169ba"
+    }
+  ]
+}

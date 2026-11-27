@@ -53,6 +53,11 @@ pub trait EvidenceVerifier: Send + Sync {
         run: &Run,
         event: &Event,
     ) -> OwnerResult<()>;
+    /// Whether the owner released the mail of `run`, a stopped turn that handed it
+    /// off and finished without a result, so one successor may dispatch it again.
+    async fn released(&self, _tx: &mut Transaction<'_, Postgres>, _run: &Run) -> OwnerResult<bool> {
+        Ok(false)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -266,7 +271,7 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
                 let old = load(&mut tx, &h, h.generation).await?;
                 if old.run.plan() == &plan { tx.commit().await?; return Ok(old); }
                 if h.generation >= MAX_GENERATIONS { return Err(OwnerError::Capacity); }
-                let history = history::fence(&mut tx, &h, &plan).await?;
+                let history = history::fence(&mut tx, &h, &plan, &self.verifier).await?;
                 old.run.successor(plan, clock, &history)?
             } else {
                 Run::new(plan, clock)?

@@ -272,15 +272,17 @@ impl Service {
     }
 
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
-    /// those of its latest result, for a task of any bound project.
+    /// those of its latest result, for a task of any bound project. The 2.6.0
+    /// and 2.7.0 ones add the task's acceptance criteria and the result's
+    /// conclusion (2.7.0's up to 4096 bytes).
     #[cfg(feature = "delivery_playbook")]
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         input: &Value,
-        _version: &str,
+        version: &str,
     ) -> Result<HostResult> {
-        use aq_playbook_domain::delivery_store as store;
+        use aq_playbook_domain::{delivery_store as store, host10};
         let (ports, id) = (self.ports()?, text(&input["subject"], "id")?);
         let asked = input["subject"]["revision"]
             .as_i64()
@@ -288,7 +290,7 @@ impl Service {
         let refused = |reason| Ok(host_result("refused", host9::refusal(id, asked, reason)));
         // Catalog 2.5.0 is routing's: only a task on the automatic router.
         #[cfg(feature = "project_environments")]
-        if _version == "2.5.0"
+        if version == "2.5.0"
             && let Err(reason) = self.routed_task(&input["subject"]).await?
         {
             return refused(reason);
@@ -309,14 +311,52 @@ impl Service {
         let (charged, ended) = ports.routing.attempts(task).await?;
         let facts = (self.namespace_work(tx, task).await?, charged, ended);
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
-        #[cfg(feature = "project_environments")]
-        let output = match _version {
+        let output = match version {
+            "2.6.0" | "2.7.0" => {
+                let conclusion = match &latest {
+                    Some(l) => self.final_message(task, l).await?,
+                    None => None,
+                };
+                let conclusion = conclusion
+                    .as_deref()
+                    .or(latest.as_ref().map(|l| l.conclusion.as_str()))
+                    .unwrap_or("");
+                host10::with_judgment_facts(output, &node, conclusion, version)
+            }
+            #[cfg(feature = "project_environments")]
             "2.5.0" => {
                 (ports.routing.environments(at.1).await?).read_output(output, &node["metadata"])
             }
             _ => output,
         };
         Ok(host_result("observed", output))
+    }
+
+    /// The whole final message the worker posted as a task comment for the
+    /// attempt of `latest` (the report's conclusion is bounded to 512 bytes).
+    #[cfg(feature = "delivery_playbook")]
+    async fn final_message(
+        &self,
+        task: Uuid,
+        latest: &aq_playbook_domain::delivery_store::Latest,
+    ) -> Result<Option<String>> {
+        use aq_task_comments::{Author, MAX_LIMIT, Thread};
+        let thread = Thread {
+            project_id: latest.project_id,
+            task_id: task,
+        };
+        // shortcut: only the newest page of comments is searched; the worker posts the final message right after the result, so it is there when delivery reads it. Page with `before` if tasks gather 100+ comments after a result.
+        let (comments, _) = aq_task_comments::list(&self.pool, thread, None, MAX_LIMIT)
+            .await
+            .map_err(|_| Error::Unknown)?;
+        // Only the attempt itself can author a comment as it.
+        Ok(comments.iter().find_map(|c| match c.author {
+            Author::Agent { attempt_id, .. } if attempt_id == latest.attempt_id => {
+                aq_playbook_domain::host10::final_message(c.body.as_deref()?, attempt_id)
+                    .map(str::to_owned)
+            }
+            _ => None,
+        }))
     }
 
     /// The artifact the engine has active on the routing binding (what the

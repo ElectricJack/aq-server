@@ -121,7 +121,7 @@ pub async fn install_execution_locked(
 }
 
 pub(crate) async fn boot(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<Uuid, AppError> {
-    sqlx::query_scalar("SELECT COALESCE((SELECT boot_id FROM delegated_node_boots WHERE node_id=$1),(SELECT (state#>>'{identity,boot_id}')::uuid FROM execution_nodes WHERE node_id=$1))")
+    sqlx::query_scalar("SELECT COALESCE((SELECT boot_id FROM delegated_node_boots WHERE node_id=$1 FOR SHARE),(SELECT (state#>>'{identity,boot_id}')::uuid FROM execution_nodes WHERE node_id=$1 FOR SHARE))")
         .bind(node).fetch_one(&mut **tx).await.map_err(db)
 }
 
@@ -129,7 +129,7 @@ pub(crate) async fn context(
     tx: &mut Transaction<'_, Postgres>,
     current: &Current,
 ) -> Result<PermitContext, AppError> {
-    use crate::execution::{authority::hot::HotState, profiled::Status};
+    use crate::execution::authority::hot::HotState;
     let p = &current.record;
     let hot: HotState = parse(
         sqlx::query_scalar(
@@ -141,6 +141,15 @@ pub(crate) async fn context(
         .map_err(db)?
         .ok_or_else(|| refused())?,
     )?;
+    permit_context(current, &hot)
+}
+
+fn permit_context(
+    current: &Current,
+    hot: &crate::execution::authority::hot::HotState,
+) -> Result<PermitContext, AppError> {
+    use crate::execution::profiled::Status;
+    let p = &current.record;
     if hot.revoked || hot.cancellation_id.is_some() {
         return Err(refused());
     }
@@ -198,7 +207,7 @@ pub(crate) async fn lock_owner(
 ) -> Result<(), AppError> {
     let p = &current.record;
     let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
+        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR KEY SHARE")
             .bind(p.binding.node.node_id)
             .fetch_optional(&mut **tx)
             .await
@@ -249,33 +258,7 @@ pub async fn authenticate_runner(
     if channel != current.record.binding || attempt.is_some_and(|a| a != channel.attempt_id) {
         return Err(refused());
     }
-    // Material routes serve both preparation and execution with the same body.
-    let operation = if operation == RunnerOperation::FetchPreparationMaterial
-        && current.record.scope == PermitScope::Execution
-    {
-        RunnerOperation::FetchExecutionMaterial
-    } else {
-        operation
-    };
-    // An already-upgraded Prepared retry can only redeliver its exact retained
-    // operation. The phase owner separately checks the frozen request bytes.
-    let operation = if operation == RunnerOperation::Prepared
-        && current.record.scope == PermitScope::Execution
-    {
-        let q: PermitUpgradeRequest =
-            super::handoff::header(headers, "aq-permit-upgrade")?.ok_or_else(|| refused())?;
-        if q.permit_id != current.record.permit_id || q.binding != current.record.binding {
-            return Err(refused());
-        }
-        let retained:Option<Vec<u8>>=sqlx::query_scalar("SELECT request_digest FROM delegated_operations WHERE node_id=$1 AND operation_id=$2 AND kind='upgrade'")
-            .bind(channel.node.node_id).bind(q.operation_id).fetch_optional(&state.store.pool).await.map_err(db)?;
-        if retained.as_deref() != Some(digest(&q)?.as_slice()) {
-            return Err(refused());
-        }
-        RunnerOperation::ReportResult
-    } else {
-        operation
-    };
+    let operation = runner_operation(state, headers, &current, operation, &channel).await?;
     let evidence = Authentication {
         current,
         operation,
@@ -299,6 +282,40 @@ pub async fn authenticate_runner(
         .await?
         .ok_or_else(|| refused())?;
     Ok(AuthenticatedNode::from_delegated(node, evidence))
+}
+
+async fn runner_operation(
+    state: &AppState,
+    headers: &HeaderMap,
+    current: &Current,
+    operation: RunnerOperation,
+    channel: &RunnerChannelIdentity,
+) -> Result<RunnerOperation, AppError> {
+    // Material routes serve both preparation and execution with the same body.
+    let operation = if operation == RunnerOperation::FetchPreparationMaterial
+        && current.record.scope == PermitScope::Execution
+    {
+        RunnerOperation::FetchExecutionMaterial
+    } else {
+        operation
+    };
+    // An already-upgraded Prepared retry can only redeliver its exact retained
+    // operation. The phase owner separately checks the frozen request bytes.
+    if operation == RunnerOperation::Prepared && current.record.scope == PermitScope::Execution {
+        let q: PermitUpgradeRequest =
+            super::handoff::header(headers, "aq-permit-upgrade")?.ok_or_else(|| refused())?;
+        if q.permit_id != current.record.permit_id || q.binding != current.record.binding {
+            return Err(refused());
+        }
+        let retained:Option<Vec<u8>>=sqlx::query_scalar("SELECT request_digest FROM delegated_operations WHERE node_id=$1 AND operation_id=$2 AND kind='upgrade'")
+            .bind(channel.node.node_id).bind(q.operation_id).fetch_optional(&state.store.pool).await.map_err(db)?;
+        if retained.as_deref() != Some(digest(&q)?.as_slice()) {
+            return Err(refused());
+        }
+        Ok(RunnerOperation::ReportResult)
+    } else {
+        Ok(operation)
+    }
 }
 
 pub(crate) async fn lock_authenticated(

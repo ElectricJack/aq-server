@@ -28,7 +28,10 @@ async fn accepted_locked(
         crate::execution::authority::Policy::IdentityOnly,
     )
     .await?;
-    let accepted = settlement == Some(("held".into(), Some(HELD.into())))
+    let checkpoint =
+        crate::task_workspace_resume::checkpoint_required(tx, r.report.binding.attempt_id).await?;
+    let accepted = !checkpoint
+        && settlement == Some(("held".into(), Some(HELD.into())))
         && r.is_current_report_head
         && matches!(
             r.report.outcome,

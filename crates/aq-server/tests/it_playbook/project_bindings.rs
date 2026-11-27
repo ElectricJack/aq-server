@@ -1366,3 +1366,59 @@ async fn a_binding_that_names_a_removed_catalog_field_is_refused_by_name() {
     assert_eq!(read["binding"], saved["record"]["binding"], "{read}");
     assert_eq!(read["binding"]["default_role"], "developer");
 }
+
+/// The target path and the displayed revision, object and access all belong
+/// to the decision. Stale forms and repeated clicks cannot broaden the grant.
+#[tokio::test]
+async fn workspace_approval_matches_exact_target_and_pin() {
+    let env = setup(false).await;
+    let home = Uuid::from_u128(1);
+    let target = Uuid::new_v4();
+    let task = Uuid::new_v4();
+    bind(&env).await;
+    let mut sibling = env.body.clone();
+    sibling["project_id"] = json!(target);
+    let (status, saved) = call(
+        &env.app,
+        &format!("/api/projects/{target}"),
+        Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"binding":sibling})),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let oid = "a".repeat(40);
+    sqlx::query("INSERT INTO task_workspace_sources(home_project_id,task_id,target_project_id,project_revision,repository_id,binding_generation,commit_oid,access,state) VALUES($1,$2,$3,1,$4,1,$5,'write','pending')")
+        .bind(home).bind(task).bind(target).bind(Uuid::new_v4()).bind(&oid).execute(&env.pool).await.unwrap();
+    let path = |p, h| format!("/api/projects/{p}/workspace-requests/{h}/{task}/decision");
+    let decision = |sha: &str, access: &str| {
+        Some(json!({"decision":"approved","project_revision":1,"commit_oid":sha,"access":access}))
+    };
+    for (p, h, sha, access) in [
+        (home, target, oid.clone(), "write"),
+        (target, home, "b".repeat(40), "write"),
+        (target, home, oid.clone(), "read"),
+    ] {
+        assert_eq!(
+            call(
+                &env.app,
+                &path(p, h),
+                decision(&sha, access),
+                "owner@localhost"
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+    for _ in 0..2 {
+        let (status, v) = call(
+            &env.app,
+            &path(target, home),
+            decision(&oid, "write"),
+            "owner@localhost",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["sources"][0]["state"], "approved");
+    }
+}

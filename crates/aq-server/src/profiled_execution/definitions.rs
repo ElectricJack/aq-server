@@ -34,18 +34,8 @@ impl TryFrom<DefinitionInput> for Definition {
 }
 impl Definition {
     pub fn new(artifact: ArtifactRef, kind: ArtifactKind, body: String) -> Result<Self, String> {
-        artifact.id.validate().map_err(|_| "definition identity")?;
-        artifact
-            .version
-            .validate()
-            .map_err(|_| "definition version")?;
-        if kind != ArtifactKind::Definition
-            || body.is_empty()
-            || body.len() > MAX_BODY_BYTES
-            || artifact.id.as_str().len() > 512
-            || artifact.version.as_str().len() > 512
-            || artifact.digest != Digest::of(body.as_bytes())
-        {
+        validate_metadata(&artifact, kind, &body)?;
+        if artifact.digest != Digest::of(body.as_bytes()) {
             return Err("definition kind, identity or exact bytes mismatch".into());
         }
         Ok(Self {
@@ -60,6 +50,23 @@ impl Definition {
     pub fn body(&self) -> &str {
         &self.body
     }
+}
+// Catalog validation reuses these bounds without rehashing immutable bodies.
+fn validate_metadata(artifact: &ArtifactRef, kind: ArtifactKind, body: &str) -> Result<(), String> {
+    artifact.id.validate().map_err(|_| "definition identity")?;
+    artifact
+        .version
+        .validate()
+        .map_err(|_| "definition version")?;
+    if kind != ArtifactKind::Definition
+        || body.is_empty()
+        || body.len() > MAX_BODY_BYTES
+        || artifact.id.as_str().len() > 512
+        || artifact.version.as_str().len() > 512
+    {
+        return Err("definition kind, identity or exact bytes mismatch".into());
+    }
+    Ok(())
 }
 #[derive(Serialize)]
 pub(super) struct DefinitionReference<'a> {
@@ -93,21 +100,8 @@ pub fn validate_catalog(definitions: &[Definition]) -> Result<(), String> {
     let mut total = 0usize;
     let mut identities = BTreeSet::new();
     for d in definitions {
-        d.artifact
-            .id
-            .validate()
-            .map_err(|_| "definition identity")?;
-        d.artifact
-            .version
-            .validate()
-            .map_err(|_| "definition version")?;
-        if d.kind != ArtifactKind::Definition
-            || d.body.is_empty()
-            || d.body.len() > MAX_BODY_BYTES
-            || d.artifact.id.as_str().len() > 512
-            || d.artifact.version.as_str().len() > 512
-            || !identities.insert((d.artifact.id.clone(), d.artifact.version.clone()))
-        {
+        validate_metadata(&d.artifact, d.kind, &d.body)?;
+        if !identities.insert((d.artifact.id.clone(), d.artifact.version.clone())) {
             return Err("definition kind, identity or exact bytes mismatch".into());
         }
         total = total

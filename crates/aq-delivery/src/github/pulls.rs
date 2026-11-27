@@ -9,7 +9,7 @@ use super::{
 };
 use crate::policy::{
     BranchDeletion, Checks, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod,
-    MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState,
+    MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState, QueueWait,
 };
 use reqwest::Method;
 use serde::Deserialize;
@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod checks;
 mod merge;
+mod queue;
 
 /// GitHub protocol: the largest `per_page` list endpoints accept.
 const GITHUB_MAX_PER_PAGE: usize = 100;
@@ -253,7 +254,7 @@ impl GitHubAdapter for GitHubApp {
         let head_sha = commit_sha(&pull_request.head_sha).map_err(|_| {
             GitHubApiError::Protocol("pull request head is not an object id".into())
         })?;
-        let mut requirements = s.required_checks(base).await?;
+        let (mut requirements, merge_queue) = s.base_rules(base).await?;
         for name in required.into_iter().flatten() {
             requirements.entry(name.clone()).or_default();
         }
@@ -264,6 +265,7 @@ impl GitHubAdapter for GitHubApp {
             failed,
             required: requirements.into_keys().collect(),
             pull_request,
+            merge_queue,
         })
     }
 
@@ -317,12 +319,15 @@ impl GitHubAdapter for GitHubApp {
         method: MergeMethod,
         expected_head_sha: &str,
         expected_base: &str,
+        queue: QueueWait,
     ) -> GitHubResult<MergeOutcome> {
         let expected = commit_sha(expected_head_sha)?;
         let s = Session::new(self, repo).await?;
         merge::MergeTarget {
+            repo,
             head: expected,
             base: expected_base,
+            queue,
         }
         .merge(&s, pr, method)
         .await

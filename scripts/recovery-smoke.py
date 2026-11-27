@@ -746,7 +746,7 @@ class RecoveryFixture(product.Fixture):
             response = pool.submit(self.http, "/v2/worker/renew", request, machine=True, credential=self.credential, expected=409)
             def waiting():
                 result = self.compose("exec", "-T", "postgres", "psql", "-U", "agent_q", "-d", "agent_q", "-qAt", "-c",
-                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes%FOR UPDATE%'",
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes%FOR KEY SHARE%'",
                     name="observe-held-node-lock")
                 return int(result.strip()) >= 1
             self.poll("renew waiting for actual node row lock", waiting)

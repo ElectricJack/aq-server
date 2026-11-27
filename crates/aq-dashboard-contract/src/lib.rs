@@ -388,6 +388,8 @@ pub enum AttentionKind {
     Failed,
     UncertainOperation,
     WorkerOffline,
+    // A worker has deferred sandbox admission longer than the node-limits Setting allows.
+    SandboxAdmissionDeferred,
     // Failed internal work a supervisor could not fix (spec 0012 §8); the
     // subject is the affected item, not the internal run. A plain comment
     // keeps the schema a flat enum.
@@ -548,6 +550,8 @@ pub enum IneligibleReason {
     NodeSpendCeilingReached,
     NodeSpendUnaccounted,
     NodeDiskPressure,
+    /// The node's machine cannot admit a sandbox now (`NodeCapacity.sandbox_admission`).
+    SandboxAdmissionDeferred,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -589,6 +593,20 @@ pub struct NodeCapacity {
     pub capability_observed_at: Option<Timestamp>,
     pub capability_fresh_until: Option<Timestamp>,
     pub storage: Option<NodeStorage>,
+    /// Present while the node's machine defers sandbox admission; its slots are not idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_admission: Option<SandboxAdmission>,
+}
+/// Why a machine cannot admit a sandbox now (it rechecks automatically): the worker's code
+/// (`sandbox_disk_headroom_unavailable`, ...), since when, and for a disk shortfall the bytes
+/// available and required.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxAdmission {
+    pub code: String,
+    pub since: Timestamp,
+    pub available_bytes: Option<u64>,
+    pub required_bytes: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

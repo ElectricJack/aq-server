@@ -457,7 +457,7 @@ async fn observed_node_lock_race_issued_authority_wins_and_closure_cannot_erase_
     let observer = f.db.pool().await;
     let mut blocked = false;
     for _ in 0..200 {
-        let observed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query='SELECT id FROM nodes WHERE id=$1 FOR UPDATE')").fetch_one(&observer).await.unwrap();
+        let observed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query='SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE')").fetch_one(&observer).await.unwrap();
         if observed {
             blocked = true;
             break;

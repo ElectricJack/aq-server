@@ -7,6 +7,7 @@ mod graph;
 pub mod human;
 pub(crate) mod messaging;
 pub(crate) mod task_thread;
+mod workspace;
 pub use messaging::global as supervisor_conversation;
 mod mutations;
 pub(crate) mod native_binding;
@@ -385,6 +386,7 @@ pub fn machine_routes(state: AppState) -> Router<AppState> {
         .merge(human::comments::machine_routes())
         .merge(results::machine_routes())
         .merge(agent_tasks::machine_routes())
+        .merge(workspace::routes())
         .route("/v1/agent/context", get(context))
         .route("/v1/agent/graph/read", post(read))
         .with_state(state.clone())
@@ -594,7 +596,7 @@ async fn revoke(
             .fetch_optional(&state.store.pool)
             .await?;
     let mut tx = state.store.pool.begin().await?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node.ok_or(Error("not_found"))?)
         .execute(&mut *tx)
         .await?;

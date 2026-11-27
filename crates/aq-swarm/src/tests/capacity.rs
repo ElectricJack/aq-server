@@ -12,6 +12,7 @@ fn cap_node(health: WorkerHealth, total: Option<u32>) -> NodeCapacity {
             ceiling: None,
             snapshot: None,
             storage: None,
+            sandbox_admission: None,
         },
         1_000,
     )
@@ -37,6 +38,48 @@ fn node_capacity_offline_unreported_lists_both_reasons() {
         ]
     );
     assert_eq!(n.slots.idle, Some(2));
+}
+#[test]
+fn a_deferring_node_is_ineligible_and_none_of_its_slots_is_idle() {
+    let deferral = SandboxAdmission {
+        code: "sandbox_disk_headroom_unavailable".into(),
+        since: crate::timestamp(500).unwrap(),
+        available_bytes: Some(24_905_654_272),
+        required_bytes: Some(34_359_738_368),
+    };
+    let snapshot = Snapshot {
+        observed_at_ms: Some(900),
+        expires_at_ms: 2_000,
+        credential_bindings: Vec::new(),
+    };
+    let input = |admission| NodeInput {
+        id: uuid::Uuid::nil(),
+        name: "n",
+        health: WorkerHealth::Online,
+        last_seen_ms: None,
+        backend_kind: None,
+        total: Some(8),
+        occupied: 0,
+        ceiling: None,
+        snapshot: Some(&snapshot),
+        storage: None,
+        sandbox_admission: admission,
+    };
+    let n = node_capacity(input(Some(deferral)), 1_000).unwrap();
+    assert_eq!(n.eligibility.state, EligibilityState::Ineligible);
+    assert_eq!(
+        n.eligibility.reasons,
+        [IneligibleReason::SandboxAdmissionDeferred]
+    );
+    assert_eq!((n.slots.total, n.slots.idle), (Some(8), Some(0)));
+    let (summary, _) = slot_summary(&[n], 0, false, 1_000).unwrap();
+    assert_eq!(
+        (summary.total.value, summary.idle.value),
+        (Some(8), Some(0))
+    );
+    let ready = node_capacity(input(None), 1_000).unwrap();
+    assert_eq!(ready.eligibility.state, EligibilityState::Eligible);
+    assert_eq!(ready.slots.idle, Some(8));
 }
 #[test]
 fn slot_summary_unknown_when_an_online_node_has_no_total() {

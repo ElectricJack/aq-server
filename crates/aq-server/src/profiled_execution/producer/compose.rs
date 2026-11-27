@@ -40,6 +40,7 @@ pub struct Compiled {
     pub work_kind: Option<String>,
     /// A routed task's harness and provider limits (spec 0011 §4).
     pub route: Option<aq_routing::RouteLimits>,
+    pub workspace_alternative: bool,
 }
 impl Compiled {
     pub fn launch(&self) -> Result<roles::Launch<'_>, AppError> {
@@ -70,6 +71,7 @@ pub async fn compile(
     metadata: &Value,
     route: Option<&aq_routing::CompactRoute>,
     predecessor: Option<Uuid>,
+    workspace: &crate::task_workspace_resume::Scope,
 ) -> Result<Compiled, AppError> {
     let binding = &record.binding;
     let active = crate::role_settings::active(&state.store.pool)
@@ -83,12 +85,16 @@ pub async fn compile(
     }
     let execution = launch.execution;
     #[cfg(not(feature = "project_environments"))]
-    let environment = execution.environment.clone();
+    let (environment, workspace_alternative) = {
+        let _ = workspace;
+        (execution.environment.clone(), false)
+    };
     #[cfg(feature = "project_environments")]
-    let (catalog, environment) = {
+    let (catalog, environment, workspace_alternative) = {
         let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
         let (pool, pinned) = (&state.store.pool, execution.environment.as_deref());
         let routed = route.and_then(|r| r.e.as_deref());
+        let services: Vec<_> = workspace.service_needs().map(str::to_owned).collect();
         let placed = aq_environments::place(
             pool,
             &catalog,
@@ -97,9 +103,11 @@ pub async fn compile(
             routed,
             metadata,
             predecessor,
+            &services,
+            (state.clock)().timestamp_millis(),
         );
         match placed.await {
-            Ok(environment) => (catalog, environment),
+            Ok((environment, alternative)) => (catalog, environment, alternative),
             Err(hold) => {
                 let (task, project) = (context.revision.task_id, binding.project_id);
                 return Err(crate::role_settings::offer_refused(state, task, project, &hold).await);
@@ -109,7 +117,7 @@ pub async fn compile(
     if !binding.allowed_environments.contains(&environment) {
         return Err(refused());
     }
-    let eligibility = crate::project_bindings::check_eligibility(
+    let eligibility = crate::project_bindings::check_workspace_eligibility(
         state,
         binding.project_id,
         &EligibilityRequest {
@@ -121,6 +129,7 @@ pub async fn compile(
             execution_profile: execution.id.clone(),
             snapshot_digest: active.digest().to_string(),
         },
+        workspace_alternative,
     )
     .await?;
     let ineligible = || AppError::Conflict(format!("{INELIGIBLE}{:?}", eligibility.reasons));
@@ -297,6 +306,7 @@ pub async fn compile(
         thread_identity,
         work_kind,
         route: route.map(aq_routing::CompactRoute::limits),
+        workspace_alternative,
         snapshot: active,
     })
 }

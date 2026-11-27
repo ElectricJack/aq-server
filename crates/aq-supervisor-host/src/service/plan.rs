@@ -164,12 +164,15 @@ pub(super) fn assemble(
         "input-{}-{}.bin",
         generation.number, central.dispatch_id
     ));
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&startup_file)?
-        .write_all(&turn.input)?;
+    // A turn re-planned for its recorded dispatch finds its own input already written.
+    if protected_read(&startup_file, 1048576).ok().as_ref() != Some(&turn.input) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&startup_file)?
+            .write_all(&turn.input)?;
+    }
     let result = Config {
         database_url: config.database_url.clone(),
         root: config.root.clone(),

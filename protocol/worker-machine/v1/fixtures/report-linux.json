@@ -13,5 +13,11 @@
   "memory_used_bytes": 6871947674,
   "cpu_busy_bps": 2350,
   "disk_total_bytes": 512110190592,
-  "disk_free_bytes": 215680000000
+  "disk_free_bytes": 215680000000,
+  "sandbox_admission": {
+    "code": "sandbox_disk_headroom_unavailable",
+    "since_ms": 1794099000000,
+    "available_bytes": 24905654272,
+    "required_bytes": 34359738368
+  }
 }

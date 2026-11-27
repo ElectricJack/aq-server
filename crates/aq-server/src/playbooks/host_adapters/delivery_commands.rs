@@ -50,15 +50,78 @@ impl DeliveryOps for ServerDelivery {
     }
 
     async fn commands(&self) -> Option<Delivery> {
+        let socket = &self.state.source_retention.as_ref()?.config.git_socket;
         let init = || async {
-            let socket = &self.state.source_retention.as_ref()?.config.git_socket;
             let app = self.state.config.delivery.as_ref();
             Some(Delivery::configured(
                 socket,
                 app.and_then(|d| d.github.as_ref()),
             ))
         };
-        self.commands.get_or_init(init).await.clone()
+        let commands = self.commands.get_or_init(init).await.clone()?;
+        // Read for each step, so an owner's change applies to the next aq-git call.
+        let (limits, _) = aq_role_settings::delivery_limits(&self.state.store.pool)
+            .await
+            .ok()?;
+        Some(commands.git_waiting(
+            socket,
+            std::time::Duration::from_millis(limits.git_transfer_timeout_ms),
+        ))
+    }
+
+    async fn replay_publication(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        origin: &aq_playbook_domain::host10::ResultReady,
+        command: &str,
+    ) -> Result<Option<delivery::Completion>> {
+        use crate::task_workspace_delivery as workspaces;
+        if !workspaces::has_scope(
+            &self.state,
+            tx,
+            origin.attempt_id,
+            origin.project_id,
+            origin.task_id,
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        {
+            return Ok(None);
+        }
+        let result =
+            crate::profiled_execution::results::load_locked(&self.state, tx, origin.result_id)
+                .await
+                .map_err(|_| Error::Unknown)?;
+        workspaces::replay_home_publication(&self.state, tx, &result, command)
+            .await
+            .map_err(|_| Error::Unknown)
+    }
+
+    async fn merge_readiness(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        origin: &aq_playbook_domain::host10::ResultReady,
+    ) -> Result<delivery_runs::MergeReadiness> {
+        use crate::task_workspace_delivery as workspaces;
+        if !workspaces::has_scope(
+            &self.state,
+            tx,
+            origin.attempt_id,
+            origin.project_id,
+            origin.task_id,
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        {
+            return Ok(delivery_runs::MergeReadiness::Proceed);
+        }
+        let result =
+            crate::profiled_execution::results::load_locked(&self.state, tx, origin.result_id)
+                .await
+                .map_err(|_| Error::Unknown)?;
+        workspaces::merge_readiness(&self.state, tx, &result)
+            .await
+            .map_err(|_| Error::Unknown)
     }
 
     async fn pull_request_text(&self, workspace: Uuid, task: Uuid) -> Result<(String, String)> {

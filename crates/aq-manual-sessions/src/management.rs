@@ -61,7 +61,12 @@ async fn save(
     change.validate(target)?;
     let request = json!({"kind":kind, "id":id, "change":change});
     let mut tx = s.pool.begin().await?;
-    control::lock(&mut tx).await.map_err(storage)?;
+    // Fences the nodes the change affects (every node for the default), so
+    // publication and claims see it; a repeat of this operation waits here too.
+    let nodes = members(&mut tx, target).await?;
+    aq_machine_control::allocation::fence(&mut tx, (kind != "default").then_some(&nodes[..]))
+        .await
+        .map_err(storage)?;
     if let Some(row) = sqlx::query(
         "SELECT actor_id,request,receipt FROM worker_setting_operations WHERE operation_id=$1",
     )
@@ -79,11 +84,18 @@ async fn save(
     let receipt = if kind == "default" {
         change.save_default(&mut tx, &id).await?
     } else {
-        change.save_target(&mut tx, target).await?
+        change.save_target(&mut tx, target, &nodes).await?
     };
     sqlx::query("INSERT INTO worker_setting_operations(operation_id,actor_id,request,receipt) VALUES($1,$2,$3,$4)")
         .bind(change.operation_id).bind(actor).bind(request).bind(&receipt).execute(&mut *tx).await?;
     tx.commit().await?;
+    if kind == "machine" && change.remove {
+        // Retiring a machine revokes its nodes: wait for requests they already started.
+        let now = chrono::Utc::now();
+        aq_machine_control::drain_revoked(&s.pool, &nodes, now)
+            .await
+            .map_err(storage)?;
+    }
     Ok(Json(receipt))
 }
 
@@ -162,9 +174,12 @@ impl Change {
         &mut self,
         conn: &mut sqlx::PgConnection,
         target: Target<'_>,
+        nodes: &[Uuid],
     ) -> Result<Value> {
         let Target { kind, id } = target;
-        let nodes = lock_nodes(conn, target).await?;
+        if nodes.is_empty() {
+            return Err(missing());
+        }
         let current: Option<i64> =
             sqlx::query_scalar("SELECT revision FROM worker_settings WHERE kind=$1 AND id=$2")
                 .bind(kind)
@@ -195,13 +210,13 @@ impl Change {
             && let Some(label) = &self.label
         {
             sqlx::query("UPDATE nodes SET name=$2 WHERE id=ANY($1)")
-                .bind(&nodes)
+                .bind(nodes)
                 .bind(label)
                 .execute(&mut *conn)
                 .await?;
         }
         if self.remove {
-            retire_nodes(conn, target, &nodes).await?;
+            retire_nodes(conn, target, nodes).await?;
         }
         Ok(
             json!({"kind":kind,"id":id,"label":self.label,"max_agents":self.max_agents,
@@ -209,25 +224,14 @@ impl Change {
         )
     }
 }
-async fn lock_nodes(
+/// The nodes of a node or machine target, in id order (none for the default).
+async fn members(
     conn: &mut sqlx::PgConnection,
     Target { kind, id }: Target<'_>,
 ) -> Result<Vec<Uuid>> {
-    let nodes: Vec<Uuid> = sqlx::query_scalar(
+    Ok(sqlx::query_scalar(
         "SELECT node_id FROM worker_machine_members WHERE ($1='node' AND node_id::text=$2) OR ($1='machine' AND machine_id=$2) ORDER BY node_id"
-    ).bind(kind).bind(id).fetch_all(&mut *conn).await?;
-    if nodes.is_empty() {
-        return Err(missing());
-    }
-    sqlx::query("SELECT id FROM nodes WHERE id=ANY($1) ORDER BY id FOR UPDATE")
-        .bind(&nodes)
-        .fetch_all(&mut *conn)
-        .await?;
-    sqlx::query("UPDATE nodes SET machine_key=machine_key WHERE id=ANY($1)")
-        .bind(&nodes)
-        .execute(&mut *conn)
-        .await?;
-    Ok(nodes)
+    ).bind(kind).bind(id).fetch_all(&mut *conn).await?)
 }
 async fn retire_nodes(
     conn: &mut sqlx::PgConnection,

@@ -27,6 +27,12 @@ spec = importlib.util.spec_from_file_location("compose_prod_smoke", ROOT / "scri
 prod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prod)
 
+def worker_executable_version(candidate):
+    # The executable embeds the exact source revision. OCI's version label
+    # continues to identify the bare package version.
+    return f"aq-worker {candidate['version']}+{candidate['source_revision']}"
+
+
 SANDBOX_IMAGE = "docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec"
 MAIN_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock")
 SLICE_TEMPLATE = ROOT / "deploy/systemd/aq-sandbox-user.slice.conf"
@@ -279,9 +285,10 @@ class WorkerFixture:
         (directory / "agent-q/worker.toml").write_text(
             f'server_url = "http://server:8081"\nnode_id = "{node_id}"\ncredential = "{credential}"\n')
         (directory / "agent-q/worker.toml").chmod(0o600)
+        # The smoke may use a rootless daemon on the test host filesystem.
         (directory / "controller.json").write_text(json.dumps({
             "state_dir": "/state/controller",
-            "docker_local": {"socket": "/run/aq-sandbox/podman.sock", "templates": []},
+            "docker_local": {"socket": "/run/aq-sandbox/podman.sock", "shared_root_fs": True, "templates": []},
             "node": {"runtime": {"id": "aq-worker", "version": candidate["version"], "digest": "0" * 64},
                      "capabilities": [], "features": [], "templates": [], "max_concurrent_sandboxes": 2,
                      "spend_ceiling": None, "capacity": {"memory_bytes": 8 * 2**30, "cpu_millis": 4000,
@@ -319,7 +326,7 @@ class WorkerFixture:
             return "node controller starting" in logs and "admission fenced; foundation heartbeat remains active" in logs
         stack.wait(controller_ready, "docker-local controller recovery and admission fence", 15)
         version = stack.compose("exec", "-T", "aq-worker-cloud", "aq-worker", "--version").stdout.strip()
-        assert version == "aq-worker " + candidate["version"], version
+        assert version == worker_executable_version(candidate), version
         observed = json.loads(stack.compose("exec", "-T", "aq-worker-cloud", "cat",
                                            "/usr/share/agent-q/worker-candidate.json").stdout)
         assert observed == candidate, "running worker differs from pinned source"

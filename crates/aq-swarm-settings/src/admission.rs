@@ -53,7 +53,17 @@ pub fn pinned_cell(choice: &Value) -> Option<Cell> {
 
 // A revoked node's attempts hold no capacity, as in the machine's running count.
 async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::Error> {
-    let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,intelligence_profile}' AS profile, s.selection->'choice' AS choice, d.decision#>>'{inputs,project,role_snapshot_digest}' IS NOT NULL AS launched FROM execution_attempts a JOIN nodes n ON n.id=a.node_id LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND n.revoked_at IS NULL AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
+    // The stored compute release (format 185); frozen fixture profiles before it re-prove the stop.
+    let stored: bool =
+        sqlx::query_scalar("SELECT to_regclass('execution_attempt_compute') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?;
+    let held = if stored {
+        "NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released)"
+    } else {
+        "NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))"
+    };
+    let rows=sqlx::query(&format!("SELECT d.decision#>>'{{inputs,project,intelligence_profile}}' AS profile, s.selection->'choice' AS choice, d.decision#>>'{{inputs,project,role_snapshot_digest}}' IS NOT NULL AS launched FROM execution_attempts a JOIN nodes n ON n.id=a.node_id LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND n.revoked_at IS NULL AND {held}")).fetch_all(&mut *conn).await?;
     let mut out = Vec::new();
     for row in rows {
         let cell = attempt_cell(&row);
@@ -154,36 +164,67 @@ pub async fn check(
     conn: &mut PgConnection,
     cell: Option<&Cell>,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    if !available(conn).await? {
-        return Ok(None);
-    }
-    let settings = crate::lock(conn).await.map_err(|e| match e {
-        crate::Error::Database(e) => e,
-        _ => sqlx::Error::Protocol("invalid swarm settings".into()),
-    })?;
-    if !crate::providers::allows(conn, cell.map_or("", |c| c.provider.as_str())).await? {
-        return Ok(Some(if cell.is_some() {
-            PROVIDER_REMOVED
-        } else {
-            UNCLASSIFIED
-        }));
-    }
-    if !has_limits(&settings) {
-        return Ok(None);
-    }
-    // Publish a row version so SERIALIZABLE claimants retry after another wins.
-    sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
-        .execute(&mut *conn)
-        .await?;
-    let Some(cell) = cell else {
-        return Ok(Some(UNCLASSIFIED));
-    };
-    let Some((provider_limit, limit)) = configured_limits(&settings, cell) else {
-        return Ok(Some(UNCLASSIFIED));
-    };
-    let active = occupancy(conn).await?;
-    Ok(capacity_block(&active, cell, provider_limit, limit))
+    Ok(Capacity::load(conn)
+        .await?
+        .and_then(|snapshot| snapshot.reason(cell)))
 }
+
+/// A single locked view of all provider and class ceilings for a placement pass.
+pub(crate) struct Capacity {
+    settings: crate::Settings,
+    providers: Option<Value>,
+    // None means this installation has no configured concurrency limits.
+    active: Option<Vec<(Cell, bool)>>,
+}
+
+impl Capacity {
+    pub(crate) async fn load(conn: &mut PgConnection) -> Result<Option<Self>, sqlx::Error> {
+        if !available(conn).await? {
+            return Ok(None);
+        }
+        let settings = crate::lock(conn).await.map_err(|e| match e {
+            crate::Error::Database(e) => e,
+            _ => sqlx::Error::Protocol("invalid swarm settings".into()),
+        })?;
+        let providers = crate::providers::membership(conn).await?;
+        let active = if has_limits(&settings) {
+            // Publish a row version so SERIALIZABLE claimants retry after another wins.
+            sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
+                .execute(&mut *conn)
+                .await?;
+            Some(occupancy(conn).await?)
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            settings,
+            providers,
+            active,
+        }))
+    }
+
+    pub(crate) fn reason(&self, cell: Option<&Cell>) -> Option<&'static str> {
+        if !crate::providers::includes(
+            self.providers.as_ref(),
+            cell.map_or("", |c| c.provider.as_str()),
+        ) {
+            return Some(if cell.is_some() {
+                PROVIDER_REMOVED
+            } else {
+                UNCLASSIFIED
+            });
+        }
+        let active = self.active.as_ref()?;
+        let Some(cell) = cell else {
+            return Some(UNCLASSIFIED);
+        };
+        let Some((provider_limit, limit)) = configured_limits(&self.settings, cell) else {
+            return Some(UNCLASSIFIED);
+        };
+        capacity_block(active, cell, provider_limit, limit)
+    }
+}
+
 fn configured_limits(
     settings: &crate::Settings,
     cell: &Cell,
@@ -256,10 +297,21 @@ pub async fn observe(
     cell: Option<&Cell>,
     now: i64,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    let reason = check(conn, cell).await?;
-    if !available(conn).await? {
-        return Ok(reason);
-    }
+    let Some(capacity) = Capacity::load(conn).await? else {
+        return Ok(None);
+    };
+    let reason = capacity.reason(cell);
+    record_wait(conn, task, cell, now, reason).await?;
+    Ok(reason)
+}
+
+pub(crate) async fn record_wait(
+    conn: &mut PgConnection,
+    task: Uuid,
+    cell: Option<&Cell>,
+    now: i64,
+    reason: Option<&'static str>,
+) -> Result<(), sqlx::Error> {
     // Observations are a short-lived projection, including tasks cancelled or
     // removed from the graph since their last poll. Reclaim expired rows on
     // writes; read-only settings snapshots never mutate or wait for cleanup.
@@ -271,7 +323,7 @@ pub async fn observe(
     } else {
         clear_waiting(conn, task).await?;
     }
-    Ok(reason)
+    Ok(())
 }
 /// The scheduler refreshes a refused task's observation until it can admit the task.
 pub async fn show_task_wait(

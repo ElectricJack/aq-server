@@ -23,6 +23,27 @@ the workspace, task, attempt, and session IDs and the current grants. Use
 path and HEAD come from Git. Stay in the assigned checkout and follow its
 task and review instructions.
 
+## Request another project's source or a test database
+
+In a managed task, check `/aq/projects/<project-uuid>` for an assigned sibling
+checkout. Read-only checkouts support builds and tests. Make source changes
+only in a checkout granted write access. The worker captures each writable
+checkout when the attempt stops. Use the sandbox's `DATABASE_URL` for SQL
+tests when a private PostgreSQL service was requested.
+
+If a required checkout or database is missing, use
+`aq run task.workspace.request --params-file FILE` from the task sandbox.
+For example, substitute the dashboard project UUID in this request file:
+
+```json
+{"workspace":[{"target_project_id":"10000000-0000-4000-8000-000000000002","access":"write"},{"service":"postgres"}]}
+```
+
+Request related resources together. Save edits to the assigned writable
+directories before sending the request. AQ checkpoints the attempt and resumes
+the same task after approval on a capable worker. Keep database setup in source
+fixtures or migrations so the next attempt can recreate it.
+
 ## Hand off work from a managed task
 
 Review the diff, staged changes, and untracked files. Run the required checks.

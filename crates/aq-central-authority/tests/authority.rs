@@ -679,6 +679,42 @@ fn exported_schema_stays_frozen() {
 }
 
 #[test]
+fn handed_off_mail_is_reused_only_with_the_owners_release_of_that_receipt() {
+    let state = started();
+    let receipt = evidence(&state, HandoffDisposition::HandedOff);
+    let known = apply(
+        &state,
+        Event::Handoff {
+            evidence: receipt.clone(),
+        },
+        1001,
+    );
+    let stopped = stop(&known, 1002);
+    let mut next = next_plan(stopped.plan(), 5, 1);
+    next.batch.messages = vec![stopped.plan().batch.messages[0].clone()];
+    let mut h = history(&next);
+    h.entries[0].disposition = HistoryDisposition::Held {
+        association: receipt.association.clone(),
+        reason: MailHoldReason::HandedOff,
+    };
+    assert_eq!(
+        stopped.successor(next.clone(), clock(1003), &h),
+        Err(Error::Refused(Refusal::BatchHeld))
+    );
+    // Released by the owner: the exact handed-off receipt, and no other.
+    let mut other = receipt.clone();
+    other.receipt = artifact("other-receipt");
+    h.entries[0].disposition = HistoryDisposition::Retryable { evidence: other };
+    assert_eq!(
+        stopped.successor(next.clone(), clock(1003), &h),
+        Err(Error::Refused(Refusal::BatchHeld))
+    );
+    h.entries[0].disposition = HistoryDisposition::Retryable { evidence: receipt };
+    let second = stopped.successor(next, clock(1003), &h).unwrap();
+    assert_eq!(second.plan().generation, stopped.plan().generation + 1);
+}
+
+#[test]
 fn known_handed_off_mail_and_changed_original_receipt_cannot_be_reused() {
     let state = started();
     let receipt = evidence(&state, HandoffDisposition::HandedOff);
