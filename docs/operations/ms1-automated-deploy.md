@@ -5,8 +5,8 @@ reaches the live single-host stack without anyone running a command:
 
 | Repository | On merge to main (GitHub Actions) | On the host (systemd user timer) |
 | --- | --- | --- |
-| aq-server | `server-image.yml` pushes `ghcr.io/electricjack/aq-server:sha-<sha>` and moves `:main` | `aq-ms1-deploy.timer` runs `ms1-deploy.py apply` |
-| aq-worker | `worker-image.yml` pushes `ghcr.io/electricjack/aq-worker:sha-<sha>` and moves `:main` | `aq-ms1-worker-deploy.timer` runs `ms1-worker-deploy.py apply` |
+| aq-server | `server-image.yml` pushes `ghcr.io/aq-platform/aq-server:sha-<sha>` and moves `:main` | `aq-ms1-deploy.timer` runs `ms1-deploy.py apply` |
+| aq-worker | `worker-image.yml` pushes `ghcr.io/aq-platform/aq-worker:sha-<sha>` and moves `:main` | `aq-ms1-worker-deploy.timer` runs `ms1-worker-deploy.py apply` |
 
 `:main` moves only while the built commit is still main's head, so a late,
 older build never replaces a newer one. Both host scripts do nothing when the
@@ -96,7 +96,7 @@ only with a full install, which stays an operator action.
 ## Owner prerequisites
 
 - **GHCR packages.** The first push of each workflow creates
-  `ghcr.io/electricjack/aq-server` and `ghcr.io/electricjack/aq-worker`,
+  `ghcr.io/aq-platform/aq-server` and `ghcr.io/aq-platform/aq-worker`,
   private and linked to their repository. If Settings → Actions → General
   restricts workflow permissions, allow the jobs' `packages: write`.
 - **A read-only registry login for the host.** Docker's `desktop.exe`
@@ -135,8 +135,8 @@ Check: the server image and revision are the ones the overlay pins on its
 
 **A2. The first `:main` images exist.**
 ```sh
-gh run list -R ElectricJack/aq-server -w server-image.yml -L 3
-gh run list -R ElectricJack/aq-worker -w worker-image.yml -L 3
+gh run list -R aq-platform/aq-server -w server-image.yml -L 3
+gh run list -R aq-platform/aq-worker -w worker-image.yml -L 3
 ```
 Check: the run for the merge commit is green and its summary names the
 digest. Rollback: none; fix the workflow and re-run it (`gh workflow run`).
@@ -145,8 +145,8 @@ digest. Rollback: none; fix the workflow and re-run it (`gh workflow run`).
 ```sh
 install -d -m 0700 ~/.config/agent-q/docker
 DOCKER_CONFIG=~/.config/agent-q/docker docker login ghcr.io -u ElectricJack --password-stdin
-DOCKER_CONFIG=~/.config/agent-q/docker docker pull --quiet ghcr.io/electricjack/aq-server:main
-DOCKER_CONFIG=~/.config/agent-q/docker docker image inspect ghcr.io/electricjack/aq-server:main \
+DOCKER_CONFIG=~/.config/agent-q/docker docker pull --quiet ghcr.io/aq-platform/aq-server:main
+DOCKER_CONFIG=~/.config/agent-q/docker docker image inspect ghcr.io/aq-platform/aq-server:main \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}} {{index .Config.Labels "io.agent-q.state-format"}}'
 ```
 Check: the revision is the merge commit and the state format is at least the
@@ -207,7 +207,7 @@ shows exactly the one `image:` line. Rollback:
 cat > ~/.config/agent-q/ms1-deploy.toml <<EOF
 [deploy]
 state_dir = "$DEPLOY"
-image = "ghcr.io/electricjack/aq-server:main"
+image = "ghcr.io/aq-platform/aq-server:main"
 origin = "http://127.0.0.1:28080"
 aq = "$HOME/.local/bin/aq"
 quiet_timeout_secs = 900        # supervisors mid-turn: defer after this
@@ -294,7 +294,7 @@ hosted receiver today; the desktop profiles are skipped until phase C.
 cat > ~/.config/agent-q/ms1-worker-deploy.toml <<EOF
 origin = "http://127.0.0.1:28080"
 aq = "$HOME/.local/bin/aq"
-image = "ghcr.io/electricjack/aq-worker:main"
+image = "ghcr.io/aq-platform/aq-worker:main"
 gateway = "$MS1/worker-install-gateway"
 manifest = "$MS1/worker-install-gateway/manifest/install-manifest.json"
 source = "$AQ/aq-worker"                # a clone; git archive of each revision's packaging
@@ -461,7 +461,7 @@ through `apply`.
   and `… ms1-worker-deploy.py status`; logs in
   `journalctl --user -u aq-ms1-deploy -u aq-ms1-worker-deploy`.
 - Retry a digest that failed: `apply --retry-failed`.
-- Deploy a specific build: `apply --image ghcr.io/electricjack/aq-server@sha256:…`.
+- Deploy a specific build: `apply --image ghcr.io/aq-platform/aq-server@sha256:…`.
 - After `needs_operator`: fix the stack (it runs whatever the rollback left;
   `release.env` names the previous image), then `ms1-deploy.py ack`.
 - After a held worker machine: fix it, `aq worker start` it, then

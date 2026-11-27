@@ -78,6 +78,29 @@ impl GitFailure {
 
 #[async_trait::async_trait]
 pub trait GitPort: Send + Sync {
+    /// Read the original publisher journal; unsupported implementations fail closed.
+    async fn inspect_publication(
+        &self,
+        _operation: Uuid,
+        _repo: &GitTarget,
+        _reference: &str,
+        _old: Option<&str>,
+        _source: &str,
+    ) -> Result<Value, GitFailure> {
+        Err(GitFailure::protocol())
+    }
+
+    /// Observe/fetch an indeterminate publisher under its journal generation; never push.
+    async fn reconcile_publication(
+        &self,
+        _operation: Uuid,
+        _repo: &GitTarget,
+        _original: Uuid,
+        _generation: u64,
+        _source: &str,
+    ) -> Result<Value, GitFailure> {
+        Err(GitFailure::protocol())
+    }
     /// Syncs `reference` from the remote and pins its head (`repo.retain_ref`).
     async fn retain_ref(
         &self,
@@ -314,6 +337,196 @@ impl RefPublication {
 }
 #[async_trait::async_trait]
 impl GitPort for SocketGit {
+    async fn inspect_publication(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        old: Option<&str>,
+        source: &str,
+    ) -> Result<Value, GitFailure> {
+        let result = self
+            .call(
+                (Uuid::new_v4(), "operation.show"),
+                repo,
+                json!({"target_operation_id":operation}),
+            )
+            .await?;
+        let payload = &result["payload"];
+        let params = &payload["params"];
+        if result["version"] != 1
+            || result["id"] != operation.to_string()
+            || payload["operation"] != "publish"
+            || payload["repository_id"] != repo.repository_id.to_string()
+            || payload["expected_binding_generation"] != repo.binding_generation
+            || params["source_ref"] != reference
+            || params["target"] != reference
+            || params.get("force").is_some()
+            || params
+                .get("update")
+                .is_some_and(|v| old.is_none() || v != "replace")
+            || params["expected_source"] != sha1(source)?
+            || params["expected_old"]
+                != sha1(old.unwrap_or("0000000000000000000000000000000000000000"))?
+        {
+            return Err(GitFailure::protocol());
+        }
+        let generation = result["generation"]
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or_else(GitFailure::protocol)?;
+        let hash = crate::digest(payload).map_err(|_| GitFailure::protocol())?;
+        if result["payload_hash"] != hash {
+            return Err(GitFailure::protocol());
+        }
+        let status = match result["status"].as_str() {
+            Some(s @ ("pending" | "complete" | "failed")) => s,
+            _ => return Err(GitFailure::protocol()),
+        };
+        // Unknown historical/future phases stay unrecorded rather than exposing text.
+        let phase = result["phase"].as_str().filter(|s| {
+            matches!(
+                *s,
+                "queued" | "prepared" | "dispatched" | "indeterminate" | "terminal" | "complete"
+            )
+        });
+        let reply = &result["result"];
+        // A terminal result alongside an error is contradictory journal evidence.
+        // Neither it nor a failed/pending record can attest success or rejection.
+        let definitive = status == "complete" && result["error"].is_null();
+        let outcome = match reply["outcome"].as_str() {
+            Some(s @ ("applied" | "already_present" | "rejected" | "indeterminate")) => Some(s),
+            _ => None,
+        };
+        let reason = match reply["reason"].as_str() {
+            Some(
+                s @ ("remote_rejected" | "target_moved" | "source_moved" | "non_fast_forward"),
+            ) => Some(s),
+            _ => None,
+        };
+        let published = definitive
+            && match outcome {
+                Some("applied") => {
+                    reply["target"] == reference
+                        && reply["old"] == params["expected_old"]
+                        && reply["new"] == params["expected_source"]
+                        && reply["acknowledged_at"]
+                            .as_str()
+                            .is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
+                }
+                Some("already_present") => {
+                    // The bound publisher also attests containment at a later head.
+                    sha1_hex(&reply["observed_target"]).is_ok_and(|oid| oid != "0".repeat(40))
+                        && reply["caused_by_this_operation"] == false
+                        && reply["observed_at"]
+                            .as_str()
+                            .is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
+                }
+                _ => false,
+            };
+        let capabilities = self
+            .call((Uuid::new_v4(), "capabilities"), repo, json!({}))
+            .await
+            .ok();
+        let classification = capabilities
+            .as_ref()
+            .and_then(|v| v["capability_tokens"].as_array())
+            .is_some_and(|features| {
+                features
+                    .iter()
+                    .any(|f| f == "publication_rejection_classification_v1")
+            });
+        let class = reply["rejection_class"]
+            .as_str()
+            .filter(|_| {
+                classification
+                    && definitive
+                    && outcome == Some("rejected")
+                    && reason == Some("remote_rejected")
+            })
+            .map(|s| match s {
+                "non_fast_forward" | "stale_lease" | "hook_declined" => s,
+                _ => "unknown",
+            });
+        let receipt = if published {
+            if outcome == Some("applied") {
+                json!({"outcome":"applied","target":reference,"old":params["expected_old"],"new":params["expected_source"],
+                    "acknowledged_at":reply["acknowledged_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.to_rfc3339())})
+            } else {
+                json!({"outcome":"already_present","observed_target":{"algorithm":"sha1","hex":sha1_hex(&reply["observed_target"])?},"caused_by_this_operation":false,
+                    "observed_at":reply["observed_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.to_rfc3339())})
+            }
+        } else {
+            Value::Null
+        };
+        let indeterminate =
+            !definitive || (matches!(outcome, Some("applied" | "already_present")) && !published);
+        let outcome = if indeterminate {
+            Some("indeterminate")
+        } else {
+            outcome
+        };
+        let reason = if indeterminate { None } else { reason };
+        let error_code = match result["error"]["code"].as_str() {
+            Some(
+                c @ ("operation_indeterminate"
+                | "remote_unreachable"
+                | "target_moved"
+                | "source_moved"
+                | "object_unavailable"
+                | "binding_generation_mismatch"),
+            ) => Some(c),
+            _ => None,
+        };
+        Ok(
+            json!({"operation_id":operation,"generation":generation,"status":status,"phase":phase,
+            "payload_hash":hash,"outcome":outcome,"reason":reason,"error_code":error_code,"published":published,"receipt":receipt,
+            "classification_capability":if capabilities.is_none() {"unavailable"} else if classification {"supported"} else {"unsupported"},
+            "rejection_class":class,"classification_record":if class.is_some() {"recorded"} else {"not_recorded"},
+            "repository_id":repo.repository_id,"binding_generation":repo.binding_generation,
+            "source_ref":reference,"expected_source":source,"target":reference,"expected_old":old}),
+        )
+    }
+    async fn reconcile_publication(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        original: Uuid,
+        generation: u64,
+        source: &str,
+    ) -> Result<Value, GitFailure> {
+        if operation == original || operation.is_nil() || generation == 0 {
+            return Err(GitFailure::protocol());
+        }
+        let reply = self
+            .call(
+                (operation, "operation.reconcile"),
+                repo,
+                json!({"target_operation_id":original,"expected_generation":generation}),
+            )
+            .await?;
+        if reply["target_operation_id"] != original.to_string() {
+            return Err(GitFailure::protocol());
+        }
+        let resolution = &reply["resolution"];
+        let observed_at = resolution["observed_at"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.to_rfc3339());
+        if reply["outcome"].is_null()
+            && resolution["outcome"] == "already_present"
+            && sha1_hex(&resolution["observed_target"]).is_ok_and(|oid| oid != "0".repeat(40))
+            && resolution["caused_by_this_operation"] == false
+            && observed_at.is_some()
+        {
+            return Ok(
+                json!({"state":"published","head":source,"observed_head":resolution["observed_target"]["hex"],"caused_by_this_operation":false,"observed_at":observed_at}),
+            );
+        }
+        // A moved/absent ref or a lost read remains uncertain, never a fabricated rejection.
+        Ok(json!({"state":"held","reason":"operation_indeterminate"}))
+    }
+
     async fn retain_ref(
         &self,
         operation: Uuid,
@@ -380,6 +593,9 @@ impl GitPort for SocketGit {
                 // The same operation, never dispatched, goes on once the hold is released.
                 Err(e)
                     if e.code == "operation_indeterminate"
+                        // Exact retained-result requests must preserve every existing hold.
+                        // An unchanged lease does not authorize resolution or another push.
+                        && expected_source.is_none()
                         && !released
                         && self
                             .release_destination(operation, repo, reference, &e.details)

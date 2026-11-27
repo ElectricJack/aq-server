@@ -634,6 +634,15 @@ impl PublicationHistory<'_> {
         .unwrap()
         .unwrap();
         assert!(detail.contains(&known_refusal.to_string()));
+        // The bounded evidence: the diagnostic, the lease, the count and the safe next step.
+        for part in [
+            "Diagnostic: remote_rejected.",
+            "Expected remote head (lease): none, the branch was never published.",
+            "refused publications of this exact result and commit",
+            "never forces the push",
+        ] {
+            assert!(detail.contains(part), "{part}: {detail}");
+        }
     }
     async fn record(&self, sha: &str, report: Uuid, status: &str) -> Uuid {
         let id = Uuid::new_v4();

@@ -146,8 +146,20 @@ fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
         text.push_str(include_str!("delivery_review_contract.md"));
         return Ok(text);
     }
+<<<<<<< HEAD
     #[cfg(feature = "project_environments")]
     if record.id == crate::builtin::ROUTING {
+=======
+    // A Host10 routing namespace authors on catalog 2.3.0 (below), whose
+    // work.route has no environment for 2.5.0's notes to describe.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::ROUTING
+        && _catalog
+            .commands
+            .get("work.route")
+            .is_some_and(|c| c.version == "2.5.0")
+    {
+>>>>>>> refs/remotes/central/main
         let (commands, events) = (&record.commands, &record.events);
         return docs::catalog_with_extensions(_catalog, CATALOG_2_5_NOTES, commands, events, &[])
             .map_err(Error::Invalid);

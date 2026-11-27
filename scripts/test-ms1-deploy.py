@@ -9,7 +9,7 @@ spec = importlib.util.spec_from_file_location("ms1_deploy", Path(__file__).with_
 deploy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy)
 
-REPO = "ghcr.io/electricjack/aq-server"
+REPO = "ghcr.io/aq-platform/aq-server"
 OLD, NEW = "a" * 40, "b" * 40
 OLD_REF, NEW_REF = f"{REPO}@sha256:{'1' * 64}", f"{REPO}@sha256:{'2' * 64}"
 

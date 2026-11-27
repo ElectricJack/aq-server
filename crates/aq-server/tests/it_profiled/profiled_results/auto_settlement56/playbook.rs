@@ -221,3 +221,5 @@ async fn check_version_conflict(env: &AutoEnv) {
         ("held", Some("graph_version_conflict"))
     );
 }
+#[path = "playbook/publication_recovery.rs"]
+mod publication_recovery;

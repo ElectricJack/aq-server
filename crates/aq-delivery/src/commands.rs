@@ -211,7 +211,62 @@ pub struct Delivery {
     github: Arc<dyn GitHubAdapter>,
 }
 
+/// The bounded, static reason aq-git did not publish, kept with the refused operation.
+fn failure_diagnostic(failure: &git::GitFailure) -> &'static str {
+    match (failure.code.as_str(), failure.message.as_str()) {
+        ("operation_indeterminate", _) => "publication_indeterminate",
+        ("rejected", "remote_rejected") => "remote_rejected",
+        ("rejected", _) => "rejected",
+        ("transport", _) => "git_transport",
+        ("protocol", _) => "git_protocol",
+        _ => "git_error",
+    }
+}
+
 impl Delivery {
+    /// Exact original aq-git journal, bounded to structured diagnostics. Never resends publish.
+    pub async fn inspect_publication(
+        &self,
+        target: &DeliveryTarget,
+        operation: Uuid,
+        task: Uuid,
+        old: Option<&str>,
+        source: &str,
+    ) -> Value {
+        self.git.inspect_publication(operation,&target.git,&task_branch(task),old,source).await
+            .unwrap_or_else(|_| json!({"state":"unavailable","required_action":"Operator must inspect the original aq-git operation; absence of this read is not proof of absence of a push."}))
+    }
+    /// Reconcile only pending dispatched/indeterminate records of the bound original journal.
+    pub async fn reconcile_publication(
+        &self,
+        target: &DeliveryTarget,
+        operation: Uuid,
+        original: Uuid,
+        source: &str,
+        journal: &Value,
+    ) -> Value {
+        if journal["published"] == true {
+            return json!({"state":"published","head":source,"caused_by_this_operation":false,"receipt":"original_journal"});
+        }
+        if journal["status"] == "complete" && journal["outcome"] == "rejected" {
+            return json!({"state":"held","reason":"publication_rejected","required_action":"Inspect the bound original rejection class. Any remote-policy or publisher permission correction and any retry require a separate operator decision. Do not force, release or replace work."});
+        }
+        if journal["status"] != "pending"
+            || !matches!(
+                journal["phase"].as_str(),
+                Some("dispatched" | "indeterminate")
+            )
+        {
+            return json!({"state":"held","reason":"publisher_inspection_required","required_action":"Read the bound original publisher journal. Unavailable evidence proves neither rejection nor acceptance; no retry, release or replacement is authorized."});
+        }
+        let Some(generation) = journal["generation"].as_u64().filter(|n| *n > 0) else {
+            return json!({"state":"held","reason":"journal_generation_missing"});
+        };
+        self.git
+            .reconcile_publication(operation, &target.git, original, generation, source)
+            .await
+            .unwrap_or_else(|_| json!({"state":"held","reason":"operation_indeterminate"}))
+    }
     /// Confirm the exact result is on the forge or the existing publish lease is usable.
     pub async fn publish_lease_usable(
         &self,
@@ -229,6 +284,19 @@ impl Delivery {
             Ok(None) => expected_old.is_none(),
             Err(_) => false,
         }
+    }
+
+    /// The head the forge's branch of `task` is at now (`None`: no such branch), a read.
+    pub async fn observe_task_branch(
+        &self,
+        target: &DeliveryTarget,
+        task: Uuid,
+    ) -> Result<Option<String>, ()> {
+        let branch = task_branch(task);
+        self.github
+            .branch_head(&target.github, &branch)
+            .await
+            .map_err(|_| ())
     }
 
     pub fn new(git: Arc<dyn GitPort>, github: Arc<dyn GitHubAdapter>) -> Self {
@@ -274,23 +342,30 @@ impl Delivery {
                 expected_source,
             )
             .await;
-        Step::Done(match published {
+        let step = match published {
             Ok(RefPublication::Published { head }) => {
-                Completion::new("published", json!({"head": head}))
+                return Step::Done(Completion::new("published", json!({"head": head})));
             }
+            Ok(RefPublication::NoRef) => return Step::Done(Completion::refused("no_branch")),
             Ok(RefPublication::Moved) => Completion::new("conflict", json!({})),
-            Ok(RefPublication::NoRef) => Completion::refused("no_branch"),
-            Err(e) if e.code == "rejected" && e.message == "remote_rejected" => Completion {
-                diagnostic: Some("remote_rejected"),
+            Err(e) => Completion {
+                diagnostic: Some(failure_diagnostic(&e)),
                 ..Completion::refused("unreachable")
             },
-            // An earlier push of the branch with an unknown outcome still holds it.
-            Err(e) if e.code == "operation_indeterminate" => Completion {
-                diagnostic: Some("publication_indeterminate"),
-                ..Completion::refused("unreachable")
-            },
-            Err(_) => Completion::refused("unreachable"),
-        })
+        };
+        // An answer that is not a publication does not prove the exact result is absent: the
+        // push may have landed before its answer was lost or its lease moved. Observe the
+        // forge and recover that receipt instead of refusing, and never push again.
+        if let Some(source) = expected_source
+            && let Ok(Some(observed)) = self
+                .github
+                .branch_head(&target.github, &task_branch(task))
+                .await
+            && observed == source
+        {
+            return Step::Done(Completion::new("published", json!({"head": observed})));
+        }
+        Step::Done(step)
     }
 
     /// `pull_request.open`: opens the pull request of the task's branch

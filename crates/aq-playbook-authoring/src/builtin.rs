@@ -366,6 +366,28 @@ mod tests {
         assert!(!notes.contains("environment.build"));
     }
 
+    /// A Host10 routing namespace authors on catalog 2.3.0: its workspace
+    /// describes 2.3.0's work.route, without the 2.5.0 environment.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[test]
+    fn the_routing_record_on_a_host10_namespace_gets_catalog_2_3_0_notes() {
+        let record = routing();
+        let catalog = crate::request::catalog_2_3().unwrap();
+        let workspace = crate::request::workspace_files(
+            &record,
+            crate::request::WorkspaceSource {
+                markdown: "route",
+                facts: &Default::default(),
+                facts_version: "1",
+            },
+            &catalog,
+            None,
+        )
+        .unwrap();
+        assert!(workspace["CATALOG.md"].contains("work.route"));
+        assert!(!workspace["CATALOG.md"].contains("default_environment"));
+    }
+
     /// The published routing example of spec 0017 §5.4 (vendored byte for
     /// byte) seals as a playbook of this record against its catalog, and its
     /// cases pass.

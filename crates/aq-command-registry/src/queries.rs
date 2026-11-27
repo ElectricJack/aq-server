@@ -338,6 +338,15 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         "/api/v1/results" => RESULT_FEED,
         // profiled_execution/human_results.rs::list (`Page`)
         "/api/human/results" => HUMAN_RESULTS,
+        "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/publication" => {
+            const {
+                &[
+                    req("repository_id", UUID),
+                    opt("after", UUID),
+                    opt("publication_operation_id", UUID),
+                ]
+            }
+        }
         // profiled_execution/human_results.rs::detail (`Page`; after and limit do nothing here)
         "/api/human/results/{id}/revisions/{revision}" => const { &[RESULT_PROFILE, PROJECT] },
         // result_media/api.rs::list (refuses any query string)

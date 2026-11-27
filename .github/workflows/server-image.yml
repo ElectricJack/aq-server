@@ -1,7 +1,7 @@
 name: server-image
 
 # Builds the server image the live aq-ms1 stack runs on every merge to main
-# and publishes it to GHCR by digest as ghcr.io/electricjack/aq-server:sha-<sha>.
+# and publishes it to GHCR by digest as ghcr.io/aq-platform/aq-server:sha-<sha>.
 # `:main` moves to it only while that commit is still main's head, so an older
 # build that finishes late never replaces a newer one. On the host,
 # scripts/ms1-deploy.py follows `:main` (docs/operations/ms1-automated-deploy.md).
@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/electricjack/aq-server
+  IMAGE: ghcr.io/aq-platform/aq-server
   # The compile-time epic flags aq-ms1 runs with. Drop one here when its epic
   # is confirmed and the flag is removed (docs/operations/epic-feature-retirement.md).
   CARGO_FEATURES: project_environments,supervisor_full_access

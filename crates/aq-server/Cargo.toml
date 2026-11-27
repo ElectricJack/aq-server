@@ -98,6 +98,11 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [features]
+<<<<<<< HEAD
+=======
+# Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
+delivery_playbook = ["aq-command-registry/delivery_playbook", "aq-delivery/delivery_playbook", "aq-environments?/delivery_playbook", "aq-role-settings/delivery_playbook", "aq-playbook-domain/delivery_playbook", "aq-playbook-authoring/delivery_playbook", "aq-profiled-state/delivery_playbook", "aq-human-work/delivery_playbook", "aq-supervisor-control/delivery_playbook"]
+>>>>>>> refs/remotes/central/main
 # Spec 0017 (sandbox environments per project and per task), off by default.
 project_environments = ["aq-agent-grants/project_environments", "aq-playbook-authoring/project_environments", "aq-playbook-domain/project_environments", "aq-command-registry/project_environments", "aq-environments/project_environments", "aq-human-work/project_environments", "aq-project-policy/project_environments", "aq-role-settings/project_environments", "aq-profiles/project_environments", "aq-selection/project_environments"]
 # Supervisors get full access (owner scope), off by default.

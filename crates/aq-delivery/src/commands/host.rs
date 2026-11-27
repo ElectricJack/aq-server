@@ -6,8 +6,8 @@
 //! and the completion event). Nothing here decides anything about a result.
 use super::{
     Completion, Delivery, DeliveryTarget, FrozenCommand, GitTarget, MergeGuard,
-    PullRequestObserved, Refreshed, SocketGit, Step, TaskOperation, bounded_text, bounded_wait_ms,
-    merge_method, without_delivery, without_target,
+    PullRequestObserved, Refreshed, Run, SocketGit, Step, TaskOperation, bounded_text,
+    bounded_wait_ms, merge_method, without_delivery, without_target,
 };
 use crate::DeliveryError;
 use crate::github::{GitHubApp, GitHubAppConfig};
@@ -171,6 +171,9 @@ pub async fn frozen_request(
             // The lease: the head the last publication put on the forge.
             let last = published_head(pool, task).await?;
             request["expected_old"] = json!(last);
+            if let Some(target) = &accepting.target {
+                request["publication_target"] = serde_json::to_value(target)?;
+            }
             request["pull_request"] = json!(known.as_ref().map(number));
             request["result_head"] = json!(accepting.head);
         }
@@ -279,7 +282,7 @@ pub async fn published_head<'c>(
     db: impl sqlx::PgExecutor<'c>,
     task: Uuid,
 ) -> Result<Option<String>, sqlx::Error> {
-    Ok(sqlx::query_scalar("SELECT COALESCE(r.merged_head,r.from_head,o.head) FROM (SELECT output->>'head' AS head FROM playbook_host_operations WHERE command_name='branch.publish' AND status='published' AND subject_id=$1::text ORDER BY completed_at_ms DESC LIMIT 1) o LEFT JOIN delivery_branch_refreshes r ON r.task_id=$1 AND r.result_head=o.head")
+    Ok(sqlx::query_scalar("SELECT COALESCE(r.merged_head,r.from_head,o.head) FROM (SELECT head FROM (SELECT output->>'head' AS head,to_timestamp(completed_at_ms::double precision/1000) AS recorded_at FROM playbook_host_operations WHERE command_name='branch.publish' AND status='published' AND subject_id=$1::text UNION ALL SELECT evidence#>>'{observation,head}',recorded_at FROM retained_publication_recoveries WHERE evidence#>>'{identity,task_id}'=$1::text AND evidence#>>'{observation,state}'='published') publications ORDER BY recorded_at DESC LIMIT 1) o LEFT JOIN delivery_branch_refreshes r ON r.task_id=$1 AND r.result_head=o.head")
         .bind(task)
         .fetch_optional(db)
         .await?
@@ -444,6 +447,21 @@ pub async fn run_step(
         (_, None, _) => Some(without_target(command)),
         (_, Some(_), None) => without_delivery(command),
         (_, Some(target), Some(delivery)) => {
+            if command == "branch.publish" {
+                if request
+                    .get("publication_target")
+                    .is_some_and(|p| serde_json::to_value(target).ok().as_ref() != Some(p))
+                {
+                    return Ok(Some(Completion::refused("no_branch")));
+                }
+                let report =
+                    crate::retained_publication::validate_target(pool, frozen, target).await?;
+                if crate::retained_publication::dispatched(pool, operation, report).await? {
+                    return Ok(Some(
+                        crate::retained_publication::recover_step(db, request).await?,
+                    ));
+                }
+            }
             let refreshing = matches!(command, "pull_request.await_checks" | "branch.publish");
             let with = match task.filter(|_| refreshing) {
                 Some(task) => {
@@ -456,14 +474,41 @@ pub async fn run_step(
                 }
                 None => None,
             };
-            let run = delivery
-                .step(
-                    FrozenCommand::new(operation, command, with.as_ref().unwrap_or(request)),
-                    target,
-                    now_ms,
-                )
-                .await
-                .ok_or(DeliveryError::InvalidInput("request"))?;
+            let prepared = FrozenCommand::new(operation, command, with.as_ref().unwrap_or(request));
+            let run = if command == "branch.publish" {
+                let task = task.ok_or(DeliveryError::InvalidInput("task"))?;
+                let step = if let Some(mut step) = prepared.branch_preflight(delivery, target).await
+                {
+                    // Only a terminal read-only refusal proves this request
+                    // never reached Git. Historical/uncertain requests remain fenced.
+                    if let Step::Done(completion) = &mut step
+                        && completion.outcome == "refused"
+                    {
+                        completion.diagnostic = Some("publication_not_dispatched");
+                    }
+                    step
+                } else if !crate::retained_publication::reserve(pool, frozen, target).await? {
+                    Step::Done(crate::retained_publication::recover_step(db, request).await?)
+                } else {
+                    delivery
+                        .branch_publish(
+                            TaskOperation::new(operation, target, task),
+                            request["expected_old"].as_str(),
+                            request["result_head"].as_str(),
+                        )
+                        .await
+                };
+                Run {
+                    step: Some(step),
+                    observed: None,
+                    refreshed: None,
+                }
+            } else {
+                delivery
+                    .step(prepared, target, now_ms)
+                    .await
+                    .ok_or(DeliveryError::InvalidInput("request"))?
+            };
             if let (Some(task), Some(refreshed)) = (task, &run.refreshed) {
                 record_refresh(db, frozen, (project, task, target), refreshed, now_ms).await?;
             }

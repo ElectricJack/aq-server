@@ -209,7 +209,10 @@ impl DeliveryRuns<'_> {
             check_log_bytes: limits.map(|l| l.check_log_bytes),
             longest_merge_queue_wait_ms: waits("pull_request.merge")
                 .map(|l| l.longest_merge_queue_wait_ms),
-            target: if matches!(name, "pull_request.merge" | "pull_request.await_checks") {
+            target: if matches!(
+                name,
+                "branch.publish" | "pull_request.merge" | "pull_request.await_checks"
+            ) {
                 self.operations.target(subject.project).await?
             } else {
                 None
