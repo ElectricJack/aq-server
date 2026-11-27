@@ -152,6 +152,17 @@ pub fn with_judgment_facts(
     output
 }
 
+/// The agent's whole final message when `body` is the comment the worker
+/// posts for `attempt` (aq-worker `aq_handoff_note::final_message`): the
+/// text after its header, out of its ```` ```text ```` fence.
+pub fn final_message(body: &str, attempt: Uuid) -> Option<&str> {
+    let text = body
+        .strip_prefix(&format!("Final message of attempt {attempt}:"))?
+        .trim_start();
+    let text = text.strip_prefix("```text\n").unwrap_or(text).trim_end();
+    Some(text.strip_suffix("```").unwrap_or(text).trim_end()).filter(|t| !t.is_empty())
+}
+
 /// What a playbook can read that moves without the result changing: the
 /// commit main points at and the pull request's state. A different value
 /// than the one the last `aq.work.result_ready` was sent under is a reason to
@@ -516,5 +527,26 @@ mod tests {
         let cut = with_judgment_facts(base, &node, &"é".repeat(2100), "2.7.0");
         observed.validate(&cut).unwrap();
         assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 4096);
+    }
+
+    #[test]
+    fn final_message_is_the_text_of_the_attempts_final_message_comment() {
+        let attempt = Uuid::new_v4();
+        let body = format!(
+            "Final message of attempt {attempt}:\n\n```text\nDone.\nAll checks ran.\n```\n"
+        );
+        assert_eq!(
+            final_message(&body, attempt),
+            Some("Done.\nAll checks ran.")
+        );
+        // Without the fence the text after the header.
+        let bare = format!("Final message of attempt {attempt}: Done.");
+        assert_eq!(final_message(&bare, attempt), Some("Done."));
+        // Another attempt's, or any other comment, is not.
+        assert_eq!(final_message(&body, Uuid::new_v4()), None);
+        assert_eq!(final_message("Looks good to me.", attempt), None);
+        // An empty one leaves the report's conclusion in place.
+        let empty = format!("Final message of attempt {attempt}:\n\n```text\n\n```\n");
+        assert_eq!(final_message(&empty, attempt), None);
     }
 }

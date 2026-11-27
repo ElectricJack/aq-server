@@ -313,7 +313,14 @@ impl Service {
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
         let output = match version {
             "2.6.0" | "2.7.0" => {
-                let conclusion = latest.as_ref().map_or("", |l| l.conclusion.as_str());
+                let conclusion = match &latest {
+                    Some(l) => self.final_message(task, l).await?,
+                    None => None,
+                };
+                let conclusion = conclusion
+                    .as_deref()
+                    .or(latest.as_ref().map(|l| l.conclusion.as_str()))
+                    .unwrap_or("");
                 host10::with_judgment_facts(output, &node, conclusion, version)
             }
             #[cfg(feature = "project_environments")]
@@ -323,6 +330,33 @@ impl Service {
             _ => output,
         };
         Ok(host_result("observed", output))
+    }
+
+    /// The whole final message the worker posted as a task comment for the
+    /// attempt of `latest` (the report's conclusion is bounded to 512 bytes).
+    #[cfg(feature = "delivery_playbook")]
+    async fn final_message(
+        &self,
+        task: Uuid,
+        latest: &aq_playbook_domain::delivery_store::Latest,
+    ) -> Result<Option<String>> {
+        use aq_task_comments::{Author, MAX_LIMIT, Thread};
+        let thread = Thread {
+            project_id: latest.project_id,
+            task_id: task,
+        };
+        // shortcut: only the newest page of comments is searched; the worker posts the final message right after the result, so it is there when delivery reads it. Page with `before` if tasks gather 100+ comments after a result.
+        let (comments, _) = aq_task_comments::list(&self.pool, thread, None, MAX_LIMIT)
+            .await
+            .map_err(|_| Error::Unknown)?;
+        // Only the attempt itself can author a comment as it.
+        Ok(comments.iter().find_map(|c| match c.author {
+            Author::Agent { attempt_id, .. } if attempt_id == latest.attempt_id => {
+                aq_playbook_domain::host10::final_message(c.body.as_deref()?, attempt_id)
+                    .map(str::to_owned)
+            }
+            _ => None,
+        }))
     }
 
     /// The artifact the engine has active on the routing binding (what the

@@ -2556,6 +2556,39 @@ mod delivery {
             assert_eq!(conclusion.len(), expected, "{name}");
             assert!(long.starts_with(conclusion));
         }
+        // The worker's final-message comment of the result's attempt replaces
+        // the report's clipped conclusion; another attempt's does not count.
+        let attempt = h.port.latest.lock().unwrap()[&task].attempt_id;
+        let message = format!("Outcome: done; Changes: none. {}", "proof ".repeat(1000));
+        let thread = aq_task_comments::Thread {
+            project_id: own,
+            task_id: task,
+        };
+        for (by, text) in [
+            (attempt, message.as_str()),
+            (Uuid::new_v4(), "Not this one."),
+        ] {
+            let author = aq_task_comments::Author::Agent {
+                session_id: Uuid::new_v4(),
+                attempt_id: by,
+            };
+            let body = format!("Final message of attempt {attempt}:\n\n```text\n{text}\n```\n");
+            let at = chrono::Utc::now();
+            aq_task_comments::add(&h.pool().await, Uuid::new_v4(), thread, &author, &body, at)
+                .await
+                .unwrap();
+        }
+        for (name, contract, expected) in [
+            ("read-2-7-final", &v2_7, 4096),
+            ("read-2-6-final", &v2_6, 512),
+        ] {
+            let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+            let mut intent = h.intent(name, "work.read", input);
+            intent.command = contract.commands["work.read"].clone();
+            let read = h.try_run(&intent).await.unwrap();
+            let conclusion = read.output["facts"]["conclusion"].as_str().unwrap();
+            assert_eq!(conclusion, &message[..expected], "{name}");
+        }
     }
 
     #[tokio::test]
