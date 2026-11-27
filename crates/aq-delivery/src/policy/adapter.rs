@@ -166,10 +166,11 @@ pub trait GitHubAdapter: Send + Sync {
         pr: u64,
         required: Option<&[String]>,
     ) -> GitHubResult<Checks>;
-    /// The redacted tail of the logs of the failed check runs named `failed`
-    /// on `head_sha`: at most `bytes` bytes in all. `None` when the forge has
-    /// no log to give. A caller treats an error the same way: the check
-    /// stays recorded as failed, without a tail.
+    /// What the failed check runs named `failed` on `head_sha` show, redacted
+    /// and at most `bytes` bytes in all: each run's name and page, then what
+    /// failed in its log (failed tests, panics, compiler errors) or else the
+    /// log's tail. `None` when the forge has no such run. A caller treats an
+    /// error the same way: the check stays recorded as failed, without a log.
     async fn failed_check_log(
         &self,
         _repo: &GitHubRepository,
