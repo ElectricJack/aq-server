@@ -12,7 +12,7 @@
 use super::GitTarget;
 use crate::{DeliveryError, protocol};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 use uuid::Uuid;
 
 /// The prefix a task branch lives under, in central aq-git and on the forge.
@@ -54,6 +54,8 @@ pub struct GitFailure {
     pub message: String,
     /// The same operation may be sent again (aq-git said so, or no answer).
     pub transient: bool,
+    /// aq-git's `details`, such as the operation that holds a destination.
+    pub details: Value,
 }
 impl GitFailure {
     pub(crate) fn transport() -> Self {
@@ -61,6 +63,7 @@ impl GitFailure {
             code: "transport".into(),
             message: "aq-git did not answer".into(),
             transient: true,
+            details: Value::Null,
         }
     }
     fn protocol() -> Self {
@@ -68,6 +71,7 @@ impl GitFailure {
             code: "protocol".into(),
             message: "invalid or incompatible aq-git response".into(),
             transient: false,
+            details: Value::Null,
         }
     }
 }
@@ -149,16 +153,32 @@ fn sha1(hex: &str) -> Result<Value, GitFailure> {
     }
 }
 
+/// How long aq-git may take to answer a ref read of the central repository.
+/// shortcut: a fixed budget for local reads; move it to Settings if a read ever reaches the remote.
+const LOCAL_CALL: Duration = Duration::from_secs(30);
+/// The time aq-git has to write its answer after the deadline it was given.
+const REPLY_MARGIN: Duration = Duration::from_secs(5);
+
 /// The aq-git socket (`SourceRetentionConfig::git_socket`).
 #[derive(Debug, Clone)]
 pub struct SocketGit {
     socket: PathBuf,
+    /// The `deadline_ms` each call gives aq-git.
+    deadline: Duration,
 }
 impl SocketGit {
     pub fn new(socket: impl Into<PathBuf>) -> Self {
         Self {
             socket: socket.into(),
+            deadline: LOCAL_CALL,
         }
+    }
+
+    /// Calls that reach the remote (sync, publish, branch deletion) get
+    /// Settings `delivery-limits.git_transfer_timeout_ms`. aq-git caps a
+    /// publish at 300 s of its own.
+    pub fn waiting(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
     }
 
     async fn call(
@@ -172,11 +192,11 @@ impl SocketGit {
             "operation_id": operation, "operation": name,
             "repository_id": repo.repository_id,
             "expected_binding_generation": repo.binding_generation,
-            "params": params, "deadline_ms": 30000,
+            "params": params, "deadline_ms": self.deadline.as_millis() as u64,
         });
         let mut bytes = serde_json::to_vec(&request).map_err(|_| GitFailure::protocol())?;
         bytes.push(b'\n');
-        let raw = protocol::exchange(&self.socket, &bytes)
+        let raw = protocol::exchange_within(&self.socket, &bytes, self.deadline + REPLY_MARGIN)
             .await
             .map_err(|e| match e {
                 DeliveryError::Protocol => GitFailure::protocol(),
@@ -201,6 +221,7 @@ impl SocketGit {
                     code: text(&v["error"]["code"]),
                     message: text(&v["error"]["message"]),
                     transient: v["error"]["retry"] == "safe_same_operation",
+                    details: v["error"]["details"].clone(),
                 })
             }
             _ => Err(GitFailure::protocol()),
@@ -270,6 +291,7 @@ fn task_ref(reference: &str) -> Result<&str, GitFailure> {
         code: "invalid_ref".into(),
         message: format!("only refs under {TASK_BRANCH_PREFIX} may be published or deleted"),
         transient: false,
+        details: Value::Null,
     })
 }
 
@@ -302,6 +324,7 @@ impl RefPublication {
                         .take(256)
                         .collect(),
                     transient: false,
+                    details: Value::Null,
                 });
             }
             _ => return Err(GitFailure::protocol()),
@@ -515,6 +538,7 @@ impl GitPort for SocketGit {
                 code: "invalid_ref".into(),
                 message: "not a full branch ref".into(),
                 transient: false,
+                details: Value::Null,
             });
         }
         let result = self
@@ -555,13 +579,29 @@ impl GitPort for SocketGit {
         if let Some(source) = expected_source {
             params["expected_source"] = sha1(source)?;
         }
-        let result = match self.call((operation, "publish"), repo, params).await {
-            Ok(result) => result,
-            Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
-            Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
-                return Ok(RefPublication::Moved);
+        let mut released = false;
+        let result = loop {
+            match self
+                .call((operation, "publish"), repo, params.clone())
+                .await
+            {
+                Ok(result) => break result,
+                Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
+                Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
+                    return Ok(RefPublication::Moved);
+                }
+                // The same operation, never dispatched, goes on once the hold is released.
+                Err(e)
+                    if e.code == "operation_indeterminate"
+                        && !released
+                        && self
+                            .release_destination(operation, repo, reference, &e.details)
+                            .await =>
+                {
+                    released = true;
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         };
         RefPublication::from_reply(&result, reference, &old, expected_source)
     }
@@ -588,6 +628,69 @@ impl GitPort for SocketGit {
     }
 }
 impl SocketGit {
+    /// aq-git §10.3: an earlier dispatched publish whose outcome aq-git never
+    /// learned holds `reference`. Observe it under a new operation ID
+    /// (`operation.reconcile`, which settles it when its push landed). When the
+    /// remote is still at that publication's own lease, its push had no effect
+    /// and a new publication is permitted (`operation.resolve`). aq-git runs one
+    /// mutation per repository at a time and never redispatches a publish, so no
+    /// publisher of the held operation is running. `true` once the hold is gone.
+    async fn release_destination(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        held: &Value,
+    ) -> bool {
+        let Some(blocking) = held["blocking_operation_id"]
+            .as_str()
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .filter(|id| *id != operation && held["target"] == reference)
+        else {
+            return false;
+        };
+        let show = json!({"target_operation_id": blocking});
+        let Ok(shown) = self
+            .call((Uuid::new_v4(), "operation.show"), repo, show)
+            .await
+        else {
+            return false;
+        };
+        let (Some(generation), Some(lease)) = (
+            shown["generation"].as_u64(),
+            shown["metadata"]["expected_old"]
+                .as_str()
+                .filter(|o| object_id(o)),
+        ) else {
+            return false;
+        };
+        let mut target =
+            json!({"target_operation_id": blocking, "expected_generation": generation});
+        let Ok(observed) = self
+            .call(
+                (Uuid::new_v4(), "operation.reconcile"),
+                repo,
+                target.clone(),
+            )
+            .await
+        else {
+            return false;
+        };
+        if observed["resolution"].is_object() {
+            return true;
+        }
+        if observed["outcome"] != "indeterminate" || observed["observed_target"]["hex"] != lease {
+            return false;
+        }
+        target["disposition"] = json!("permit_new_operation");
+        target["reason"] = json!("the remote branch is still at the held publication's lease");
+        target["old_publishers_stopped"] = json!(true);
+        target["evidence"] = json!({"lease": lease, "reconciled": observed});
+        self.call((Uuid::new_v4(), "operation.resolve"), repo, target)
+            .await
+            .is_ok_and(|resolved| resolved["resolution"].is_object())
+    }
+
     async fn delete(
         &self,
         (operation, repo): (Uuid, &GitTarget),

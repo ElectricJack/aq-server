@@ -52,6 +52,10 @@ fn hold_text(code: HoldCode) -> (&'static str, Option<&'static str>) {
             "Disk is above 85% used",
             Some("Free disk space on this machine"),
         ),
+        SandboxAdmissionDeferred => (
+            "Worker cannot admit sandboxes",
+            Some("Free disk space or fix the sandbox daemon; the worker resumes on its own"),
+        ),
         CpuAboveThreshold => ("CPU is above the placement threshold", None),
         MemoryAboveThreshold => ("Memory is above the placement threshold", None),
         AgentMaximumReached => ("Agent maximum reached", None),
@@ -118,6 +122,7 @@ pub(super) fn mapped(reason: IneligibleReason) -> Option<HoldCode> {
         IneligibleReason::NodeSpendCeilingReached => HoldCode::NodeSpendCeilingReached,
         IneligibleReason::NodeSpendUnaccounted => HoldCode::NodeSpendUnaccounted,
         IneligibleReason::NodeDiskPressure => HoldCode::NodeDiskPressure,
+        IneligibleReason::SandboxAdmissionDeferred => HoldCode::SandboxAdmissionDeferred,
     })
 }
 

@@ -59,20 +59,20 @@ pub(super) async fn quota(
     .execute(&mut **tx)
     .await
     .map_err(db)?;
-    let q = super::preparation::retained_quota_locked(tx, node).await?;
+    let (total_rows, node_rows, total_bytes, node_bytes) =
+        super::preparation::retained_quota_locked(tx, node).await?;
     let kind = aq_history_caps::Kind::V2Proposals;
-    let p = aq_history_caps::usage(tx, kind, Some(node), 0)
+    let proposals = aq_history_caps::usage(tx, kind, Some(node), 0)
         .await
         .map_err(db)?;
-    let counts = (p.total_rows, p.scope_rows);
-    if (new_proposal && (counts.0 >= 4096 || counts.1 >= 256))
-        || q.0 >= 4096
-        || q.1 >= 256
-        || u64::try_from(q.2)
+    if (new_proposal && (proposals.total_rows >= 4096 || proposals.scope_rows >= 256))
+        || total_rows >= 4096
+        || node_rows >= 256
+        || u64::try_from(total_bytes)
             .ok()
             .and_then(|v| v.checked_add(incoming))
             .is_none_or(|v| v > 67_108_864)
-        || u64::try_from(q.3)
+        || u64::try_from(node_bytes)
             .ok()
             .and_then(|v| v.checked_add(incoming))
             .is_none_or(|v| v > 4_194_304)

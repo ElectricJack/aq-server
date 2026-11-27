@@ -247,13 +247,22 @@ struct GrantReceipt {
     expires_at_ms: u64,
 }
 
+/// The legacy fixture protocol rewrites the node's offers and registration
+/// without row locks, so it excludes other work on the node by its allocation row.
 async fn lock_node(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<()> {
-    let row =
-        sqlx::query("SELECT revoked_at IS NOT NULL AS revoked FROM nodes WHERE id=$1 FOR UPDATE")
-            .bind(node)
-            .fetch_optional(&mut **tx)
-            .await?
-            .ok_or_else(|| refuse(ErrorCode::InvalidCredential, "unknown node"))?;
+    aq_machine_control::allocation::lock(tx, node)
+        .await
+        .map_err(|e| match e {
+            aq_machine_control::Error::Db(e) => Error::Database(e),
+            _ => refuse(ErrorCode::InvalidRequest, "node allocation unavailable"),
+        })?;
+    let row = sqlx::query(
+        "SELECT revoked_at IS NOT NULL AS revoked FROM nodes WHERE id=$1 FOR KEY SHARE",
+    )
+    .bind(node)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| refuse(ErrorCode::InvalidCredential, "unknown node"))?;
     if row.get::<bool, _>("revoked") {
         return Err(refuse(ErrorCode::CredentialRevoked, "node revoked"));
     }

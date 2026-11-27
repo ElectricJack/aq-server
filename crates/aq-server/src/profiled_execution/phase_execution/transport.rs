@@ -49,12 +49,7 @@ async fn prepare(
     .map_err(Into::into)
 }
 async fn prepare_inner(state: &AppState, request: Request) -> Result<Response, AppError> {
-    let mut types = request.headers().get_all("content-type").iter();
-    if types.next().is_none_or(|v| v != "application/json") || types.next().is_some() {
-        return Err(AppError::BadRequest(
-            "one exact JSON content type required".into(),
-        ));
-    }
+    require_json_content_type(request.headers())?;
     let nonce = crate::profiled_execution::control_api::nonce(request.headers())?;
     let mut auth = crate::delegated_permits::runtime::authenticate_runner(
         state,
@@ -69,26 +64,7 @@ async fn prepare_inner(state: &AppState, request: Request) -> Result<Response, A
         .await
         .map_err(|_| AppError::PayloadTooLarge("phase Prepare body".into()))?;
     let q = super::super::phase_profile::decode_prepare(&bytes)?;
-    // An already-open historical profile cannot issue production grants without
-    // the separately reserved terminal capacity installed by migration 33.
-    let ready: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM meta WHERE key='state_format_version' AND value=$1)
-        AND to_regclass('profiled_phase_terminal_capacity') IS NOT NULL
-        AND EXISTS(SELECT 1 FROM pg_trigger
-            WHERE tgrelid=to_regclass('profiled_phase_execution_grants')
-            AND tgname='profiled_phase_terminal_reserve' AND NOT tgisinternal
-            AND tgenabled IN ('O','A')
-            AND tgfoid=to_regprocedure('profiled_phase_terminal_reserve()'))",
-    )
-    .bind(crate::STATE_FORMAT_VERSION.to_string())
-    .fetch_one(&state.store.pool)
-    .await
-    .map_err(|_| AppError::Internal)?;
-    if crate::STATE_FORMAT_VERSION < 33 || !ready {
-        return Err(AppError::Maintenance(
-            "phase terminal storage is not ready".into(),
-        ));
-    }
+    require_terminal_storage(state).await?;
     macro_rules! respond {
         ($family:path, $delivery:expr) => {{
             use $family as family;
@@ -132,5 +108,59 @@ async fn prepare_inner(state: &AppState, request: Request) -> Result<Response, A
                 super::super::phase_refresh_execution::prepare(state, &auth, &q, nonce).await?
             )
         }
+    }
+}
+
+fn require_json_content_type(headers: &axum::http::HeaderMap) -> Result<(), AppError> {
+    let mut types = headers.get_all("content-type").iter();
+    if types.next().is_none_or(|v| v != "application/json") || types.next().is_some() {
+        return Err(AppError::BadRequest(
+            "one exact JSON content type required".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn require_terminal_storage(state: &AppState) -> Result<(), AppError> {
+    // An already-open historical profile cannot issue production grants without
+    // the separately reserved terminal capacity installed by migration 33.
+    let ready: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM meta WHERE key='state_format_version' AND value=$1)
+        AND to_regclass('profiled_phase_terminal_capacity') IS NOT NULL
+        AND EXISTS(SELECT 1 FROM pg_trigger
+            WHERE tgrelid=to_regclass('profiled_phase_execution_grants')
+            AND tgname='profiled_phase_terminal_reserve' AND NOT tgisinternal
+            AND tgenabled IN ('O','A')
+            AND tgfoid=to_regprocedure('profiled_phase_terminal_reserve()'))",
+    )
+    .bind(crate::STATE_FORMAT_VERSION.to_string())
+    .fetch_one(&state.store.pool)
+    .await
+    .map_err(|_| AppError::Internal)?;
+    if crate::STATE_FORMAT_VERSION < 33 || !ready {
+        return Err(AppError::Maintenance(
+            "phase terminal storage is not ready".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
+
+    #[test]
+    fn prepare_requires_one_exact_json_content_type() {
+        let mut headers = HeaderMap::new();
+        assert!(require_json_content_type(&headers).is_err());
+        for value in ["text/plain", "application/json; charset=utf-8"] {
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(value));
+            assert!(require_json_content_type(&headers).is_err());
+        }
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(require_json_content_type(&headers).is_ok());
+        headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(require_json_content_type(&headers).is_err());
     }
 }

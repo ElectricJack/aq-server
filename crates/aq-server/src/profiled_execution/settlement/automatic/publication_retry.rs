@@ -46,6 +46,8 @@ pub(super) async fn evidence(
 }
 
 /// Exact terminal publication rejection, under the same attempt lock as host dispatch.
+/// Earlier unreachable refusals do not matter: the rejecting push first observed
+/// the remote at its lease, so nothing of this result was published before it.
 pub(crate) async fn terminal_refusal(
     tx: &mut Transaction<'_, Postgres>,
     result: &results::RecordedResult,
@@ -72,7 +74,8 @@ pub(crate) async fn terminal_refusal(
              AND (x.status='running' OR x.command_name IN ('pull_request.open','pull_request.merge')
                OR (x.command_name='branch.publish' AND (x.status<>'refused' OR x.completed_at_ms IS NULL
                  OR x.output->>'reason' IS DISTINCT FROM 'unreachable'
-                 OR x.request->>'answer_note' IS DISTINCT FROM 'remote_rejected'))))
+                 OR (x.request->>'answer_note' IS DISTINCT FROM 'remote_rejected'
+                   AND x.completed_at_ms>o.completed_at_ms)))))
            AND NOT EXISTS(SELECT 1 FROM playbook_effects x
              WHERE x.receipt->>'result_id'=p.report_id::text AND x.status='pending')
          ORDER BY o.completed_at_ms DESC,o.operation_id DESC LIMIT 1",

@@ -73,6 +73,19 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
     );
     assert_eq!(git.request(1)["params"]["expected_old"]["hex"], old);
     assert_eq!(git.request(1)["params"]["update"], "replace");
+    // The host gives aq-git the Settings deadline for a call that reaches the remote.
+    let waiting = delivery.git_waiting(git.path(), std::time::Duration::from_secs(300));
+    done(
+        waiting
+            .branch_publish(
+                TaskOperation::new(Uuid::from_u128(5), &target(), TASK),
+                Some(&old),
+                None,
+            )
+            .await,
+    );
+    assert_eq!(git.request(0)["deadline_ms"], 30_000);
+    assert_eq!(git.request(2)["deadline_ms"], 300_000);
 }
 
 #[tokio::test]
@@ -193,6 +206,83 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
         (c.outcome, c.output),
         ("refused", json!({"reason": "unreachable"}))
     );
+}
+
+/// 2026-11-25: a push whose outcome aq-git never learned held `aq/<task>`, and
+/// every later publication was refused as plain `unreachable` for days.
+#[tokio::test]
+async fn a_destination_held_by_a_push_without_effect_is_released_and_published() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let blocker = Uuid::from_u128(9);
+    let branch = format!("refs/heads/aq/{TASK}");
+    for (remote, published) in [(sha('2'), true), (sha('5'), false)] {
+        let held = AtomicBool::new(true);
+        let held_ref = branch.clone();
+        let git = FakeGit::start(move |r| match r["operation"].as_str().unwrap() {
+            "publish" if held.load(Ordering::SeqCst) => {
+                json!({"error": {"code": "operation_indeterminate",
+                "message": "destination has an unresolved publication",
+                "details": {"blocking_operation_id": blocker, "target": held_ref}}})
+            }
+            "operation.show" => json!({"generation": 2, "phase": "dispatched", "status": "pending",
+                "metadata": {"candidate": sha('a'), "expected_old": sha('2'), "target": held_ref}}),
+            "operation.reconcile" => {
+                json!({"target_operation_id": blocker, "outcome": "indeterminate",
+                "observed_target": {"algorithm": "sha1", "hex": remote}})
+            }
+            "operation.resolve" => {
+                held.store(false, Ordering::SeqCst);
+                json!({"target_operation_id": blocker, "resolution": {"outcome": "resolved"}})
+            }
+            _ => healthy(r),
+        });
+        let (delivery, _) = delivery(&git).await;
+        let operation = Uuid::from_u128(4);
+        let c = done(
+            delivery
+                .branch_publish(
+                    TaskOperation::new(operation, &target(), TASK),
+                    Some(&sha('2')),
+                    None,
+                )
+                .await,
+        );
+        let show = &json!({"target_operation_id": blocker});
+        assert_eq!(git.request(1)["params"], *show);
+        assert_eq!(git.request(2)["params"]["expected_generation"], json!(2));
+        if published {
+            assert_eq!(
+                (c.outcome, c.output),
+                ("published", json!({"head": sha('a')}))
+            );
+            assert_eq!(
+                git.operations(),
+                [
+                    "publish",
+                    "operation.show",
+                    "operation.reconcile",
+                    "operation.resolve",
+                    "publish"
+                ]
+            );
+            let resolve = git.request(3);
+            assert_eq!(resolve["params"]["disposition"], "permit_new_operation");
+            assert_eq!(resolve["params"]["old_publishers_stopped"], true);
+            // The held push is never resent; the new publication goes on under its own ID.
+            assert_eq!(git.request(4)["operation_id"], json!(operation));
+        } else {
+            // The remote moved off the held push's lease: its effect is unknown.
+            assert_eq!(c.diagnostic, Some("publication_indeterminate"));
+            assert_eq!(
+                (c.outcome, c.output),
+                ("refused", json!({"reason": "unreachable"}))
+            );
+            assert_eq!(
+                git.operations(),
+                ["publish", "operation.show", "operation.reconcile"]
+            );
+        }
+    }
 }
 
 #[tokio::test]

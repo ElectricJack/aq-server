@@ -522,6 +522,39 @@ Do not enable it yet: do the first install by hand (next section). After the
 start limit is hit, fix the cause and run `systemctl reset-failed aq-updater`
 before starting it again.
 
+## PostgreSQL connection budget
+
+One PostgreSQL instance serves AQ Server, every supervisor host, Graph and the
+maintenance tools, and idle pooled sessions count against `max_connections`
+(the 2026-11-21 incident: 1,131 refusals at a ceiling of 100). The budget is
+in `aq_machine_control::connections` and a unit test keeps the default plan
+inside a ceiling of 150.
+
+| Consumer | Worst case | Notes |
+| --- | --- | --- |
+| Server general, control, renewal, presence pools | 10, 16, 4, 4 | `[workers.limits]` `connections`, `control_connections`, `renewal_connections`, `presence_connections`. Control and renewal/presence keep reserved capacity; do not trade it for general capacity. |
+| Server notification, observation, terminal (2 pools), dashboard (2), graph read/messaging/conversation (3), playbook bridge, diagnostics | 4, 4, 8, 5, 8, 2, 1 | Lazy pools; each closes idle sessions after 20 s. |
+| Supervisor hosts (7) | 7 x 6 | Service pool 4 (controller 3), the lease connection and the advisory-lock connection. One short connection per reply publish. |
+| Graph | 9 | Observed peak. |
+| Internal-work host | 3 | Two runs and one. |
+| Maintenance reserve | 8 | Never planned for: psql, backups, migrations. |
+
+The planned worst case is 120 plus the 8 reserve, so a desktop PostgreSQL needs
+`max_connections` of at least 130 (150 recommended); the stock 100 does not hold
+it. At start the server compares the plan with the instance's real ceiling
+(`max_connections` less `superuser_reserved_connections`) and logs a warning that
+names every consumer when it does not fit. Steady use is far lower, because pools
+open lazily and close idle sessions.
+
+While running, the server counts sessions by `application_name` every 5 s on its
+reserved control pool. It warns at 80 % of the ceiling and names the largest
+holders, escalates at error level when use stays at 95 % or more for 30 s (or the
+sampler itself cannot get a connection), repeats every 5 min, and logs recovery.
+The same reading is published as `connection_pressure` on the loopback
+`/dependency-readyz`, which needs no database. Log lines and that field are the
+signal for the supervisor or owner; there is no database-backed notification for
+it, because one would need the connection that is missing.
+
 ## First install on a fresh host
 
 1. Initialise the updater's state. This creates the journal, re-applies the

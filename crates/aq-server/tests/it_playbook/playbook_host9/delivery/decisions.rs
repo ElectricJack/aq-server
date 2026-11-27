@@ -221,15 +221,9 @@ async fn publication_driver(h: &D) -> aq_server::playbooks::driver::Driver {
 
     h.service.retire_runtime(&h.runtime).await.unwrap();
     let (_task, _) = h.stopped(h.scope.project_id, "success");
-    // The harness namespace is Host10 (catalog 2.3.0) with or without spec
-    // 0017. With environments the built-in record pins 2.5.0, and this
-    // namespace refuses to install the publication artifact sealed on it.
-    let mut source = builtin::delivery();
-    source.commands.retain(|c| !c.starts_with("environment."));
-    source.events.retain(|e| !e.starts_with("aq.environment."));
-    let catalog = request::catalog_2_3().unwrap();
-    let retained = draft::retain_registry(&catalog, &source.commands, &source.events);
-    source.capabilities = retained.unwrap().1;
+    // The harness namespace is Host10 with or without spec 0017.
+    let source = builtin::delivery(false);
+    let catalog = request::pinned_catalog(&source).unwrap();
     let mut draft_value: Value = serde_json::from_str(include_str!(
         "../../fixtures/delivery_reads_the_task.draft.json"
     ))
@@ -443,7 +437,7 @@ async fn the_driver_resumes_an_admitted_return_after_restart_and_deadline() {
     h.service.retire_runtime(&h.runtime).await.unwrap();
     h.answers(Settled::Pending);
     let (task, pending) = h.stopped(h.scope.project_id, "failed");
-    let source = builtin::delivery();
+    let source = builtin::delivery(false);
     let catalog = request::pinned_catalog(&source).unwrap();
     let mut draft_value: Value = serde_json::from_str(include_str!(
         "../../fixtures/delivery_reads_the_task.draft.json"

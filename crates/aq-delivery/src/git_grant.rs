@@ -224,7 +224,10 @@ pub async fn record_locked(
     Ok(())
 }
 
-/// Current report of a stopped attempt whose delivery decision retained it for supervisor handling.
+/// Current report of a stopped attempt whose delivery decision retained it for supervisor handling:
+/// any `policy` hold (a failed result, or a successful one the policy refused, such as one with no
+/// changes), or a `returns_exhausted` hold with a final failure or with nothing published for the
+/// result (a judged no-change result). A merge that may have landed excludes a successful result.
 pub async fn held_report<'e>(
     db: impl sqlx::PgExecutor<'e>,
     task: Uuid,
@@ -236,12 +239,15 @@ pub async fn held_report<'e>(
          WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held'
          AND CASE convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'
            WHEN 'failed' THEN d.reason IN ('policy','returns_exhausted')
-           WHEN 'success' THEN d.reason='returns_exhausted' AND EXISTS(
+           WHEN 'success' THEN (d.reason='policy' OR (d.reason='returns_exhausted' AND (EXISTS(
              SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
                AND o.request#>>'{result_ready,result_id}'=r.report_id::text
                AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
                AND ((o.command_name='pull_request.await_checks' AND o.status IN ('failed','conflict'))
                  OR (o.command_name='pull_request.merge' AND o.status='conflict')))
+             OR NOT EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+               AND o.request#>>'{result_ready,result_id}'=r.report_id::text
+               AND (o.command_name='branch.publish' OR o.command_name LIKE 'pull_request.%')))))
              AND NOT EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
                AND o.request#>>'{result_ready,result_id}'=r.report_id::text
                AND o.command_name='pull_request.merge' AND o.status NOT IN ('conflict','refused','not_mergeable'))

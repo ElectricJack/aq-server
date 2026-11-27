@@ -865,35 +865,38 @@ fn accepts_base(registry: &Registry, artifact: &Registry) -> bool {
 }
 
 /// Exact host contracts, including the pinned Host9 work.read on Host10 so
-/// the existing routing artifact can be installed in the new namespace.
+/// the existing routing artifact can be installed in the new namespace, and
+/// the catalog 2.7.0 work.read the delivery source is authored against (and
+/// 2.6.0's, which artifacts sealed before 2.7.0 keep).
 pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool {
     let current = registry.commands.get(&contract.name);
     if current == Some(contract) {
         return true;
     }
     #[cfg(feature = "delivery_playbook")]
-    if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.3.0") {
+    if contract.name == "work.read" {
+        let pinned = |catalog: &'static OnceLock<Registry>, json: &str| {
+            catalog
+                .get_or_init(|| {
+                    serde_json::from_str(json).expect("vendored AQ host catalog parses")
+                })
+                .commands
+                .get(&contract.name)
+                == Some(contract)
+        };
         static HOST9: OnceLock<Registry> = OnceLock::new();
-        let legacy = HOST9.get_or_init(|| {
-            serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.2.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.2.0 parses")
-        });
-        return legacy.commands.get(&contract.name) == Some(contract);
-    }
-    // Catalog 2.5.0 (spec 0017): the delivery source keeps the 2.3.0
-    // work.read it was authored against.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-    if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.5.0") {
-        static HOST10: OnceLock<Registry> = OnceLock::new();
-        let delivery = HOST10.get_or_init(|| {
-            serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.3.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.3.0 parses")
-        });
-        return delivery.commands.get(&contract.name) == Some(contract);
+        static DELIVERY_2_6: OnceLock<Registry> = OnceLock::new();
+        static DELIVERY_2_7: OnceLock<Registry> = OnceLock::new();
+        let host9 = include_str!("../../../vendor/aq-host-catalog-2.2.0/registry.json");
+        let v2_6 = include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
+        let v2_7 = include_str!("../../../vendor/aq-host-catalog-2.7.0/registry.json");
+        let delivery = || pinned(&DELIVERY_2_7, v2_7) || pinned(&DELIVERY_2_6, v2_6);
+        return match current.map(|c| c.version.as_str()) {
+            Some("2.3.0") => pinned(&HOST9, host9) || delivery(),
+            // Catalog 2.5.0 (spec 0017): the delivery source keeps its delivery work.read.
+            Some("2.5.0") if cfg!(feature = "project_environments") => delivery(),
+            _ => false,
+        };
     }
     false
 }

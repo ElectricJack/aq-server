@@ -154,3 +154,96 @@ async fn assert_unassociated_worker(
     .await;
     assert!(!scoped.to_string().contains(&idle.to_string()));
 }
+
+/// A worker whose machine defers sandbox admission is ineligible with no idle slots at once,
+/// and attention once the deferral is older than the node-limits Setting allows.
+#[tokio::test]
+async fn a_deferring_worker_is_ineligible_then_attention_after_the_setting() {
+    use serde_json::json;
+    let now = common::profiled::NOW;
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let node = f.node.node_id;
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+    )
+    .bind(node)
+    .bind(now as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let deferral = json!({"code": "sandbox_disk_headroom_unavailable", "since_ms": now - 600_000,
+        "available_bytes": 24_905_654_272_u64, "required_bytes": 34_359_738_368_u64});
+    let report = json!({"schema_version": 1, "machine": {"kind": "local"}, "observed_at_ms": now,
+        "source": "linux", "host_probe": "not_applicable", "logical_cpus": 8,
+        "memory_total_bytes": 100, "memory_used_bytes": 10, "cpu_busy_bps": 0,
+        "sandbox_admission": deferral});
+    sqlx::query("INSERT INTO node_machine_reports(node_id,report,received_at_ms) VALUES($1,$2,$3)")
+        .bind(node)
+        .bind(report)
+        .bind(now as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, capacity) = read(&app, "/api/v1/capacity").await;
+    assert_eq!(status, StatusCode::OK, "{capacity}");
+    let entry = capacity["data"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node"]["id"] == json!(node))
+        .cloned()
+        .unwrap();
+    assert_eq!(entry["eligibility"]["state"], "ineligible");
+    assert!(
+        entry["eligibility"]["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("sandbox_admission_deferred"))
+    );
+    assert_eq!(entry["slots"]["idle"], 0, "{entry}");
+    assert_eq!(
+        entry["sandbox_admission"]["code"],
+        "sandbox_disk_headroom_unavailable"
+    );
+    assert_eq!(
+        entry["sandbox_admission"]["required_bytes"],
+        34_359_738_368_u64
+    );
+    let attention = |body: &serde_json::Value| {
+        let items = body["data"]["attention"].as_array().unwrap();
+        items
+            .iter()
+            .find(|v| v["kind"] == "sandbox_admission_deferred")
+            .cloned()
+    };
+    // Ten minutes is under the default thirty.
+    let (_, overview) = read(&app, "/api/v1/overview").await;
+    assert_eq!(attention(&overview), None, "{overview}");
+    sqlx::query("UPDATE role_settings SET node_limits='{\"sandbox_headroom_bytes\":1,\"build_cache_keys_kept\":2,\"admission_deferral_attention_ms\":300000}'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, overview) = read(&app, "/api/v1/overview").await;
+    let item = attention(&overview).expect("a worker deferred past the Setting is attention");
+    assert_eq!(item["subject"]["id"], json!(node));
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap()
+            .contains("34359738368 required"),
+        "{item}"
+    );
+    sqlx::query(
+        "UPDATE node_machine_reports SET report=report-'sandbox_admission' WHERE node_id=$1",
+    )
+    .bind(node)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (_, overview) = read(&app, "/api/v1/overview").await;
+    assert_eq!(attention(&overview), None);
+    let (_, capacity) = read(&app, "/api/v1/capacity").await;
+    assert!(!capacity.to_string().contains("sandbox_admission_deferred"));
+}

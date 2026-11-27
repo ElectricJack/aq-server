@@ -162,16 +162,73 @@ impl GitHubClient {
 }
 
 impl GitHubClient {
-    /// The last `keep + 1` bytes (at most) of a text download that `path`
-    /// answers with a redirect, such as a job's logs. The redirect target is a
-    /// signed URL: it is fetched once, without the installation token, and
-    /// read as a stream so that a long log is never held whole.
-    pub async fn send_text_tail(
+    /// One GraphQL request (`POST /graphql`; `/api/graphql` beside a GitHub
+    /// Enterprise `/api/v3` base), its `data` decoded as `T`. GraphQL reports
+    /// a refusal in `errors` with status 200: a rate limit comes back as
+    /// `retryable`, `NOT_FOUND` as `not_found`, anything else as `invalid`
+    /// with GitHub's messages.
+    pub async fn graphql<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+        auth: Auth<'_>,
+    ) -> GitHubResult<T> {
+        #[derive(serde::Deserialize)]
+        struct Reply {
+            data: Option<serde_json::Value>,
+            #[serde(default)]
+            errors: Vec<serde_json::Value>,
+        }
+        let mut url = self.base.clone();
+        let path = url.path().trim_end_matches('/');
+        let path = match path.strip_suffix("/v3") {
+            Some(api) => format!("{api}/graphql"),
+            None => format!("{path}/graphql"),
+        };
+        url.set_path(&path);
+        let body = serde_json::json!({"query": query, "variables": variables});
+        let response = self
+            .http
+            .post(url)
+            .header(AUTHORIZATION, auth.header()?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response.bytes().await.map_err(transport)?;
+        if !status.is_success() {
+            return Err(map_error(status, &headers, &bytes, Utc::now()));
+        }
+        let reply: Reply = serde_json::from_slice(&bytes)
+            .map_err(|_| GitHubApiError::Protocol("unexpected GraphQL response body".into()))?;
+        if let Some(error) = reply.errors.first() {
+            return Err(match error["type"].as_str() {
+                Some("RATE_LIMITED") => GitHubApiError::Retryable { reset_at: None },
+                Some("NOT_FOUND") => GitHubApiError::NotFound,
+                _ => GitHubApiError::Invalid {
+                    message: message(&bytes),
+                },
+            });
+        }
+        serde_json::from_value(reply.data.unwrap_or_default())
+            .map_err(|_| GitHubApiError::Protocol("unexpected GraphQL data".into()))
+    }
+
+    /// A text download that `path` answers with a redirect, such as a job's
+    /// logs, handed to `line` one line at a time (lossy UTF-8, each cut to
+    /// `max_line` bytes). The redirect target is a signed URL: it is fetched
+    /// once, without the installation token, and read as a stream so that a
+    /// long log is never held whole. A read cut short has already handed
+    /// over the lines before the cut.
+    pub async fn send_text_lines(
         &self,
         path: &str,
         auth: Auth<'_>,
-        keep: usize,
-    ) -> GitHubResult<Vec<u8>> {
+        max_line: usize,
+        mut line: impl FnMut(&str),
+    ) -> GitHubResult<()> {
         let url = self.url(path)?;
         let authorization = auth.header()?;
         let first = self
@@ -181,18 +238,33 @@ impl GitHubClient {
             .send()
             .await
             .map_err(transport)?;
-        let response = if first.status().is_redirection() {
+        let mut response = if first.status().is_redirection() {
             let target = redirect_target(&first, &url)?;
-            self.http
-                .get(target)
-                .header(reqwest::header::RANGE, format!("bytes=-{}", keep + 1))
-                .send()
-                .await
-                .map_err(transport)?
+            self.http.get(target).send().await.map_err(transport)?
         } else {
             first
         };
-        read_tail(response, keep + 1).await
+        let status = response.status();
+        if !status.is_success() {
+            let headers = response.headers().clone();
+            let body = response.bytes().await.map_err(transport)?;
+            return Err(map_error(status, &headers, &body, Utc::now()));
+        }
+        let mut pending: Vec<u8> = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(transport)? {
+            for piece in chunk.split_inclusive(|b| *b == b'\n') {
+                let room = max_line.saturating_sub(pending.len()).min(piece.len());
+                pending.extend_from_slice(&piece[..room]);
+                if piece.ends_with(b"\n") {
+                    line(&String::from_utf8_lossy(&pending));
+                    pending.clear();
+                }
+            }
+        }
+        if !pending.is_empty() {
+            line(&String::from_utf8_lossy(&pending));
+        }
+        Ok(())
     }
 }
 
@@ -204,26 +276,6 @@ fn redirect_target(response: &reqwest::Response, base: &Url) -> GitHubResult<Url
         .and_then(|location| base.join(location).ok())
         .filter(|t| matches!(t.scheme(), "http" | "https") && no_credentials(t))
         .ok_or_else(|| GitHubApiError::Protocol("unusable log redirect".into()))
-}
-
-async fn read_tail(mut response: reqwest::Response, window: usize) -> GitHubResult<Vec<u8>> {
-    let status = response.status();
-    if !status.is_success() {
-        let headers = response.headers().clone();
-        let body = response.bytes().await.map_err(transport)?;
-        return Err(map_error(status, &headers, &body, Utc::now()));
-    }
-    let mut tail: Vec<u8> = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport)? {
-        tail.extend_from_slice(&chunk);
-        if tail.len() > 2 * window {
-            tail.drain(..tail.len() - window);
-        }
-    }
-    if tail.len() > window {
-        tail.drain(..tail.len() - window);
-    }
-    Ok(tail)
 }
 
 /// GitHub's `message`, followed by any `errors[].message` details.

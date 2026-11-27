@@ -2,14 +2,14 @@
 //! checks, mergeability, merge, close and branch deletion. Each call uses an
 //! installation token for the one repository it touches. Every refusal comes
 //! back as a typed outcome or [`GitHubApiError`]; nothing retries or waits.
-use super::log_tail;
 use super::{
     ApiRequest, Auth, GitHubApiError, GitHubApp, GitHubResult, InstallationToken, valid_login,
     valid_repository,
 };
+use super::{log_excerpt, log_tail};
 use crate::policy::{
     BranchDeletion, Checks, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod,
-    MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState,
+    MergeOutcome, MergeRefusal, Mergeability, PullRequest, PullRequestState, QueueWait,
 };
 use reqwest::Method;
 use serde::Deserialize;
@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod checks;
 mod merge;
+mod queue;
 
 /// GitHub protocol: the largest `per_page` list endpoints accept.
 const GITHUB_MAX_PER_PAGE: usize = 100;
@@ -253,7 +254,7 @@ impl GitHubAdapter for GitHubApp {
         let head_sha = commit_sha(&pull_request.head_sha).map_err(|_| {
             GitHubApiError::Protocol("pull request head is not an object id".into())
         })?;
-        let mut requirements = s.required_checks(base).await?;
+        let (mut requirements, merge_queue) = s.base_rules(base).await?;
         for name in required.into_iter().flatten() {
             requirements.entry(name.clone()).or_default();
         }
@@ -264,6 +265,7 @@ impl GitHubAdapter for GitHubApp {
             failed,
             required: requirements.into_keys().collect(),
             pull_request,
+            merge_queue,
         })
     }
 
@@ -286,25 +288,36 @@ impl GitHubAdapter for GitHubApp {
         // The bound is for the whole record: the failed jobs share it.
         let share = bytes / runs.len();
         let mut sections = Vec::new();
-        for (name, job) in runs {
+        for (name, (job, page)) in runs {
             let title: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
-            let header = format!("== {title} ==\n");
+            let page: String = (page.iter().flat_map(|p| p.chars()))
+                .take_while(|c| !c.is_control() && !c.is_whitespace())
+                .take(200)
+                .collect();
+            let header = match page.is_empty() {
+                true => format!("== {title} ==\n"),
+                false => format!("== {title} ==\n{page}\n"),
+            };
             let Some(room) = share.checked_sub(header.len() + 1).filter(|r| *r > 0) else {
                 continue;
             };
-            let fetched = s
-                .app
-                .client()
-                .send_text_tail(
+            let mut excerpt = log_excerpt::Excerpt::new(room);
+            // A log that cannot be read (no Actions read permission, gone)
+            // leaves the check's name and page; one cut short, what it showed.
+            let _ = (s.app.client())
+                .send_text_lines(
                     &format!("{}/actions/jobs/{job}/logs", s.path),
                     Auth::Installation(&s.token),
                     room,
+                    |line| excerpt.line(line),
                 )
                 .await;
-            // A job whose log cannot be read leaves the others.
-            if let Some(tail) = fetched.ok().and_then(|w| log_tail::log_tail(&w, room)) {
-                sections.push(format!("{header}{tail}\n"));
-            }
+            sections.push(
+                match log_tail::log_tail(excerpt.finish().as_bytes(), room) {
+                    Some(text) => format!("{header}{text}\n"),
+                    None => header,
+                },
+            );
         }
         let joined = sections.concat();
         Ok((!joined.is_empty()).then(|| joined.trim_end().to_owned()))
@@ -317,12 +330,15 @@ impl GitHubAdapter for GitHubApp {
         method: MergeMethod,
         expected_head_sha: &str,
         expected_base: &str,
+        queue: QueueWait,
     ) -> GitHubResult<MergeOutcome> {
         let expected = commit_sha(expected_head_sha)?;
         let s = Session::new(self, repo).await?;
         merge::MergeTarget {
+            repo,
             head: expected,
             base: expected_base,
+            queue,
         }
         .merge(&s, pr, method)
         .await

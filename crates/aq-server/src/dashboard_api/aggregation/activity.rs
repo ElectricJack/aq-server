@@ -42,6 +42,43 @@ fn offline(
         },
     )))
 }
+/// An online worker whose machine has deferred sandbox admission for at least `after_ms` (the
+/// Settings value `node-limits`), measured on the worker's own clock.
+fn deferred(
+    w: &sqlx::postgres::PgRow,
+    deferral: Option<&(aq_swarm::machine::AdmissionDeferral, u64)>,
+    after_ms: u64,
+) -> Result<Option<AttentionItem>> {
+    let Some((deferral, observed_at_ms)) = deferral else {
+        return Ok(None);
+    };
+    if deferral.deferred_ms(*observed_at_ms) < after_ms {
+        return Ok(None);
+    }
+    let reason = format!(
+        "The worker cannot admit sandboxes: {}",
+        deferral_words(deferral)
+    );
+    let id: Uuid = w.get("id");
+    Ok(Some(attention(
+        AttentionKind::SandboxAdmissionDeferred,
+        reference("worker", id, Revision(w.get("revision")).into()),
+        None,
+        AttentionDescription {
+            title: "Worker cannot admit sandboxes",
+            reason: &reason,
+            since: Some(timestamp(deferral.since_ms)?),
+        },
+    )))
+}
+fn deferral_words(d: &aq_swarm::machine::AdmissionDeferral) -> String {
+    match (d.available_bytes, d.required_bytes) {
+        (Some(available), Some(required)) => {
+            format!("{} ({available} bytes free, {required} required)", d.code)
+        }
+        _ => d.code.clone(),
+    }
+}
 #[derive(Default)]
 struct Activity {
     running: usize,
@@ -157,13 +194,25 @@ impl Activity {
         let (state, runtime, _) = request.parts();
         let mut transaction = tx(runtime).await?;
         let rows = sqlx::query(WORKERS).fetch_all(&mut *transaction).await?;
+        let ids: Vec<Uuid> = rows.iter().take(MEMBERS).map(|w| w.get("id")).collect();
+        let deferrals = aq_swarm::machine::deferrals(&mut transaction, &ids, stamp(state)?).await?;
+        let limits = aq_role_settings::node_limits(&mut transaction).await?.0;
         transaction.commit().await?;
         let nodes_more = rows.len() > MEMBERS;
         for w in rows.iter().take(MEMBERS) {
             let id: Uuid = w.get("id");
-            if !self.workers.keys().any(|(node, _)| *node == id)
-                && let Some(item) = offline(state, w, None)?
-            {
+            if self.workers.keys().any(|(node, _)| *node == id) {
+                continue;
+            }
+            let item = match offline(state, w, None)? {
+                Some(item) => Some(item),
+                None => deferred(
+                    w,
+                    deferrals.get(&id),
+                    limits.admission_deferral_attention_ms,
+                )?,
+            };
+            if let Some(item) = item {
                 self.workers.insert((id, None), item);
             }
         }

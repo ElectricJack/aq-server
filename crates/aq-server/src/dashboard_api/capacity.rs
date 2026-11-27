@@ -36,8 +36,9 @@ pub(super) async fn capacity(
     let snapshots = capacity_snapshots(&mut tx, &ids).await?;
     let loads = node_loads(state, &mut tx, &ids, now).await?;
     let storage = node_storage::latest(&mut tx, &ids).await?;
+    let deferrals = aq_swarm::machine::deferrals(&mut tx, &ids, now).await?;
     let occupied_all: i64 =
-        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts WHERE holds_task AND native_attempt_holds_compute(attempt_id,node_id))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
+        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts a WHERE a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;
@@ -60,6 +61,9 @@ pub(super) async fn capacity(
                 ceiling: load.ceiling,
                 snapshot: snapshots.get(&node.id),
                 storage,
+                sandbox_admission: (deferrals.get(&node.id))
+                    .map(|(d, _)| deferral_view(d))
+                    .transpose()?,
             },
             now,
         )?);
@@ -97,6 +101,15 @@ async fn node_loads(
         book: &book,
     };
     Ok(placement::loads(conn, &ledger, ids, now).await?)
+}
+
+pub(super) fn deferral_view(d: &aq_swarm::machine::AdmissionDeferral) -> Result<SandboxAdmission> {
+    Ok(SandboxAdmission {
+        code: d.code.clone(),
+        since: timestamp(d.since_ms)?,
+        available_bytes: d.available_bytes,
+        required_bytes: d.required_bytes,
+    })
 }
 
 fn node_storage_view(

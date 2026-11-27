@@ -166,6 +166,10 @@ pub(crate) async fn register(
         return Err(refused());
     }
     let mut tx = begin(&state).await?;
+    // A boot change excludes publication, claims and other registrations.
+    aq_machine_control::allocation::lock(&mut tx, auth.id())
+        .await
+        .map_err(crate::machine_api::mapped)?;
     worker_api::lock_current_node(&mut tx, &auth).await?;
     let old = registered(&mut tx, auth.id()).await?;
     if let Some(replay) = handoff::replay(
@@ -332,6 +336,10 @@ async fn readopt(
         return Err(refused());
     }
     let mut tx = begin(&state).await?;
+    // Readopt switches the node's boot: authenticators read it FOR SHARE.
+    aq_machine_control::allocation::lock(&mut tx, auth.id())
+        .await
+        .map_err(crate::machine_api::mapped)?;
     worker_api::lock_current_node(&mut tx, &auth).await?;
     let registration = registered(&mut tx, auth.id()).await?.ok_or_else(refused)?;
     if registration.registration.identity != q.current {

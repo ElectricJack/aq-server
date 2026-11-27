@@ -74,6 +74,34 @@
       ],
       "type": "object"
     },
+    "AttentionDismissal": {
+      "additionalProperties": false,
+      "properties": {
+        "attention_id": {
+          "type": "string"
+        },
+        "dismissed": {
+          "description": "Always true on success; the entry stays cleared across refreshes.",
+          "type": "boolean"
+        },
+        "dismissed_at_ms": {
+          "description": "Original timestamp, unchanged on replay.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expected_revision": {
+          "description": "The source revision whose notification was dismissed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attention_id",
+        "dismissed",
+        "expected_revision",
+        "dismissed_at_ms"
+      ],
+      "type": "object"
+    },
     "AttentionItem": {
       "additionalProperties": false,
       "properties": {
@@ -86,6 +114,10 @@
               "type": "null"
             }
           ]
+        },
+        "dismissible": {
+          "description": "True when the entry is informational and may be cleared with\n`POST /api/v1/attention/{attention_id}/dismiss`. Clearing hides this notification\nfor the caller only; it never resolves the underlying record. Absent\n(false) for unresolved decisions and other entries that need their own\ncontrols.",
+          "type": "boolean"
         },
         "id": {
           "type": "string"
@@ -144,9 +176,49 @@
         "failed",
         "uncertain_operation",
         "worker_offline",
+        "sandbox_admission_deferred",
         "internal_work"
       ],
       "type": "string"
+    },
+    "AttentionPage": {
+      "additionalProperties": false,
+      "description": "One page of the full attention list, with the coverage of every source behind it.",
+      "properties": {
+        "has_more": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AttentionItem"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sources": {
+          "description": "Per-source coverage, as in the overview, so a partial list is not read as complete.",
+          "items": {
+            "$ref": "#/$defs/SourceObservation"
+          },
+          "type": "array"
+        },
+        "total": {
+          "$ref": "#/$defs/Total",
+          "description": "Entries matching the filter. Unknown, not zero, while an owner is unavailable."
+        }
+      },
+      "required": [
+        "items",
+        "has_more",
+        "total",
+        "sources"
+      ],
+      "type": "object"
     },
     "AvailabilityReason": {
       "enum": [
@@ -595,6 +667,51 @@
       ],
       "type": "object"
     },
+    "Envelope11": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "#/$defs/ApiVersion"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "data": {
+          "$ref": "#/$defs/AttentionPage"
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        },
+        "pending_operations": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "server_time": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "api_version",
+        "request_id",
+        "server_time",
+        "scope",
+        "data",
+        "observation",
+        "pending_operations",
+        "coverage"
+      ],
+      "type": "object"
+    },
     "Envelope2": {
       "additionalProperties": false,
       "properties": {
@@ -971,6 +1088,7 @@
         "node_spend_ceiling_reached",
         "node_spend_unaccounted",
         "node_disk_pressure",
+        "sandbox_admission_deferred",
         "cpu_above_threshold",
         "memory_above_threshold",
         "agent_maximum_reached",
@@ -1052,17 +1170,26 @@
     },
     "IneligibleReason": {
       "description": "Why placement would refuse new work on a node. Ceiling reasons are the\nplacement refusal codes.",
-      "enum": [
-        "worker_offline",
-        "worker_revoked",
-        "capability_unreported",
-        "capability_expired",
-        "node_concurrency_ceiling_reached",
-        "node_spend_ceiling_reached",
-        "node_spend_unaccounted",
-        "node_disk_pressure"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "worker_offline",
+            "worker_revoked",
+            "capability_unreported",
+            "capability_expired",
+            "node_concurrency_ceiling_reached",
+            "node_spend_ceiling_reached",
+            "node_spend_unaccounted",
+            "node_disk_pressure"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "sandbox_admission_deferred",
+          "description": "The node's machine cannot admit a sandbox now (`NodeCapacity.sandbox_admission`).",
+          "type": "string"
+        }
+      ]
     },
     "InstructionProvenance": {
       "additionalProperties": false,
@@ -1461,6 +1588,17 @@
         },
         "node": {
           "$ref": "#/$defs/EntityRef"
+        },
+        "sandbox_admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SandboxAdmission"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present while the node's machine defers sandbox admission; its slots are not idle."
         },
         "slots": {
           "$ref": "#/$defs/NodeSlots"
@@ -2622,6 +2760,39 @@
       "required": [
         "id",
         "display_name"
+      ],
+      "type": "object"
+    },
+    "SandboxAdmission": {
+      "additionalProperties": false,
+      "description": "Why a machine cannot admit a sandbox now (it rechecks automatically): the worker's code\n(`sandbox_disk_headroom_unavailable`, ...), since when, and for a disk shortfall the bytes\navailable and required.",
+      "properties": {
+        "available_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "required_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "code",
+        "since"
       ],
       "type": "object"
     },
@@ -4239,6 +4410,12 @@
     },
     {
       "$ref": "#/$defs/Envelope10"
+    },
+    {
+      "$ref": "#/$defs/Envelope11"
+    },
+    {
+      "$ref": "#/$defs/AttentionDismissal"
     },
     {
       "$ref": "#/$defs/QuestionInboxPage"

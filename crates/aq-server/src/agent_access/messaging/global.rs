@@ -90,6 +90,7 @@ impl Service {
             pool: PgPoolOptions::new()
                 .max_connections(2)
                 .acquire_timeout(Duration::from_millis(500))
+                .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
                 .connect_lazy_with(
                     state
                         .store

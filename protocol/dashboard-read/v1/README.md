@@ -12,7 +12,9 @@ synthetic owned SQL projection responses, never evidence of a native process.
 Session identities are historical immutable bindings. Overview counts come from
 bounded owner observations; missing owners produce unknown counts and explicit
 partial coverage. `needs_you` counts the returned attention items (decisions,
-failed results, offline workers, uncertain operations,
+failed results, offline workers, workers that have deferred sandbox admission for
+longer than the Settings value `node-limits` `admission_deferral_attention_ms`
+(kind `sandbox_admission_deferred`), uncertain operations,
 and failed internal work a supervisor could not fix: its subject is the affected
 item, or `{type: "internal_run", id: <run>}` with `impact` naming the affected
 item when the dashboard cannot open that item by id); it is unknown while the
@@ -124,7 +126,12 @@ inventory exceeds 256 workers; `occupied` is the exact count of task-holding
 attempts. Each node's `eligibility.reasons` are the worker state, capability
 report freshness and the placement owner's own ceiling refusal
 (`node_concurrency_ceiling_reached`, `node_spend_ceiling_reached`,
-`node_spend_unaccounted`, `node_disk_pressure`). Provider availability comes from
+`node_spend_unaccounted`, `node_disk_pressure`), plus `sandbox_admission_deferred`
+while a fresh worker-machine/v1 report of the node's machine carries
+`sandbox_admission`: the node then has no idle slots and `sandbox_admission` names
+the worker's code, since when, and the bytes available and required for a disk
+shortfall (the swarm read shows the same as hold code `sandbox_admission_deferred`).
+Provider availability comes from
 unexpired node credential bindings for the account's profiles: `unknown` with
 `no_fresh_node_report` when no live node reports one. Nothing here grants placement.
 `/api/workers` rows carry the latest storage report flattened (`disk_*_bytes`,
@@ -237,3 +244,34 @@ attempts whose compute is not proven stopped plus live claimed manual sessions;
 settlement may remain visible as finishing history without occupying compute.
 Machines retain independent child nodes, each with its own count. These are
 capacity facts, not proof that an unknown attempt stopped or permission to launch.
+
+## Needs you: View All and clearing
+
+The overview counts attention entries of every kind, while the decision inbox
+contains only decision records. Ten failed-result notifications can therefore
+produce a Needs you count of ten with an empty decision inbox. View All must use
+the attention read below, preserving each item's subject link and supported
+action, rather than treating the decision inbox as the complete attention list.
+The contract tests reproduce this case and cover pagination beyond 25 entries,
+filtered totals, and clearing without hiding an unresolved decision.
+
+`GET /api/v1/attention[?scope=…&kind=…&limit=1..100&cursor=…]` returns the
+whole overview attention list, paged (`Envelope<AttentionPage>`, capability
+`attention.read`). It is built by the same code as `GET /api/v1/overview`, from
+the same owners and with the same cleared-entry filter, so the overview
+`needs_you` count and this list agree. `total` counts the entries matching
+`kind` (exact, estimated or unknown with the same rule as `needs_you`; unknown,
+never zero, while the decision owner is unavailable), and `sources` carries the
+overview's per-source coverage so a partial list is not read as complete. Order
+is fixed (decisions, questions, uncertain operations, blocked, failed, internal
+work, offline workers; then id). The cursor is the last returned entry's sort
+key, so it stays valid when entries are resolved or cleared between requests;
+a malformed cursor or unknown `kind` is a 422. A non-owner receives the same
+hidden overview coverage (`owner_visibility_required`) with an unknown total.
+
+An entry with `dismissible: true` may be cleared with
+`POST /api/v1/attention/{attention_id}/dismiss`, supplying the item's
+`subject.revision` as `expected_revision`. The capability is `attention.dismiss`
+(owner only). The [published dismissal contract](../../../docs/api/attention-dismissal.md)
+describes revision conflicts, stable replay responses, protected review gates,
+and persistence. The former `/attention/dismissals` mutation is no longer exposed.

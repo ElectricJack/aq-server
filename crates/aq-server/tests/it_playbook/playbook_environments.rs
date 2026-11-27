@@ -57,11 +57,11 @@ fn host12_is_catalog_2_5_0_and_serves_the_delivery_record() {
     assert!(host12.validate_scope(&scope).is_ok());
     assert!(CatalogProfile::Host10.validate_scope(&scope).is_err());
     // Every contract the built-in delivery record is authored against is
-    // accepted, its 2.3.0 work.read included; 2.2.0's is not.
-    let record = aq_playbook_authoring::builtin::delivery();
+    // accepted, its 2.7.0 work.read included; 2.2.0's and 2.3.0's are not.
+    let record = aq_playbook_authoring::builtin::delivery(true);
     let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
     let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
-    assert_eq!(kept.commands["work.read"].version, "2.3.0");
+    assert_eq!(kept.commands["work.read"].version, "2.7.0");
     for contract in kept.commands.values() {
         assert!(
             aq_playbook_host::accepts_command(&registry, contract),
@@ -69,11 +69,12 @@ fn host12_is_catalog_2_5_0_and_serves_the_delivery_record() {
             contract.name
         );
     }
-    let host9 = CatalogProfile::Host9.registry();
-    assert!(!aq_playbook_host::accepts_command(
-        &registry,
-        &host9.commands["work.read"]
-    ));
+    for older in [CatalogProfile::Host9, CatalogProfile::Host10] {
+        assert!(!aq_playbook_host::accepts_command(
+            &registry,
+            &older.registry().commands["work.read"]
+        ));
+    }
     // The pin lists the vendored files byte for byte.
     let pin: Value = serde_json::from_str(include_str!(
         "../../../../vendor/aq-host-catalog-2.5.0-source.json"
@@ -348,6 +349,7 @@ mod commands {
                 changed: true,
                 head: oid(head),
                 base: oid('0'),
+                conclusion: String::new(),
             };
             self.port.0.lock().unwrap().insert(task, latest);
             task

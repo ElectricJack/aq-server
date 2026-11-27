@@ -30,6 +30,14 @@ impl<'a> FrozenCommand<'a> {
             known_pr: self.number(),
         })
     }
+    /// A merge's place in a merge queue as its request froze it. A request
+    /// frozen without a queue deadline has none to wait.
+    pub(super) fn queue_wait(&self, now_ms: i64) -> QueueWait {
+        QueueWait {
+            since_ms: self.request["queued_since_ms"].as_i64().unwrap_or(0),
+            give_up: now_ms >= self.request["queue_deadline_at_ms"].as_i64().unwrap_or(0),
+        }
+    }
     fn required(&self) -> Option<Vec<String>> {
         self.request["required"]
             .as_array()
@@ -86,7 +94,12 @@ impl<'a> FrozenCommand<'a> {
             )
             .await
     }
-    async fn merge(self, delivery: &Delivery, target: &DeliveryTarget, task: Uuid) -> Option<Step> {
+    async fn merge(
+        self,
+        delivery: &Delivery,
+        target: &DeliveryTarget,
+        (task, now_ms): (Uuid, i64),
+    ) -> Option<Step> {
         let method = merge_method(self.text("method")?);
         let Some(pr) = self.number() else {
             return Some(Step::Done(Completion::refused("no_pull_request")));
@@ -96,6 +109,8 @@ impl<'a> FrozenCommand<'a> {
             method,
             expected_head: self.text("pull_request_head").unwrap_or(result),
             result_head: Some(result),
+            queue: self.queue_wait(now_ms),
+            check_log_bytes: self.request["check_log_bytes"].as_u64().unwrap_or(0),
         };
         Some(
             delivery
@@ -185,7 +200,11 @@ impl Delivery {
                 self.pull_request_open(target, command.task()?, command.open()?)
                     .await
             }
-            "pull_request.merge" => command.merge(self, target, command.task()?).await?,
+            "pull_request.merge" => {
+                command
+                    .merge(self, target, (command.task()?, now_ms))
+                    .await?
+            }
             "pull_request.close" => command.close(self, target).await,
             "pull_request.await_checks" => return command.checks(self, target, now_ms).await,
             _ => return None,

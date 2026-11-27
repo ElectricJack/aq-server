@@ -1,0 +1,195 @@
+{
+  "cases": [
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "acceptance_criteria": "Every command in the guide runs without error.",
+          "base": "a1",
+          "branch": "aq/task-1",
+          "changed": false,
+          "charged_failures": 0,
+          "conclusion": "Outcome: done; Changes: none; every command in the guide ran with exit code 0.",
+          "description": "Check that the guide's commands still work.",
+          "ended_attempts": 0,
+          "head": "a1",
+          "kind": "",
+          "level_hint": "",
+          "main_head": "a1",
+          "origin": "owner",
+          "outcome": "success",
+          "pull_request": null,
+          "returns": 0,
+          "route": "router",
+          "title": "Verify the install guide"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "acceptance_criteria": "Every command in the guide runs without error.",
+          "base": "a1",
+          "branch": "aq/task-1",
+          "changed": false,
+          "charged_failures": 0,
+          "conclusion": "",
+          "description": "Check that the guide's commands still work.",
+          "ended_attempts": 0,
+          "head": "a1",
+          "kind": "",
+          "level_hint": "",
+          "main_head": "a1",
+          "origin": "owner",
+          "outcome": "success",
+          "pull_request": null,
+          "returns": 0,
+          "route": "router",
+          "title": "Verify the install guide"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "acceptance_criteria": "Every command in the guide runs without error.",
+          "base": "a1",
+          "branch": "aq/task-1",
+          "changed": false,
+          "charged_failures": 0,
+          "conclusion": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "description": "Check that the guide's commands still work.",
+          "ended_attempts": 0,
+          "head": "a1",
+          "kind": "",
+          "level_hint": "",
+          "main_head": "a1",
+          "origin": "owner",
+          "outcome": "success",
+          "pull_request": null,
+          "returns": 0,
+          "route": "router",
+          "title": "Verify the install guide"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "acceptance_criteria": "Every command in the guide runs without error.",
+          "base": "a1",
+          "branch": "aq/task-1",
+          "changed": false,
+          "charged_failures": 0,
+          "conclusion": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "description": "Check that the guide's commands still work.",
+          "ended_attempts": 0,
+          "head": "a1",
+          "kind": "",
+          "level_hint": "",
+          "main_head": "a1",
+          "origin": "owner",
+          "outcome": "success",
+          "pull_request": null,
+          "returns": 0,
+          "route": "router",
+          "title": "Verify the install guide"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    }
+  ],
+  "compatibility": {
+    "base": {
+      "fingerprint": "sha256:4e951730c510b4392db5a745402a2b21d3eba3feac845e13cc362a1d1ce43591",
+      "registry_sha256": "sha256:a6705d785a74cfa5bc846207c991d8dbdd36fc23808ec79c8c76c442c79800b0",
+      "version": "2.6.0"
+    },
+    "changed_commands": {
+      "work.read": {
+        "capabilities": [
+          "work.read"
+        ],
+        "fingerprint": "sha256:ed06214ee64fbf20d9dbcfac10f06ab89646cc3da0c61fa9be66e2f9a5693f20",
+        "from": "2.6.0",
+        "to": "2.7.0"
+      }
+    },
+    "unchanged_commands": {
+      "branch.publish": "sha256:6077e9c41d4f8bb1b12a5469c3b7a9e27cac7ec0e0c81261f52cd10e3f3e2d68",
+      "candidate.prepare": "sha256:c02ad326b7b35053945f217301c58b8485ed91645c66dbcf6f7291562a44e9c6",
+      "candidate.publish": "sha256:7a510d82b43b2b59b7f0906b4eff3823427ed7d088f793396bfce6d9348b5be5",
+      "check.request": "sha256:52e13a43e363bfd19e2e6a4c73535048685fc8dc4b25890ccdd0ffc0421bf183",
+      "context.read": "sha256:33681ea332d3d0b475fcfafe32bc3762d6037f035c9114dccf9b4f788302f6cd",
+      "decision.request": "sha256:a9b64f5947567934a8217be9e0bacb53e7f225239e91e10c3c3b0b691efe3f05",
+      "findings.reconcile": "sha256:239802aecd6961c9a7ba93b0387cb2f872e42ddc4246e7901bae7219f19288d8",
+      "judgment.assess": "sha256:da4d7908c8943ade3905b9e573a7426fe36759321f6a287d5b97559ab868aa13",
+      "judgment.request": "sha256:fc7a12fca1b8af2c7ee1349a1569a711abe07120881a3ea4531da007fe6e39d9",
+      "main.sync": "sha256:15820b4ac83f342ee263d60925c219bc3f268b8147b211b179c931a6b5a78c55",
+      "message.send": "sha256:c75d3f9fceebbef2dc1f0c20ff2eda3a61aaf90cdc817d624fe349eb752eca6e",
+      "operation.cancel": "sha256:268e68958d3dadf6caae3a642ec3b8bfaf3869cbbc9f20873cb833af5c650810",
+      "operation.get": "sha256:06f9c8e969f6b461d2a39e5a4c2e322bba32f79fdb33b0f770a71e60c4f9bf8b",
+      "pull_request.await_checks": "sha256:fdea89697cc2e7e438014b64d0199b43f1be80ebcbe2f0a71e8e22d516bde1fc",
+      "pull_request.close": "sha256:b32831f29f810dd7025154649bb86227c71fd492da87e50d1c7f4b76b5be8823",
+      "pull_request.merge": "sha256:815a345f5f76f4d32d1ca35ab20a98255b4ed787c7081c97544b141c20ada873",
+      "pull_request.open": "sha256:8f32ae911b4866b6735ceb1ef7c5ca3fb38eb11359257bf095af62cc467bde72",
+      "supervisor.notify": "sha256:087ff38f7647a5b01bd83a7fd8da75ac3bfe918a2932c5da0fd781d3d4021907",
+      "work.change": "sha256:fb3d3ed7e0d6b2a108220e684bd871663d9ce184bd8d4d952d1d065cc1a7fadd",
+      "work.complete": "sha256:e4421395ce9ca8b30cc3336ff6c112ccea6288f6171edbc5b28100e0cf6bdb34",
+      "work.ensure": "sha256:0fcf486b0ad4b1e570ff5c7f5b688d15d675be5da8d0c961f83e59a68045ea16",
+      "work.hold": "sha256:f99f3e6c6ae5b0fc12a3240ae4efca3573b5c2ebe3a430d56745491441a5c3e7",
+      "work.return": "sha256:19a5ba95d75b64b3d35c0bf908bd9eca434251d2d3186bbb3c33a54fa03afda5",
+      "work.route": "sha256:04216580f2f561bf1a6c776dbb98aff83f421072ff57392817a139fc74ab77ee",
+      "work.unroutable": "sha256:c8b7a70046269860789452d9c12b5d4979957eb9dc88cc9afdd74595d32f6793"
+    },
+    "unchanged_events": {
+      "aq.artifact.recorded": "sha256:10e31a719c1d30c2825ac39913777cf07533eaa4cfd46a355d6b6a761b7427a1",
+      "aq.check.completed": "sha256:057b68bf02f62ecf38f342ea07dfd1586ccd4e566ad0ab8ec93345c61fbfd23c",
+      "aq.check.receipted": "sha256:371660367e3f2c573132704de4ecb6291d284d08f3081da5c734d998532884ef",
+      "aq.decision.completed": "sha256:90d042036d23155858b8e1d0cd41a8dd832cdcb530cab8cce8d22b26cdc96934",
+      "aq.delivery.completed": "sha256:535f8708fd46b7fb35aaf3566821ae51d62568388b26a2baf063cddc59ee67c0",
+      "aq.integration.changed": "sha256:c0f20b58ee35f85af9868dd07e4c61b432de9fdd2fbfc2692e5b5b6d94a09e29",
+      "aq.judgment.assessed": "sha256:4f9c791d3aa443dd05c040061cdced74733d17403252b45ed706b21fba263b3e",
+      "aq.judgment.completed": "sha256:afb31ce80a7024fc875ced6451708798567c3cf54a98c1b3a05c8a64784f1979",
+      "aq.operation.updated": "sha256:36071ae1086d80e5fc5166df3f1300c3e6e1df08caf7d039572d8f4418965ee3",
+      "aq.signal.reported": "sha256:9d93528eb9ccf35cc71fed2072668145a25d7f7d9d8dbd567232eb67066811cd",
+      "aq.work.changed": "sha256:78aaaf08411f1d17e93e12feb21feab4bcfb6636e56738afd1305aa3c1074401",
+      "aq.work.result_ready": "sha256:29aab093e83db6d4ae206abe449024a0aa15008bea211db96758ecd7a1069b03",
+      "aq.work.route_needed": "sha256:681aa56ebbbe5183672cf227b82121a3747429c93c932b6d50e32cb4c63a973e"
+    }
+  }
+}

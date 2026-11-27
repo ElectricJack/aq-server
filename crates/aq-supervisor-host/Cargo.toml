@@ -14,6 +14,7 @@ aq-command-registry = { path = "../aq-command-registry" }
 aq-role-settings = { path = "../aq-role-settings" }
 aq-central-authority = { path = "../aq-central-authority" }
 aq-server = { path = "../aq-server" }
+aq-machine-control = { path = "../aq-machine-control" }
 aq-session-host.workspace = true
 aq-codex-mapper.workspace = true
 aq-responses-transport.workspace = true

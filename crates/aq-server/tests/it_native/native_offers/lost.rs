@@ -288,7 +288,7 @@ async fn revoke(c: &Case) -> u32 {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    n
+    n.len() as u32
 }
 /// The attempt is released as a revoked node's: recorded, stopped, its claim freed, not charged.
 async fn assert_released(c: &Case, attempt: Uuid) {

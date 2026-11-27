@@ -118,7 +118,13 @@ impl authoring::Deployer for AppState {
             replaced = live.then_some(id);
         }
         let id = Uuid::new_v4();
-        (service.source_grant(id, scope(&driver, capabilities)).await).map_err(engine)?;
+        // The engine's error names no request: say which grant, on which profile.
+        (service.source_grant(id, scope(&driver, capabilities)).await).map_err(|e| {
+            let profile = service.profile.config_name();
+            Error::Conflict(format!(
+                "The playbook engine refused: {e} (a grant of {capabilities:?} for {source} on {profile})"
+            ))
+        })?;
         sqlx::query("INSERT INTO playbook_source_grants(source_id,grant_id,revision,capabilities,created_at_ms) VALUES($1,$2,1,$3,$4) ON CONFLICT(source_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,revision=1,capabilities=EXCLUDED.capabilities,created_at_ms=EXCLUDED.created_at_ms,revoked_at_ms=NULL")
             .bind(source).bind(id).bind(Json(capabilities)).bind(authoring::Server::now_ms(self))
             .execute(pool).await?;
@@ -186,6 +192,12 @@ impl authoring::Server for AppState {
                 aq_playbook_domain::host10::ResultFacts::default().output(),
             )
         })
+    }
+    #[cfg(feature = "delivery_playbook")]
+    fn delivery(&self) -> Option<SourceRecord> {
+        let driver = self.internal_work.authoring().driver().ok()?;
+        let environments = driver.service.profile.has_environments();
+        Some(authoring::builtin::delivery(environments))
     }
     fn now_ms(&self) -> i64 {
         (self.clock)().timestamp_millis()

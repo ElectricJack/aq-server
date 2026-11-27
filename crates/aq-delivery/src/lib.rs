@@ -34,7 +34,7 @@ use aq_worker_protocol::{ObjectId, Validate};
 #[cfg(feature = "delivery_playbook")]
 pub use policy::{
     BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, MergeRefusal,
-    Mergeability, PullRequest, PullRequestState,
+    Mergeability, PullRequest, PullRequestState, QueueWait,
 };
 pub use policy::{
     ChecksState, ClearFenceRequest, DeliverRequest, DeliveryOutcome, GitHubAdapter,

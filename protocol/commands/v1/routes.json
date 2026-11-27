@@ -10,6 +10,8 @@
       "infra": "Health and readiness probes."
   },
   "routes": [
+    {"path": "/api/v1/attention", "class": "owner_admin", "note": "Dashboard attention list scoped to the current owner through DashboardRequest and the overview authorization fence."},
+    {"path": "/api/v1/attention/{attention_id}/dismiss", "class": "owner_admin", "note": "Owner-only per-principal attention dismissal; rechecks current owner authorization on every call, including replay, and uses the existing CSRF guard. Never changes the underlying subject."},
     {"path": "/api/agent-access/provision", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/agent-access/{attempt}/revoke", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/agent-operations/{operation}", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
@@ -198,6 +200,7 @@
     {"path": "/api/settings/profiles/limits", "class": "owner_admin", "note": "Owner-only roles, intelligence profiles and execution profiles as Settings documents (spec 0014 section 7, aq-role-settings); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/profiles/snapshot", "class": "owner_admin", "note": "Owner-only roles, intelligence profiles and execution profiles as Settings documents (spec 0014 section 7, aq-role-settings); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/observation-limits", "class": "owner_admin", "note": "Owner-only node observation limits as a Settings value (aq-role-settings observation.rs): sources, events, retained bytes, calls per summary and the final drain grace; RequireOwner and existing CSRF guard."},
+    {"path": "/api/settings/node-limits", "class": "owner_admin", "note": "Owner-only node limits as a Settings value (aq-role-settings node.rs): sandbox headroom, build-cache keys kept per project (both sent to nodes in the control reply) and how long a deferred sandbox admission waits before it is attention; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/delivery-document", "class": "owner_admin", "note": "Owner-only delivery document and delivery limits as Settings values (spec 0016 sections 4, 8, aq-role-settings, feature delivery_playbook); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/delivery-limits", "class": "owner_admin", "note": "Owner-only delivery document and delivery limits as Settings values (spec 0016 sections 4, 8, aq-role-settings, feature delivery_playbook); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/supervisor-document", "class": "owner_admin", "note": "Owner-only project supervisor role text as a Settings document (aq-role-settings), read at the start of each project supervisor turn; RequireOwner and existing CSRF guard."},

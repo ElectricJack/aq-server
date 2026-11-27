@@ -1,5 +1,6 @@
 //! dashboard-read-1 projections. These read claims never grant execution/control.
 pub mod action_contract;
+pub mod attention;
 pub mod capabilities;
 pub mod feedback_contract;
 pub mod overview;
@@ -378,7 +379,7 @@ pub struct Overview {
     #[serde(default)]
     pub sources: Vec<SourceObservation>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionKind {
     Decision,
@@ -387,6 +388,8 @@ pub enum AttentionKind {
     Failed,
     UncertainOperation,
     WorkerOffline,
+    // A worker has deferred sandbox admission longer than the node-limits Setting allows.
+    SandboxAdmissionDeferred,
     // Failed internal work a supervisor could not fix (spec 0012 §8); the
     // subject is the affected item, not the internal run. A plain comment
     // keeps the schema a flat enum.
@@ -411,6 +414,13 @@ pub struct AttentionItem {
     pub since: Option<Timestamp>,
     pub subject: EntityRef,
     pub action: Option<ActionDescriptor>,
+    /// True when the entry is informational and may be cleared with
+    /// `POST /api/v1/attention/{attention_id}/dismiss`. Clearing hides this notification
+    /// for the caller only; it never resolves the underlying record. Absent
+    /// (false) for unresolved decisions and other entries that need their own
+    /// controls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissible: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -540,6 +550,8 @@ pub enum IneligibleReason {
     NodeSpendCeilingReached,
     NodeSpendUnaccounted,
     NodeDiskPressure,
+    /// The node's machine cannot admit a sandbox now (`NodeCapacity.sandbox_admission`).
+    SandboxAdmissionDeferred,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -581,6 +593,20 @@ pub struct NodeCapacity {
     pub capability_observed_at: Option<Timestamp>,
     pub capability_fresh_until: Option<Timestamp>,
     pub storage: Option<NodeStorage>,
+    /// Present while the node's machine defers sandbox admission; its slots are not idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_admission: Option<SandboxAdmission>,
+}
+/// Why a machine cannot admit a sandbox now (it rechecks automatically): the worker's code
+/// (`sandbox_disk_headroom_unavailable`, ...), since when, and for a disk shortfall the bytes
+/// available and required.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxAdmission {
+    pub code: String,
+    pub since: Timestamp,
+    pub available_bytes: Option<u64>,
+    pub required_bytes: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -872,6 +898,8 @@ pub enum Response {
     Session(Box<Envelope<SessionDetail>>),
     SessionOperations(Box<Envelope<SessionOperations>>),
     Projects(Envelope<Page<ProjectRef>>),
+    Attention(Envelope<attention::AttentionPage>),
+    AttentionDismissal(attention::AttentionDismissal),
     QuestionInbox(QuestionInboxPage),
     QuestionDetail(Box<QuestionInboxDetail>),
 }

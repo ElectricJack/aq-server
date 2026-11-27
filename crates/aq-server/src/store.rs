@@ -335,21 +335,39 @@ pub struct Store {
 
 /// A small pool over `pool`'s server whose sessions set their statement and lock
 /// timeouts; a named pool also ends transactions left idle for 2 s.
-fn timed(
-    pool: &PgPool,
-    max: u32,
+/// Waits of a timed pool, as PostgreSQL setting values.
+struct Waits {
     acquire: Duration,
-    statement: &'static str,
-    lock: &'static str,
-    name: Option<&'static str>,
-) -> PgPool {
+    statement: String,
+    lock: String,
+    idle: String,
+}
+impl Waits {
+    fn of(acquire: Duration, statement: &str, lock: &str, idle: &str) -> Self {
+        let (statement, lock, idle) = (statement.into(), lock.into(), idle.into());
+        Self {
+            acquire,
+            statement,
+            lock,
+            idle,
+        }
+    }
+}
+fn timed(pool: &PgPool, max: u32, waits: Waits, name: Option<&'static str>) -> PgPool {
     let options = pool.connect_options().as_ref().clone();
     let options = name.map_or(options.clone(), |n| options.application_name(n));
-    let idle = if name.is_some() { "2s" } else { "0" };
+    let Waits {
+        acquire,
+        statement,
+        lock,
+        idle,
+    } = waits;
     PgPoolOptions::new()
         .max_connections(max)
         .acquire_timeout(acquire)
+        .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
         .after_connect(move |connection, _| {
+            let (statement, lock, idle) = (statement.clone(), lock.clone(), idle.clone());
             Box::pin(async move {
                 let sql = "SELECT set_config('statement_timeout',$1,false),set_config('lock_timeout',$2,false),set_config('idle_in_transaction_session_timeout',$3,false)";
                 let set = sqlx::query(sql).bind(statement).bind(lock).bind(idle);
@@ -515,25 +533,28 @@ impl Store {
         let control_pool = PgPoolOptions::new()
             .max_connections(limits.control_connections as u32)
             .acquire_timeout(Duration::from_secs(2))
+            .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
             .connect_lazy_with(pool.connect_options().as_ref().clone());
         let ms = Duration::from_millis;
         let (renewals, presences) = (limits.renewal_connections, limits.presence_connections);
+        // The renewal and presence pools: `reserved_*` Settings.
+        let pg = aq_machine_control::limits::pg_ms;
+        let reserved = || Waits {
+            acquire: ms(limits.reserved_acquire_timeout_ms),
+            statement: pg(limits.reserved_statement_timeout_ms),
+            lock: pg(limits.reserved_lock_timeout_ms),
+            idle: pg(limits.reserved_idle_timeout_ms),
+        };
         let name = Some("aq-native-renewal");
-        let renewal_pool = timed(&pool, renewals as u32, ms(250), "750ms", "150ms", name);
+        let renewal_pool = timed(&pool, renewals as u32, reserved(), name);
         let name = Some("aq-material-presence");
-        let presence_pool = timed(&pool, presences as u32, ms(250), "750ms", "150ms", name);
-        let notification_pool = timed(&pool, 4, ms(2000), "3s", "2s", None);
-        let observation_pool = timed(&pool, 4, ms(2000), "3s", "2s", None);
-        let terminal_pool = timed(&pool, 4, ms(1000), "750ms", "100ms", Some("aq-terminal"));
+        let presence_pool = timed(&pool, presences as u32, reserved(), name);
+        let notification_pool = timed(&pool, 4, Waits::of(ms(2000), "3s", "2s", "0"), None);
+        let observation_pool = timed(&pool, 4, Waits::of(ms(2000), "3s", "2s", "0"), None);
+        let terminal = || Waits::of(ms(1000), "750ms", "100ms", "2s");
+        let terminal_pool = timed(&pool, 4, terminal(), Some("aq-terminal"));
         // Human tail/info/output reads and worker uploads (QA N-01: 2 was too few).
-        let terminal_data_pool = timed(
-            &pool,
-            4,
-            ms(1000),
-            "750ms",
-            "100ms",
-            Some("aq-terminal-data"),
-        );
+        let terminal_data_pool = timed(&pool, 4, terminal(), Some("aq-terminal-data"));
         Ok(Store {
             scheduling_diagnostics: None,
             inventory_diagnostics: Default::default(),
@@ -760,7 +781,9 @@ impl Store {
         Ok(())
     }
 
-    /// Returns true if the node was newly revoked.
+    /// Returns true if the node was newly revoked. The update does not wait
+    /// for worker credential checks (FOR KEY SHARE); once it commits no new
+    /// check passes, and it returns after the ones already passed have ended.
     pub async fn revoke_node(&self, node_id: Uuid, now: DateTime<Utc>) -> Result<bool> {
         let r =
             sqlx::query("UPDATE nodes SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL")
@@ -768,6 +791,12 @@ impl Store {
                 .bind(now)
                 .execute(&self.pool)
                 .await?;
+        aq_machine_control::drain_revoked(&self.pool, &[node_id], now)
+            .await
+            .map_err(|e| match e {
+                aq_machine_control::Error::Db(e) => StoreError::Database(e),
+                e => StoreError::Corrupt(e.to_string()),
+            })?;
         Ok(r.rows_affected() == 1)
     }
 

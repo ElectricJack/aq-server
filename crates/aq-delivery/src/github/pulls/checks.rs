@@ -6,25 +6,30 @@ type ReportedChecks = BTreeMap<String, BTreeMap<Option<u64>, ChecksState>>;
 impl Session<'_> {
     /// Required check names and their App pins from rulesets and classic protection.
     pub(super) async fn required_checks(&self, base: &str) -> GitHubResult<RequiredChecks> {
+        Ok(self.base_rules(base).await?.0)
+    }
+    /// [`Session::required_checks`], and whether a rule requires a merge queue.
+    pub(super) async fn base_rules(&self, base: &str) -> GitHubResult<(RequiredChecks, bool)> {
         let mut required = RequiredChecks::new();
         let rules = self
             .pages(&format!("/rules/branches/{base}"), |v| array(v, None))
             .await?;
         apply_rules(&mut required, &rules);
+        let merge_queue = rules.iter().any(|r| r["type"] == "merge_queue");
         let branch: Value = self
             .call(ApiRequest::new(Method::GET, &format!("/branches/{base}")))
             .await?;
         apply_branch_protection(&mut required, &branch);
-        Ok(required)
+        Ok((required, merge_queue))
     }
 
-    /// The ids of the failed check runs on `sha` named in `names`, by name. A
-    /// GitHub Actions check run's id is its job's id.
+    /// The ids and pages (`html_url`) of the failed check runs on `sha` named
+    /// in `names`, by name. A GitHub Actions check run's id is its job's id.
     pub(super) async fn failed_runs(
         &self,
         sha: &str,
         names: &[String],
-    ) -> GitHubResult<BTreeMap<String, u64>> {
+    ) -> GitHubResult<BTreeMap<String, (u64, Option<String>)>> {
         let runs = self
             .pages(&format!("/commits/{sha}/check-runs"), |v| {
                 array(v, Some("check_runs"))
@@ -40,7 +45,8 @@ impl Session<'_> {
             if let (true, Some(name), Some(id)) = (broken, run["name"].as_str(), run["id"].as_u64())
                 && names.iter().any(|n| n == name)
             {
-                failed.entry(name.to_string()).or_insert(id);
+                let page = run["html_url"].as_str().map(str::to_owned);
+                failed.entry(name.to_string()).or_insert((id, page));
             }
         }
         Ok(failed)

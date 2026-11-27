@@ -1764,6 +1764,87 @@ mod delivery {
         }
     }
 
+    /// Catalogs 2.6.0 and 2.7.0, vendored and pinned byte for byte.
+    fn vendored_delivery_catalog(version: &str) -> (Value, aq_playbook_host::model::Registry) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../vendor/aq-host-catalog-{version}"));
+        let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap();
+        let manifest: Value = serde_json::from_str(&read("manifest.json")).unwrap();
+        let registry: aq_playbook_host::model::Registry =
+            serde_json::from_str(&read("registry.json")).unwrap();
+        assert_eq!(manifest["version"], version);
+        assert_eq!(
+            digest(&(version, &registry)).unwrap(),
+            manifest["fingerprint"].as_str().unwrap()
+        );
+        let pin: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                root.with_file_name(format!("aq-host-catalog-{version}-source.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pin["catalog_fingerprint"], manifest["fingerprint"]);
+        let files = pin["files"].as_array().unwrap();
+        assert_eq!(files.len(), std::fs::read_dir(&root).unwrap().count());
+        for file in files {
+            let bytes = std::fs::read(root.join(file["path"].as_str().unwrap())).unwrap();
+            assert_eq!(file["bytes"], bytes.len());
+            assert_eq!(
+                file["sha256"].as_str().unwrap(),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
+            );
+        }
+        (manifest, registry)
+    }
+
+    /// The delivery record is authored against catalog 2.7.0 (2.6.0 with a
+    /// conclusion of up to 4096 bytes): a Host10 namespace accepts its
+    /// contracts, its work.read and 2.6.0's (artifacts sealed before 2.7.0
+    /// keep it) included, beside routing's 2.2.0 one.
+    #[test]
+    fn host10_accepts_the_delivery_records_catalogs_2_6_0_and_2_7_0() {
+        let registry = CatalogProfile::Host10.registry();
+        let (v2_6_manifest, v2_6) = vendored_delivery_catalog("2.6.0");
+        assert_eq!(
+            v2_6_manifest["supersedes"]["fingerprint"],
+            HOST10_FINGERPRINT
+        );
+        let (v2_7_manifest, v2_7) = vendored_delivery_catalog("2.7.0");
+        assert_eq!(
+            v2_7_manifest["supersedes"]["fingerprint"],
+            v2_6_manifest["fingerprint"]
+        );
+        // Without environments (spec 0017, see playbook_environments) the
+        // record's catalog is 2.7.0 whole.
+        {
+            let record = aq_playbook_authoring::builtin::delivery(false);
+            let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
+            assert_eq!(pinned, v2_7);
+            let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
+            assert!(kept.commands.contains_key("judgment.assess"));
+        }
+        let host9 = CatalogProfile::Host9.registry();
+        for catalog in [&v2_6, &v2_7] {
+            for contract in catalog.commands.values() {
+                assert!(
+                    aq_playbook_host::accepts_command(&registry, contract),
+                    "{}",
+                    contract.name
+                );
+            }
+            // A namespace of another catalog does not take it.
+            assert!(!aq_playbook_host::accepts_command(
+                &host9,
+                &catalog.commands["work.read"]
+            ));
+        }
+        assert!(aq_playbook_host::accepts_command(
+            &registry,
+            &host9.commands["work.read"]
+        ));
+    }
+
     /// What the server records of results: pending results, the latest result
     /// of a task and which projects it runs.
     #[derive(Default)]
@@ -2058,6 +2139,7 @@ mod delivery {
                 changed: true,
                 head: "a".repeat(40),
                 base: "b".repeat(40),
+                conclusion: String::new(),
             };
             self.port.pending.lock().unwrap().push(pending);
             self.port.latest.lock().unwrap().insert(task, latest);
@@ -2401,6 +2483,116 @@ mod delivery {
         );
     }
 
+    /// Catalog 2.6.0's work.read adds the task's acceptance criteria and the
+    /// latest result's conclusion; 2.7.0's, which the delivery source is
+    /// authored against, keeps up to 4096 bytes of the conclusion instead of
+    /// 512; the 2.3.0 one on the same namespace keeps its shape.
+    #[tokio::test]
+    async fn work_read_2_6_0_and_2_7_0_give_the_acceptance_criteria_and_the_conclusion() {
+        let h = delivery(false).await;
+        let own = h.scope.project_id;
+        h.routing.on_router.lock().unwrap().insert(own);
+        let (task, _) = h.stopped(own, "success");
+        let criteria = "Every command in the guide runs.";
+        h.graph.nodes.lock().unwrap().get_mut(&task).unwrap()["acceptance_criteria"] =
+            json!(criteria);
+        let conclusion = "Outcome: done; Changes: none; the check block ran with exit code 0.";
+        h.port
+            .latest
+            .lock()
+            .unwrap()
+            .get_mut(&task)
+            .unwrap()
+            .conclusion = conclusion.into();
+        let v2_6: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.6.0/registry.json"
+        ))
+        .unwrap();
+        let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+        let mut intent = h.intent("read-2-6", "work.read", input);
+        intent.command = v2_6.commands["work.read"].clone();
+        let read = h.try_run(&intent).await.unwrap();
+        intent.command.outcomes["observed"]
+            .validate(&read.output)
+            .unwrap();
+        let facts = &read.output["facts"];
+        assert_eq!(facts["acceptance_criteria"], criteria);
+        assert_eq!(facts["conclusion"], conclusion);
+        assert_eq!(facts["outcome"], "success");
+        // A task without a result: both present, the conclusion empty.
+        let fresh = h.graph.task("Not run yet", json!({}));
+        let input = json!({"subject": {"id": fresh.to_string(), "revision": 1}});
+        let mut intent = h.intent("read-2-6-fresh", "work.read", input);
+        intent.command = v2_6.commands["work.read"].clone();
+        let read = h.try_run(&intent).await.unwrap();
+        assert_eq!(read.output["facts"]["conclusion"], "");
+        assert_eq!(read.output["facts"]["acceptance_criteria"], "");
+        // 2.3.0's answer (h.read validates it against 2.3.0) has neither.
+        let old = h.read(task).await.output["facts"].clone();
+        assert!(old.get("conclusion").is_none() && old.get("acceptance_criteria").is_none());
+        // A long conclusion: 2.7.0 gives it whole, 2.6.0 cuts it to 512 bytes.
+        let long = format!("Outcome: done; Changes: none; {}", "evidence ".repeat(300));
+        h.port
+            .latest
+            .lock()
+            .unwrap()
+            .get_mut(&task)
+            .unwrap()
+            .conclusion = long.clone();
+        let v2_7: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.7.0/registry.json"
+        ))
+        .unwrap();
+        for (name, contract, expected) in [
+            ("read-2-7-long", &v2_7, long.len().min(4096)),
+            ("read-2-6-long", &v2_6, 512),
+        ] {
+            let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+            let mut intent = h.intent(name, "work.read", input);
+            intent.command = contract.commands["work.read"].clone();
+            let read = h.try_run(&intent).await.unwrap();
+            intent.command.outcomes["observed"]
+                .validate(&read.output)
+                .unwrap();
+            let conclusion = read.output["facts"]["conclusion"].as_str().unwrap();
+            assert_eq!(conclusion.len(), expected, "{name}");
+            assert!(long.starts_with(conclusion));
+        }
+        // The worker's final-message comment of the result's attempt replaces
+        // the report's clipped conclusion; another attempt's does not count.
+        let attempt = h.port.latest.lock().unwrap()[&task].attempt_id;
+        let message = format!("Outcome: done; Changes: none. {}", "proof ".repeat(1000));
+        let thread = aq_task_comments::Thread {
+            project_id: own,
+            task_id: task,
+        };
+        for (by, text) in [
+            (attempt, message.as_str()),
+            (Uuid::new_v4(), "Not this one."),
+        ] {
+            let author = aq_task_comments::Author::Agent {
+                session_id: Uuid::new_v4(),
+                attempt_id: by,
+            };
+            let body = format!("Final message of attempt {attempt}:\n\n```text\n{text}\n```\n");
+            let at = chrono::Utc::now();
+            aq_task_comments::add(&h.pool().await, Uuid::new_v4(), thread, &author, &body, at)
+                .await
+                .unwrap();
+        }
+        for (name, contract, expected) in [
+            ("read-2-7-final", &v2_7, 4096),
+            ("read-2-6-final", &v2_6, 512),
+        ] {
+            let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+            let mut intent = h.intent(name, "work.read", input);
+            intent.command = contract.commands["work.read"].clone();
+            let read = h.try_run(&intent).await.unwrap();
+            let conclusion = read.output["facts"]["conclusion"].as_str().unwrap();
+            assert_eq!(conclusion, &message[..expected], "{name}");
+        }
+    }
+
     #[tokio::test]
     async fn work_read_of_a_task_without_a_result_has_empty_result_facts_and_refuses_what_it_cannot_serve()
      {
@@ -2532,6 +2724,7 @@ mod delivery {
                         code: "transport".into(),
                         message: "cleanup unavailable".into(),
                         transient: true,
+                        details: serde_json::Value::Null,
                     });
                 }
                 Ok(RefDeletion::Deleted)
@@ -2598,6 +2791,7 @@ mod delivery {
                     failed,
                     required: vec![],
                     pull_request: self.pull_request(repo, pr).await?,
+                    merge_queue: false,
                 })
             }
             async fn merge(
@@ -2607,6 +2801,7 @@ mod delivery {
                 method: MergeMethod,
                 expected_head_sha: &str,
                 _: &str,
+                _: aq_delivery::QueueWait,
             ) -> GitHubResult<MergeOutcome> {
                 self.log
                     .lock()

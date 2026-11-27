@@ -623,8 +623,8 @@ async fn startup_warns_for_bindings_whose_lists_enrolled_nodes_override() {
     );
 }
 
-/// Fix round 2 (I2): a Stop that is still open while the poll runs (the poll
-/// waits on the node row it holds) and commits then: the poll answers the early
+/// Fix round 2 (I2): a Stop that is still open while the poll runs (the poll's
+/// publication waits on the allocation row it fenced) and commits then: the poll answers the early
 /// gate's empty 200. The serialization-failure branch of the same race is
 /// `machine_store::publishing_node_lock_after_a_committed_stop_is_a_hold`.
 #[tokio::test]
@@ -664,7 +664,7 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
         .await
         .unwrap();
         c.observation_resume.add_permits(1);
-        let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes WHERE id=$1%')";
+        let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM node_allocation a%')";
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while !sqlx::query_scalar::<_, bool>(waiting)
                 .fetch_one(pool)
@@ -675,7 +675,7 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
             }
         })
         .await
-        .expect("the poll waits on the node row the Stop holds");
+        .expect("the poll's publication waits on the allocation row the Stop holds");
         stop.commit().await.unwrap();
     };
     let ((status, body), ()) = tokio::join!(poll(&c), race);

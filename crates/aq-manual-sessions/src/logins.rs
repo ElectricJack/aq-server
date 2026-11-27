@@ -75,10 +75,10 @@ async fn request(
         ));
     }
     let mut tx = s.pool.begin().await?;
-    aq_machine_control::management::lock(&mut tx)
+    aq_machine_control::allocation::lock(&mut tx, node)
         .await
         .map_err(management::storage)?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_optional(&mut *tx)
         .await?;

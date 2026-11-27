@@ -97,6 +97,7 @@ pub(crate) fn start(pool: &PgPool) -> Option<Capture> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(1))
+        .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
         .connect_lazy_with(pool.connect_options().as_ref().clone());
     let (capture, receiver) = Capture::channel(CAPACITY);
     tokio::spawn(flush(pool, receiver, capture.dropped.clone()));

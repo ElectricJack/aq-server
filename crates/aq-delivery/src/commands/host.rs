@@ -14,7 +14,7 @@ use crate::github::{GitHubApp, GitHubAppConfig};
 use crate::policy::{GitHubAdapter, GitHubRepository, UnconfiguredGitHub};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 /// The longest title and body the host sends with a pull request.
@@ -30,6 +30,15 @@ impl Delivery {
             Err(_) => Arc::new(UnconfiguredGitHub),
         };
         Self::new(Arc::new(SocketGit::new(git_socket)), github)
+    }
+
+    /// The same commands, giving each aq-git call `deadline` (Settings
+    /// `delivery-limits.git_transfer_timeout_ms`).
+    pub fn git_waiting(&self, git_socket: &Path, deadline: Duration) -> Self {
+        Self::new(
+            Arc::new(SocketGit::new(git_socket).waiting(deadline)),
+            self.github.clone(),
+        )
     }
 }
 
@@ -116,8 +125,12 @@ pub struct Accepting<'a> {
     /// `pull_request.await_checks`: Settings
     /// `delivery-limits.longest_check_wait_ms`.
     pub longest_check_wait_ms: Option<u64>,
-    /// `pull_request.await_checks`: Settings `delivery-limits.check_log_bytes`.
+    /// `pull_request.await_checks` and `pull_request.merge`: Settings
+    /// `delivery-limits.check_log_bytes`.
     pub check_log_bytes: Option<u64>,
+    /// `pull_request.merge`: Settings
+    /// `delivery-limits.longest_merge_queue_wait_ms`.
+    pub longest_merge_queue_wait_ms: Option<u64>,
     /// Check and merge operations pin the resolved target at acceptance.
     pub target: Option<DeliveryTarget>,
     /// The latest attempt/result for merge evidence.
@@ -173,7 +186,9 @@ pub async fn frozen_request(
             request["pull_request"] = json!(known.as_ref().map(number));
         }
         "pull_request.merge" => {
-            if let Err(reason) = accepting.freeze_merge(&mut request, input, known.as_ref())? {
+            if let Err(reason) =
+                accepting.freeze_merge(&mut request, input, known.as_ref(), now_ms)?
+            {
                 return Ok(Err(reason));
             }
             request["pull_request_head"] = json!(accepted_head(pool, task, accepting.head).await?);
@@ -221,6 +236,7 @@ impl Accepting<'_> {
         request: &mut Value,
         input: &Value,
         known: Option<&(i64, String)>,
+        now_ms: i64,
     ) -> Result<Result<(), &'static str>, DeliveryError> {
         let Some(open) = known.filter(|(_, state)| state == "open" || state == "merged") else {
             return Ok(Err("no_pull_request"));
@@ -236,6 +252,15 @@ impl Accepting<'_> {
             request["attempt_id"] = json!(attempt);
             request["result_id"] = json!(result);
         }
+        // Frozen like a check wait, so one merge waits in a queue under the
+        // limit it was accepted with.
+        let wait = self
+            .longest_merge_queue_wait_ms
+            .ok_or(DeliveryError::InvalidInput("longest_merge_queue_wait_ms"))?;
+        request["queued_since_ms"] = json!(now_ms);
+        request["queue_deadline_at_ms"] =
+            json!(now_ms.saturating_add(i64::try_from(wait).unwrap_or(i64::MAX)));
+        request["check_log_bytes"] = json!(self.check_log_bytes.unwrap_or(0));
         Ok(Ok(()))
     }
 }
@@ -664,6 +689,8 @@ impl MergeStep<'_> {
                     method: merge_method(method),
                     expected_head: pin,
                     result_head: Some(head),
+                    queue: self.frozen.queue_wait(self.now_ms),
+                    check_log_bytes: request["check_log_bytes"].as_u64().unwrap_or(0),
                 },
             )
             .await

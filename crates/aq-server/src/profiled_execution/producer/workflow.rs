@@ -23,7 +23,7 @@ use aq_admission::{
     control::NativePollPage,
     transport::{Poll, TransportDocument},
 };
-use aq_machine_control::holds;
+use aq_machine_control::{hold_memo, holds};
 use aq_profiled_state::git_author::PollDelivery;
 use aq_role_settings::refusals::SlotResources as Slot;
 use aq_routing::Placement;
@@ -66,7 +66,7 @@ async fn runtime(
     AppError,
 > {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::read_current_node(&mut tx, auth).await?;
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if auth.id() != request.identity.node_id {
         return Err(refused());
     }
@@ -252,6 +252,8 @@ struct PollDiagnostics<'a> {
     clock: &'a crate::Clock,
     operation: Uuid,
     known: std::sync::atomic::AtomicBool,
+    /// Held tasks answered from memory this poll: they record no decision of their own.
+    unchanged: std::sync::Mutex<Vec<Uuid>>,
 }
 
 impl<'a> PollDiagnostics<'a> {
@@ -261,12 +263,27 @@ impl<'a> PollDiagnostics<'a> {
             clock: &state.clock,
             operation: request.operation_id,
             known: Default::default(),
+            unchanged: Default::default(),
+        }
+    }
+
+    /// `task` is held for the reason it was last assessed with ([`hold_memo`]): the poll
+    /// is not empty, and the decision was recorded when the hold was assessed.
+    fn unchanged(&self, task: Uuid) {
+        self.known.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut unchanged) = self.unchanged.lock() {
+            unchanged.push(task);
         }
     }
 
     fn record(&self, task: Option<Uuid>, reason: &'static str) {
         if let Some(capture) = self.capture {
             self.known.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(task) = task
+                && self.unchanged.lock().is_ok_and(|u| u.contains(&task))
+            {
+                return;
+            }
             capture.decision(
                 self.operation,
                 task,
@@ -527,7 +544,7 @@ async fn offers(
     }
     drop(gate);
     let mut occupancy = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::read_current_node(&mut occupancy, auth).await?;
+    crate::worker_api::lock_current_node(&mut occupancy, auth).await?;
     let free = aq_machine_control::recent::poll_free(&mut occupancy, auth.id(), slot);
     let free = free.await.map_err(crate::machine_api::mapped)?;
     occupancy.commit().await.map_err(db)?;
@@ -690,6 +707,7 @@ async fn offers(
                 .await?;
                 let workspace_tasks = &workspace_tasks;
                 let (placed, items, role_held) = (&placements, &ready.items, &role_held);
+                let polled = &diagnostics;
                 if let Some((task, assessment)) = on_heap(|| {
                     first_eligible_task(&ready, &skipped, Some(&diagnostics), |task| async move {
                         if let Some(code) = role_held.get(&task) {
@@ -717,10 +735,26 @@ async fn offers(
                         {
                             return Ok(Assessment::Blocked(reason));
                         }
+                        // A hold whose evidence is unchanged is not assessed again (R6; the
+                        // fingerprint is read on every poll, so new evidence is seen at once).
+                        let print = hold_memo::fingerprint(pool, task, project).await;
+                        if let Some(print) = &print
+                            && let Some(reason) =
+                                hold_memo::recall(task, revision, print, polled_at)
+                        {
+                            polled.unchanged(task);
+                            return Ok(Assessment::Blocked(reason));
+                        }
                         let seen = holds::history(pool, task).await;
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
+                        match (&a, print) {
+                            (Assessment::Blocked(reason), Some(print)) => {
+                                hold_memo::remember(task, revision, print, reason, polled_at)
+                            }
+                            _ => hold_memo::forget(task),
+                        }
                         #[cfg(feature = "delivery_playbook")]
                         if let Some(replacement) = a.replacement() {
                             let mut connection = pool.acquire().await.map_err(db)?;
@@ -1367,6 +1401,7 @@ mod tests {
                 clock: &clock,
                 operation,
                 known: Default::default(),
+                unchanged: Default::default(),
             };
             let selected =
                 first_eligible_task(&ready, &Default::default(), Some(&diagnostics), |task| {

@@ -93,6 +93,9 @@ impl FakeGit {
             _dir: dir,
         }
     }
+    pub(super) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
     pub(super) fn git(&self) -> Arc<dyn GitPort> {
         Arc::new(SocketGit::new(&self.path))
     }
