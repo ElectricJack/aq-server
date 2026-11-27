@@ -104,6 +104,7 @@ pub async fn compile(
             metadata,
             predecessor,
             &services,
+            (state.clock)().timestamp_millis(),
         );
         match placed.await {
             Ok((environment, alternative)) => (catalog, environment, alternative),
