@@ -1,6 +1,7 @@
 //! Bounded authenticated dashboard reads. No action proxy, no browser authority.
 pub mod actions;
 mod aggregation;
+mod attention;
 mod capacity;
 pub(crate) mod performance;
 pub mod contract {
@@ -19,7 +20,7 @@ use axum::{
     extract::{FromRequestParts, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use contract::*;
 use runtime::Runtime;
@@ -58,6 +59,9 @@ enum Error {
     Restart,
     AuthorizationChanged,
     Unavailable,
+    /// The entry needs its own controls; it cannot be cleared.
+    NotDismissible,
+    RevisionChanged,
 }
 impl From<sqlx::Error> for Error {
     fn from(_: sqlx::Error) -> Self {
@@ -86,6 +90,16 @@ impl IntoResponse for Error {
             ),
             Self::Api(error) => ApiError::from(error),
             Self::Unavailable => ApiError::unavailable(),
+            Self::NotDismissible => ApiError::new(
+                StatusCode::CONFLICT,
+                "attention_not_dismissible",
+                "This entry must be resolved through its own controls; it cannot be cleared",
+            ),
+            Self::RevisionChanged => ApiError::new(
+                StatusCode::CONFLICT,
+                "attention_revision_changed",
+                "The attention subject changed; refresh before dismissing it",
+            ),
         }
         .into_response()
     }
@@ -246,6 +260,7 @@ pub(crate) fn routes_with_reviews(
             &state, reviews, playbooks,
         ))))
         .merge(performance::routes())
+        .merge(attention::routes())
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/overview", get(overview))
         .route("/api/v1/search", get(search::read))

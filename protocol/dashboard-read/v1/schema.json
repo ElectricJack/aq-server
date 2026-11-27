@@ -74,6 +74,34 @@
       ],
       "type": "object"
     },
+    "AttentionDismissal": {
+      "additionalProperties": false,
+      "properties": {
+        "attention_id": {
+          "type": "string"
+        },
+        "dismissed": {
+          "description": "Always true on success; the entry stays cleared across refreshes.",
+          "type": "boolean"
+        },
+        "dismissed_at_ms": {
+          "description": "Original timestamp, unchanged on replay.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expected_revision": {
+          "description": "The source revision whose notification was dismissed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attention_id",
+        "dismissed",
+        "expected_revision",
+        "dismissed_at_ms"
+      ],
+      "type": "object"
+    },
     "AttentionItem": {
       "additionalProperties": false,
       "properties": {
@@ -86,6 +114,10 @@
               "type": "null"
             }
           ]
+        },
+        "dismissible": {
+          "description": "True when the entry is informational and may be cleared with\n`POST /api/v1/attention/{attention_id}/dismiss`. Clearing hides this notification\nfor the caller only; it never resolves the underlying record. Absent\n(false) for unresolved decisions and other entries that need their own\ncontrols.",
+          "type": "boolean"
         },
         "id": {
           "type": "string"
@@ -148,6 +180,45 @@
         "internal_work"
       ],
       "type": "string"
+    },
+    "AttentionPage": {
+      "additionalProperties": false,
+      "description": "One page of the full attention list, with the coverage of every source behind it.",
+      "properties": {
+        "has_more": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AttentionItem"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sources": {
+          "description": "Per-source coverage, as in the overview, so a partial list is not read as complete.",
+          "items": {
+            "$ref": "#/$defs/SourceObservation"
+          },
+          "type": "array"
+        },
+        "total": {
+          "$ref": "#/$defs/Total",
+          "description": "Entries matching the filter. Unknown, not zero, while an owner is unavailable."
+        }
+      },
+      "required": [
+        "items",
+        "has_more",
+        "total",
+        "sources"
+      ],
+      "type": "object"
     },
     "AvailabilityReason": {
       "enum": [
@@ -562,6 +633,51 @@
         },
         "data": {
           "$ref": "#/$defs/Page2"
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        },
+        "pending_operations": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "server_time": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "api_version",
+        "request_id",
+        "server_time",
+        "scope",
+        "data",
+        "observation",
+        "pending_operations",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "Envelope11": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "#/$defs/ApiVersion"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "data": {
+          "$ref": "#/$defs/AttentionPage"
         },
         "observation": {
           "$ref": "#/$defs/Observation"
@@ -4294,6 +4410,12 @@
     },
     {
       "$ref": "#/$defs/Envelope10"
+    },
+    {
+      "$ref": "#/$defs/Envelope11"
+    },
+    {
+      "$ref": "#/$defs/AttentionDismissal"
     },
     {
       "$ref": "#/$defs/QuestionInboxPage"

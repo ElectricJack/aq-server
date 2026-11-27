@@ -63,6 +63,7 @@ pub fn attention(
         impact: "Review the owning record for current context".into(),
         since: detail.since,
         action: None,
+        dismissible: false,
     }
 }
 
@@ -101,6 +102,39 @@ impl Contribution {
     }
 }
 impl OverviewSources {
+    /// Ids of the collected entries that may be cleared, to look up what the user cleared.
+    pub fn clearable_ids(&self) -> Vec<String> {
+        [
+            &self.attempts,
+            &self.ready,
+            &self.reviews,
+            &self.results,
+            &self.settlements,
+            &self.operations,
+            &self.internal,
+        ]
+        .into_iter()
+        .flat_map(|c| &c.attention)
+        .filter(|a| crate::attention::dismissible(&a.id))
+        .map(|a| a.id.clone())
+        .collect()
+    }
+    /// Drop entries the user cleared. Only entries that may be cleared are
+    /// dropped, so a stored id can never hide a decision or other open work.
+    pub fn without_cleared(&mut self, cleared: &std::collections::BTreeSet<String>) {
+        for c in [
+            &mut self.attempts,
+            &mut self.ready,
+            &mut self.reviews,
+            &mut self.results,
+            &mut self.settlements,
+            &mut self.operations,
+            &mut self.internal,
+        ] {
+            c.attention
+                .retain(|a| !(cleared.contains(&a.id) && crate::attention::dismissible(&a.id)));
+        }
+    }
     pub fn overview(
         self,
         projects: impl IntoIterator<Item = ProjectRef>,
@@ -149,6 +183,9 @@ impl OverviewSources {
             data.sources.extend(c.sources);
             data.attention.extend(c.attention);
             data.recent_outcomes.extend(c.outcomes);
+        }
+        for item in &mut data.attention {
+            item.dismissible = crate::attention::dismissible(&item.id);
         }
         if truncated {
             data.sources
