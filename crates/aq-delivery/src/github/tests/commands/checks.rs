@@ -12,7 +12,10 @@ async fn await_checks_completes_once_with_passed_failed_conflict_closed_or_timeo
     let p = poll_of(&delivery, 1_000, 5_000).await;
     let c = p.completion.unwrap();
     assert_eq!((c.outcome, c.output), ("passed", json!({})));
-    assert_eq!(p.observed.unwrap().checks_state, "passed");
+    let seen = p.observed.unwrap();
+    assert_eq!(seen.checks_state, "passed");
+    // The checks were evaluated on the pull request's head.
+    assert_eq!(seen.checks_head.as_deref(), Some("a".repeat(40).as_str()));
 
     poll(
         &mock,
@@ -26,7 +29,9 @@ async fn await_checks_completes_once_with_passed_failed_conflict_closed_or_timeo
         (c.outcome, c.output),
         ("failed", json!({"names": ["unit"]}))
     );
-    assert_eq!(p.observed.unwrap().checks_failed, ["unit"]);
+    let seen = p.observed.unwrap();
+    assert_eq!(seen.checks_failed, ["unit"]);
+    assert_eq!(seen.checks_head.as_deref(), Some("a".repeat(40).as_str()));
 
     // A conflict is found before the checks are read.
     mock.reply(
@@ -36,7 +41,10 @@ async fn await_checks_completes_once_with_passed_failed_conflict_closed_or_timeo
     );
     let p = poll_of(&delivery, 1_000, 5_000).await;
     assert_eq!(p.completion.unwrap().outcome, "conflict");
-    assert_eq!(p.observed.unwrap().mergeable, "conflicting");
+    let seen = p.observed.unwrap();
+    assert_eq!(seen.mergeable, "conflicting");
+    // No checks were evaluated, so no head is claimed for them.
+    assert_eq!((seen.checks_state, seen.checks_head), ("none", None));
 
     // Closed without a merge (and merged elsewhere) is `closed`.
     mock.reply(200, vec![], pull(7, json!({"state": "closed"})));
