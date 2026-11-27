@@ -1109,6 +1109,7 @@ dependencies = [
  "aq-command-registry",
  "aq-intelligence-config",
  "aq-internal-work",
+ "aq-machine-control",
  "aq-responses-transport",
  "aq-role-settings",
  "aq-server",

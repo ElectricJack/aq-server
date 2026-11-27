@@ -12,6 +12,7 @@ pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_mach
 pub mod allocation;
 pub mod attempts;
 pub mod closed_launch;
+pub mod connections;
 pub mod fresh;
 mod handoffs;
 pub mod hold_memo;

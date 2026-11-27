@@ -566,13 +566,17 @@ fn shorten_message(mut body: String) -> String {
 }
 
 async fn publish(c: &Config, credential: &Path, body: &str, actions: &Path) -> Result<()> {
-    let pool = sqlx::PgPool::connect(&c.database_url).await?;
+    // One short connection, closed before the HTTP retries: no pool, and no
+    // session held for their duration.
+    use sqlx::Connection as _;
+    let mut conn = sqlx::PgConnection::connect(&c.database_url).await?;
     let existing: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM central_supervisor_replies WHERE dispatch_id=$1)",
     )
     .bind(c.central.dispatch_id)
-    .fetch_one(&pool)
+    .fetch_one(&mut conn)
     .await?;
+    conn.close().await?;
     if existing {
         return Ok(());
     }

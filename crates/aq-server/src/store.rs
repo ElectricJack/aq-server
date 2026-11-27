@@ -365,6 +365,7 @@ fn timed(pool: &PgPool, max: u32, waits: Waits, name: Option<&'static str>) -> P
     PgPoolOptions::new()
         .max_connections(max)
         .acquire_timeout(acquire)
+        .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
         .after_connect(move |connection, _| {
             let (statement, lock, idle) = (statement.clone(), lock.clone(), idle.clone());
             Box::pin(async move {
@@ -532,6 +533,7 @@ impl Store {
         let control_pool = PgPoolOptions::new()
             .max_connections(limits.control_connections as u32)
             .acquire_timeout(Duration::from_secs(2))
+            .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
             .connect_lazy_with(pool.connect_options().as_ref().clone());
         let ms = Duration::from_millis;
         let (renewals, presences) = (limits.renewal_connections, limits.presence_connections);

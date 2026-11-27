@@ -253,7 +253,12 @@ fn installed(config: &ServiceConfig, service_pool: &PgPool) -> Result<Option<(Co
     let pool = if c.database_url == config.database_url {
         service_pool.clone()
     } else {
-        PgPool::connect_lazy(&c.database_url)?
+        // A different database: a pool of its own for this poll only, never
+        // the library default of ten sessions kept for ten idle minutes.
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
+            .connect_lazy(&c.database_url)?
     };
     let host = Supervisor::new(
         pool,
@@ -309,7 +314,8 @@ pub async fn run(path: &Path) -> Result<()> {
     let config = ServiceConfig::load(path)?;
     prepare_runtime(&config)?;
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(8)
+        .max_connections(aq_machine_control::connections::SUPERVISOR_SERVICE_POOL)
+        .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
         .connect(&config.database_url)
         .await?;
     let mut lease = sqlx::PgConnection::connect(&config.database_url).await?;
