@@ -282,7 +282,15 @@ async fn accepts_plan(
     plan: &Plan,
     human_home_review: bool,
 ) -> Result<bool, AppError> {
-    if !plan.complete() || !check_passed(db, plan).await? {
+    if !plan.complete() {
+        return Ok(false);
+    }
+    // No source changed: there is nothing to integrate or to accept, and
+    // delivery's own judgment decides whether the result meets the task.
+    if plan.sources.values().all(|s| !s.changed) {
+        return Ok(true);
+    }
+    if !check_passed(db, plan).await? {
         return Ok(false);
     }
     for source in plan.sources.values().filter(|s| s.changed) {
@@ -434,6 +442,32 @@ mod tests {
             target_ref: Some("refs/heads/main".into()),
             publication_mode: Some("pull_request".into()),
         }
+    }
+
+    #[tokio::test]
+    async fn a_plan_with_no_changed_source_needs_no_integrated_checks() {
+        let database = crate::test_support::TestDb::create().await;
+        let _store = database.store().await;
+        let pool = database.pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let (home, dependency) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut unchanged = source(home, 'a');
+        unchanged.changed = false;
+        let mut readonly = source(dependency, 'd');
+        readonly.changed = false;
+        let mut plan = Plan {
+            home,
+            task: Uuid::new_v4(),
+            sources: BTreeMap::from([(home, unchanged), (dependency, readonly)]),
+            missing_projects: vec![],
+        };
+        assert!(accepts_plan(&mut conn, &plan, false).await.unwrap());
+        // An incomplete plan still waits, and a changed source still needs checks.
+        plan.missing_projects.push(Uuid::new_v4());
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+        plan.missing_projects.clear();
+        plan.sources.get_mut(&home).unwrap().changed = true;
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
     }
 
     #[tokio::test]
