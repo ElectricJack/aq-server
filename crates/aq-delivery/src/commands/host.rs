@@ -14,7 +14,7 @@ use crate::github::{GitHubApp, GitHubAppConfig};
 use crate::policy::{GitHubAdapter, GitHubRepository, UnconfiguredGitHub};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 /// The longest title and body the host sends with a pull request.
@@ -30,6 +30,15 @@ impl Delivery {
             Err(_) => Arc::new(UnconfiguredGitHub),
         };
         Self::new(Arc::new(SocketGit::new(git_socket)), github)
+    }
+
+    /// The same commands, giving each aq-git call `deadline` (Settings
+    /// `delivery-limits.git_transfer_timeout_ms`).
+    pub fn git_waiting(&self, git_socket: &Path, deadline: Duration) -> Self {
+        Self::new(
+            Arc::new(SocketGit::new(git_socket).waiting(deadline)),
+            self.github.clone(),
+        )
     }
 }
 
