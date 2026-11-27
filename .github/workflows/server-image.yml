@@ -29,7 +29,6 @@ env:
   # The compile-time epic flags aq-ms1 runs with. Drop one here when its epic
   # is confirmed and the flag is removed (docs/operations/epic-feature-retirement.md).
   CARGO_FEATURES: project_environments,supervisor_full_access
-  AQ_DELIVERY_PLAYBOOK: 'true'
   # The profile aq-ms1's images have always used (AGENTS.md "Docker images");
   # release.yml builds `release`.
   CARGO_PROFILE: ci-image
@@ -106,7 +105,6 @@ jobs:
             AQ_PROTOCOL_MAX=${{ steps.meta.outputs.protocol_max }}
             CARGO_PROFILE=${{ env.CARGO_PROFILE }}
             CARGO_FEATURES=${{ env.CARGO_FEATURES }}
-            AQ_DELIVERY_PLAYBOOK=${{ env.AQ_DELIVERY_PLAYBOOK }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
 

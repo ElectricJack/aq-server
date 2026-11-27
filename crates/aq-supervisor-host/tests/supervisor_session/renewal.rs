@@ -20,7 +20,16 @@ async fn physical_renewal_requires_next_sequence_and_later_deadline() {
         .renew(case.central.subject.actor_id(), 1, 10000)
         .await
         .unwrap();
-    let after = host.observe(case.central.subject.actor_id()).await.unwrap();
+    // Physical renewal stages renew.request; the guardian applies it on its
+    // next loop, so wait for it instead of racing a single observation.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let after = loop {
+        let observed = host.observe(case.central.subject.actor_id()).await.unwrap();
+        if observed.permit_sequence >= 2 || tokio::time::Instant::now() >= deadline {
+            break observed;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
     assert_eq!(after.guardian, before.guardian);
     assert_eq!(after.permit_sequence, 2);
     assert!(after.permit_deadline_boot_ms > before.permit_deadline_boot_ms);
