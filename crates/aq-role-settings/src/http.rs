@@ -10,8 +10,15 @@
 //! | `/profiles/snapshot` | the active digest and store revision | | |
 //! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
 //! | `/observation-limits` | the node observation limits: `{limits, revision}` | replace | |
+<<<<<<< HEAD
 //! | `/delivery-document` | the delivery document: `{markdown, revision}` | replace | |
 //! | `/delivery-limits` | the delivery limits: `{limits, revision}` | replace | |
+=======
+//! | `/node-limits` | the node limits (headroom, build-cache keys, deferral attention): `{limits, revision}` | replace | |
+//! | `/supervisor-document` | the project supervisor's role text: `{markdown, revision}`; empty means the compiled text | replace | |
+//! | `/delivery-document` | the delivery document: `{markdown, revision}` (feature `delivery_playbook`) | replace | |
+//! | `/delivery-limits` | the delivery limits: `{limits, revision}` (feature `delivery_playbook`) | replace | |
+>>>>>>> refs/remotes/central/main
 //!
 //! Revisions travel as decimal strings, as in the other Settings routes.
 use crate::{Change, Document, Error, Mutation, Result, invalid, store};
@@ -57,6 +64,8 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/profiles/limits", value.clone())
         .route("/api/settings/routing-document", value.clone())
         .route("/api/settings/observation-limits", value.clone())
+        .route("/api/settings/node-limits", value.clone())
+        .route("/api/settings/supervisor-document", value.clone())
         .route("/api/settings/profiles/snapshot", read);
     let router = router
         .route("/api/settings/delivery-document", value.clone())
@@ -72,6 +81,12 @@ enum Target {
     Snapshot,
     RoutingDocument,
     ObservationLimits,
+<<<<<<< HEAD
+=======
+    NodeLimits,
+    SupervisorDocument,
+    #[cfg(feature = "delivery_playbook")]
+>>>>>>> refs/remotes/central/main
     DeliveryDocument,
     DeliveryLimits,
 }
@@ -89,6 +104,12 @@ fn target(path: &str) -> Result<Target> {
         ("selection-defaults", None) => Ok(Target::SelectionDefaults),
         ("routing-document", None) => Ok(Target::RoutingDocument),
         ("observation-limits", None) => Ok(Target::ObservationLimits),
+<<<<<<< HEAD
+=======
+        ("node-limits", None) => Ok(Target::NodeLimits),
+        ("supervisor-document", None) => Ok(Target::SupervisorDocument),
+        #[cfg(feature = "delivery_playbook")]
+>>>>>>> refs/remotes/central/main
         ("delivery-document", None) => Ok(Target::DeliveryDocument),
         ("delivery-limits", None) => Ok(Target::DeliveryLimits),
         ("profiles", Some("limits")) => Ok(Target::Limits),
@@ -151,9 +172,14 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
         },
         Target::SelectionDefaults => {
             let settings = store::settings(pool).await?;
+            let mut defaults =
+                serde_json::to_value(&settings.selection_defaults).map_err(|_| Error::Internal)?;
+            // A default-valued backoff can be absent in the stored document.
+            defaults["launch_retry_backoff"] =
+                json!(settings.selection_defaults.launch_retry_backoff);
             Ok(json!({
                 "revision": settings.selection_defaults_revision.to_string(),
-                "selection_defaults": settings.selection_defaults,
+                "selection_defaults": defaults,
             }))
         }
         Target::Limits => {
@@ -178,6 +204,19 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
             let (limits, revision) = store::observation_limits(&mut *pool.acquire().await?).await?;
             Ok(json!({"limits": limits, "revision": revision.to_string()}))
         }
+<<<<<<< HEAD
+=======
+        Target::NodeLimits => {
+            let (limits, revision) = store::node_limits(&mut *pool.acquire().await?).await?;
+            Ok(json!({"limits": limits, "revision": revision.to_string()}))
+        }
+        Target::SupervisorDocument => {
+            let (markdown, revision) =
+                store::supervisor_document(&mut *pool.acquire().await?).await?;
+            Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
+        }
+        #[cfg(feature = "delivery_playbook")]
+>>>>>>> refs/remotes/central/main
         Target::DeliveryDocument => {
             let (markdown, revision) = store::delivery_document(pool).await?;
             Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
@@ -207,19 +246,13 @@ struct Write {
     expected_revision: String,
     operation_id: Uuid,
 }
-async fn apply(pool: &PgPool, actor: Uuid, mutation: Mutation, now_ms: i64) -> Result<Value> {
-    let receipt = store::apply(pool, actor, &mutation, now_ms).await?;
+async fn apply(writer: crate::Writer<'_>, mutation: Mutation) -> Result<Value> {
+    let receipt = store::apply_referenced(writer, &mutation, None).await?;
     Ok(json!({"revision": receipt.revision.to_string(), "digest": receipt.digest}))
 }
 /// `PUT`: `{markdown | selection_defaults | limits, expected_revision,
 /// operation_id}`, answered with `{revision, digest}`.
-pub async fn write(
-    pool: &PgPool,
-    actor: Uuid,
-    path: &str,
-    body: Value,
-    now_ms: i64,
-) -> Result<Value> {
+pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result<Value> {
     let bad = || invalid("Invalid settings request");
     let body: Write = serde_json::from_value(body).map_err(|_| bad())?;
     let change = match (
@@ -232,19 +265,36 @@ pub async fn write(
             Change::Save { kind, id, markdown }
         }
         (Target::RoutingDocument, Some(markdown), None, None) => Change::RoutingDocument(markdown),
+        (Target::SupervisorDocument, Some(markdown), None, None) => {
+            Change::SupervisorDocument(markdown)
+        }
         (Target::ObservationLimits, None, None, Some(limits)) => {
             Change::ObservationLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
+<<<<<<< HEAD
         (Target::DeliveryDocument, Some(markdown), None, None) => {
             Change::DeliveryDocument(markdown)
         }
         (Target::DeliveryLimits, None, None, Some(limits)) => {
             Change::DeliveryLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
+=======
+        (Target::NodeLimits, None, None, Some(limits)) => {
+            Change::NodeLimits(serde_json::from_value(limits).map_err(|_| bad())?)
+        }
+        #[cfg(feature = "delivery_playbook")]
+        (Target::DeliveryDocument, Some(markdown), None, None) => {
+            Change::DeliveryDocument(markdown)
+        }
+        #[cfg(feature = "delivery_playbook")]
+        (Target::DeliveryLimits, None, None, Some(limits)) => Change::DeliveryLimits(
+            crate::delivery::DeliveryLimitsChange::from_request(limits).map_err(|_| bad())?,
+        ),
+>>>>>>> refs/remotes/central/main
         // A key the request does not state keeps its stored value (a client that does not
         // know a key cannot reset it); the merged whole is validated by the save.
         (Target::SelectionDefaults, None, Some(Value::Object(stated)), None) => {
-            let stored = store::settings(pool).await?.selection_defaults;
+            let stored = store::settings(writer.pool).await?.selection_defaults;
             let mut merged = serde_json::to_value(stored).map_err(|_| Error::Internal)?;
             let keys = merged.as_object_mut().ok_or(Error::Internal)?;
             keys.extend(stated);
@@ -260,16 +310,14 @@ pub async fn write(
         expected_revision: revision(&body.expected_revision)?,
         operation_id: body.operation_id,
     };
-    apply(pool, actor, mutation, now_ms).await
+    apply(writer, mutation).await
 }
 /// `DELETE …/{id}?expected_revision=<n>&operation_id=<uuid>`. Refused with
 /// the problems while another document or one of `references` names it.
 pub async fn remove(
-    pool: &PgPool,
-    actor: Uuid,
+    writer: crate::Writer<'_>,
     path: &str,
     query: Option<&str>,
-    now_ms: i64,
     references: crate::References,
 ) -> Result<Value> {
     let bad = || invalid("Give expected_revision and operation_id in the query");
@@ -290,7 +338,7 @@ pub async fn remove(
         expected_revision: revision(parameter("expected_revision")?)?,
         operation_id: parameter("operation_id")?.parse().map_err(|_| bad())?,
     };
-    let receipt = store::apply_referenced(pool, actor, &mutation, now_ms, Some(references)).await?;
+    let receipt = store::apply_referenced(writer, &mutation, Some(references)).await?;
     Ok(json!({"revision": receipt.revision.to_string(), "digest": receipt.digest}))
 }
 

@@ -4,6 +4,15 @@ version = "0.1.3"
 edition.workspace = true
 publish.workspace = true
 
+<<<<<<< HEAD
+=======
+[features]
+# Epic 0 (spec 0016): admits the delivery commands of host catalog 2.3.0.
+delivery_playbook = []
+# Spec 0017: admits the environment commands of host catalog 2.5.0 (with `delivery_playbook`).
+project_environments = []
+
+>>>>>>> refs/remotes/central/main
 [dependencies]
 aq-playbooks-model = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-model", version = "=0.2.0" }
 aq-playbooks-runner = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-runner", version = "=0.2.0" }

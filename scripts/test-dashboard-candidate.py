@@ -78,7 +78,7 @@ class DashboardCandidateTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unsafe archive|regular file|duplicate archive"):
                     CHECK.verify(self.root)
 
-    def test_manifest_digest_and_image_checksum_drift_refuse(self):
+    def test_manifest_digest_and_image_wiring_drift_refuse(self):
         self.pin["dashboard_digest"] = "sha256:" + "0" * 64
         self.save_pin()
         with self.assertRaisesRegex(ValueError, "manifest SHA256 mismatch"):
@@ -86,7 +86,7 @@ class DashboardCandidateTests(unittest.TestCase):
         self.pin = json.loads((CHECK.ROOT / "vendor/dashboard-candidate.json").read_bytes())
         self.save_pin()
         docker = self.root / "Dockerfile"
-        docker.write_text(docker.read_text().replace(self.pin["archive_sha256"], "0" * 64))
+        docker.write_text(docker.read_text().replace("COPY vendor/aq-dashboard-", "COPY vendor/unverified-dashboard-"))
         with self.assertRaisesRegex(ValueError, "Docker server stage"):
             CHECK.verify(self.root)
 

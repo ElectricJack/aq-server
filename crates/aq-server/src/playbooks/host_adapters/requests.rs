@@ -19,8 +19,10 @@ use aq_playbook_host::runner::CancellationResult;
 
 pub use aq_playbook_domain::host_requests::*;
 
-fn pin(value: &Value) -> Result<ArtifactPin> {
-    serde_json::from_value(value.clone()).map_err(|_| Error::Invalid)
+struct Completion<'a> {
+    key: OperationKey<'a>,
+    result: HostResult,
+    note: Option<&'a str>,
 }
 
 impl Service {
@@ -34,23 +36,24 @@ impl Service {
             name if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) => {
                 (json!("delivery"), "aq.delivery.completed")
             }
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            "environment.build" | "environment.admit" => {
+                (json!("environment"), "aq.environment.completed")
+            }
             _ => return Err(Error::Invalid),
         })
     }
 
     /// Records the durable intent (accepted effect row and running operation
     /// row) and commits it before any external effect.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn record_operation(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
-        identity: &str,
-        check: Option<&str>,
-        request: &Value,
+        effect: EffectIdentity<'_>,
+        admission: OperationRequest<'_>,
     ) -> Result<HostResult> {
+        let id = effect.grant;
+        let intent = effect.intent;
         let operation = self.operation(intent)?;
         let accepted = HostResult {
             outcome: "accepted".into(),
@@ -58,12 +61,8 @@ impl Service {
         };
         self.record(
             &mut tx,
-            id,
-            revision,
-            intent,
-            identity,
-            &accepted.outcome,
-            &accepted.output,
+            effect,
+            EffectReceipt::new(&accepted.outcome, &accepted.output),
         )
         .await?;
         Operations(&self.namespace)
@@ -73,8 +72,8 @@ impl Service {
                 &intent.id,
                 &intent.command.name,
                 &intent.input["subject"],
-                check,
-                request,
+                admission.check,
+                admission.body,
                 self.now()?,
             )
             .await?;
@@ -95,16 +94,14 @@ impl Service {
     /// race returns the retained one.
     pub(super) async fn complete_operation(
         &self,
-        operation: Uuid,
-        command: &str,
-        intent_id: &str,
+        key: OperationKey<'_>,
         result: HostResult,
         note: Option<&str>,
     ) -> Result<HostResult> {
         let mut tx = self.tx().await?;
         self.namespace_locked(&mut tx).await?;
         let result = self
-            .retain_completion(&mut tx, operation, command, intent_id, result, note)
+            .retain_completion(&mut tx, Completion { key, result, note })
             .await?;
         tx.commit().await?;
         Ok(result)
@@ -113,12 +110,14 @@ impl Service {
     async fn retain_completion(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        operation: Uuid,
-        command: &str,
-        intent_id: &str,
-        result: HostResult,
-        note: Option<&str>,
+        completion: Completion<'_>,
     ) -> Result<HostResult> {
+        let Completion { key, result, note } = completion;
+        let OperationKey {
+            operation,
+            command,
+            intent_id,
+        } = key;
         let (_, contract) = self.completion_contract(command)?;
         let payload = json!({"outcome": result.outcome, "output": result.output});
         self.registry()
@@ -147,16 +146,19 @@ impl Service {
         )?;
         self.seal_event(
             tx,
-            contract,
-            event_id,
-            operation,
-            intent_id,
-            &result.output["subject"],
-            payload,
+            HostEvent {
+                contract,
+                event_id,
+                operation,
+                causation: intent_id,
+                subject: &result.output["subject"],
+                payload,
+            },
         )
         .await?;
         Ok(result)
     }
+<<<<<<< HEAD
 
     // ------------------------------------------------------- work completion
 
@@ -947,4 +949,12 @@ impl Service {
         self.validated(intent, &result.outcome, &result.output)?;
         Ok(result)
     }
+=======
+>>>>>>> refs/remotes/central/main
 }
+
+mod checks;
+mod decisions;
+mod judgments;
+mod observation;
+mod work;

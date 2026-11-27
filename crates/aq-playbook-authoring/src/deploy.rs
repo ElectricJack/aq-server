@@ -45,6 +45,12 @@ pub trait Server: Host + Deployer {
     fn routing_host10(&self) -> Option<crate::continuity::Target> {
         None
     }
+    /// The built-in delivery record for the namespace the engine runs
+    /// ([`crate::builtin::delivery`]); none while the engine is closed.
+    #[cfg(feature = "delivery_playbook")]
+    fn delivery(&self) -> Option<crate::SourceRecord> {
+        Some(crate::builtin::delivery(false))
+    }
     /// The server clock, in milliseconds since the Unix epoch.
     fn now_ms(&self) -> i64;
     /// Submits the internal task `id`; submitting an id again changes nothing.

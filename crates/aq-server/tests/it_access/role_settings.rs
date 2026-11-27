@@ -108,14 +108,10 @@ impl Fixture {
     async fn save(&self, kind: Kind, id: &str, markdown: &str) -> Result<Receipt, Error> {
         let expected = self.revision_of(kind, id).await;
         settings::save(
-            &self.pool,
-            self.owner,
+            settings::Writer::new(&self.pool, self.owner, NOW).edit(expected, Uuid::new_v4()),
             kind,
             id,
             markdown,
-            expected,
-            Uuid::new_v4(),
-            NOW,
         )
         .await
     }
@@ -127,12 +123,9 @@ impl Fixture {
             ..current.limits
         };
         settings::save_limits(
-            &self.pool,
-            self.owner,
+            settings::Writer::new(&self.pool, self.owner, NOW)
+                .edit(current.limits_revision, Uuid::new_v4()),
             &limits,
-            current.limits_revision,
-            Uuid::new_v4(),
-            NOW,
         )
         .await
         .unwrap();
@@ -150,25 +143,57 @@ impl Fixture {
             .await
             .unwrap()
     }
-    async fn call(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<Value>,
-        owner: bool,
-        csrf: bool,
-    ) -> (StatusCode, Value) {
-        let email = if owner {
-            "owner@localhost"
-        } else {
-            "viewer@localhost"
-        };
+    fn owner(&self) -> Client<'_> {
+        Client {
+            app: &self.app,
+            email: "owner@localhost",
+            csrf: false,
+        }
+    }
+    fn owner_write(&self) -> Client<'_> {
+        Client {
+            app: &self.app,
+            email: "owner@localhost",
+            csrf: true,
+        }
+    }
+    fn viewer_read(&self) -> Client<'_> {
+        Client {
+            app: &self.app,
+            email: "viewer@localhost",
+            csrf: false,
+        }
+    }
+    fn viewer(&self) -> Client<'_> {
+        Client {
+            app: &self.app,
+            email: "viewer@localhost",
+            csrf: true,
+        }
+    }
+}
+struct Client<'a> {
+    app: &'a Router,
+    email: &'static str,
+    csrf: bool,
+}
+impl Client<'_> {
+    async fn get(self, path: &str) -> (StatusCode, Value) {
+        self.send("GET", path, None).await
+    }
+    async fn put(self, path: &str, body: Value) -> (StatusCode, Value) {
+        self.send("PUT", path, Some(body)).await
+    }
+    async fn delete(self, path: &str) -> (StatusCode, Value) {
+        self.send("DELETE", path, None).await
+    }
+    async fn send(self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .method(method)
             .uri(path)
             .header("content-type", "application/json")
-            .header("x-aq-dev-email", email);
-        if csrf {
+            .header("x-aq-dev-email", self.email);
+        if self.csrf {
             request = request.header("X-AQ-Request", "1");
         }
         let body = Body::from(body.map(|v| v.to_string()).unwrap_or_default());
@@ -193,6 +218,7 @@ fn problems(error: Error) -> Vec<String> {
     }
 }
 
+<<<<<<< HEAD
 #[tokio::test]
 async fn defaults_are_installed_once_and_an_edit_is_not_overwritten() {
     let f = started().await;
@@ -1423,3 +1449,9 @@ async fn model_suggestions_are_read_from_the_discovery_cache_and_never_fail() {
         .await
         .unwrap();
 }
+=======
+mod documents;
+mod owner_routes;
+mod retention;
+mod settings_routes;
+>>>>>>> refs/remotes/central/main

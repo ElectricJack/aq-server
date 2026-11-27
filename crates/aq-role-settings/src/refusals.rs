@@ -37,6 +37,58 @@ pub enum OfferRefusal {
     /// Spec 0017 §5.4: no node's inventory lists `environment`.
     #[cfg(feature = "project_environments")]
     NoNodeHasEnvironment { environment: String },
+    /// The offer needs more than one slot of node `node_id` provides.
+    SlotResourcesShort {
+        node_id: Uuid,
+        required: SlotResources,
+        available: SlotResources,
+    },
+}
+
+/// What an offer needs from one slot, or what one slot of a node provides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotResources {
+    pub cpu_millis: u64,
+    pub memory_bytes: u64,
+    pub disk_bytes: u64,
+}
+impl SlotResources {
+    pub fn new(cpu_millis: u64, memory_bytes: u64, disk_bytes: u64) -> Self {
+        Self {
+            cpu_millis,
+            memory_bytes,
+            disk_bytes,
+        }
+    }
+    /// The refusal when this need exceeds what a slot of `node_id` provides.
+    pub fn short_on(self, available: Self, node_id: Uuid) -> Option<OfferRefusal> {
+        let short = self.cpu_millis > available.cpu_millis
+            || self.memory_bytes > available.memory_bytes
+            || self.disk_bytes > available.disk_bytes;
+        short.then_some(OfferRefusal::SlotResourcesShort {
+            node_id,
+            required: self,
+            available,
+        })
+    }
+    fn shortfall(self, available: Self) -> String {
+        let gib = |bytes: u64| format!("{:.1} GiB ({bytes} bytes)", bytes as f64 / 1073741824.0);
+        let mut parts = vec![];
+        if self.memory_bytes > available.memory_bytes {
+            let (need, have) = (gib(self.memory_bytes), gib(available.memory_bytes));
+            parts.push(format!("memory {need} needed, {have} available"));
+        }
+        if self.cpu_millis > available.cpu_millis {
+            let (need, have) = (self.cpu_millis, available.cpu_millis);
+            parts.push(format!("cpu {need} millicores needed, {have} available"));
+        }
+        if self.disk_bytes > available.disk_bytes {
+            let (need, have) = (gib(self.disk_bytes), gib(available.disk_bytes));
+            parts.push(format!("disk {need} needed, {have} available"));
+        }
+        parts.join("; ")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +165,7 @@ impl OfferRefusal {
             Self::EnvironmentMissingCapability { .. } => "environment_missing_capability",
             #[cfg(feature = "project_environments")]
             Self::NoNodeHasEnvironment { .. } => "no_node_has_environment",
+            Self::SlotResourcesShort { .. } => "slot_resources_short",
         }
     }
     /// Which of the two limits is the one exceeded.
@@ -162,6 +215,14 @@ impl OfferRefusal {
             #[cfg(feature = "project_environments")]
             Self::NoNodeHasEnvironment { environment } => format!(
                 "AQ does not offer this task yet: no node lists environment `{environment}` in its inventory. It is offered once a node can run that environment."
+            ),
+            Self::SlotResourcesShort {
+                node_id,
+                required,
+                available,
+            } => format!(
+                "AQ does not offer this task on node {node_id}: one of its slots is too small ({}). Lower the task's resource needs or give the node's slots more.",
+                required.shortfall(*available)
             ),
         }
     }
@@ -215,27 +276,34 @@ impl OfferRefusal {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct RefusedTask {
+    pub task: Uuid,
+    pub project: Uuid,
+}
+
 /// Record the refusal of `task`'s offer, replacing an earlier one, and keep
 /// the newest `refusals_kept` tasks. A failure only logs: the offer is
 /// refused either way.
-pub async fn record(pool: &PgPool, task: Uuid, project: Uuid, refusal: &OfferRefusal, now_ms: i64) {
-    if let Err(error) = store(pool, task, project, refusal, now_ms).await {
-        tracing::warn!(%task, %error, "the offer refusal was not recorded");
+pub async fn record(pool: &PgPool, task: RefusedTask, refusal: &OfferRefusal, now_ms: i64) {
+    if let Err(error) = store(pool, task, refusal, now_ms).await {
+        tracing::warn!(task=%task.task, %error, "the offer refusal was not recorded");
     }
 }
 async fn store(
     pool: &PgPool,
-    task: Uuid,
-    project: Uuid,
+    subject: RefusedTask,
     refusal: &OfferRefusal,
     now_ms: i64,
 ) -> Result<()> {
+    let RefusedTask { task, project } = subject;
     let kept = crate::settings(pool).await?.limits.refusals_kept;
     let value = serde_json::to_value(refusal).map_err(|_| crate::Error::Internal)?;
     let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO task_offer_refusals(task_id,project_id,refusal,recorded_at_ms) VALUES($1,$2,$3,$4)
-         ON CONFLICT(task_id) DO UPDATE SET project_id=EXCLUDED.project_id,refusal=EXCLUDED.refusal,recorded_at_ms=EXCLUDED.recorded_at_ms",
+         ON CONFLICT(task_id) DO UPDATE SET project_id=EXCLUDED.project_id,refusal=EXCLUDED.refusal,recorded_at_ms=EXCLUDED.recorded_at_ms
+         WHERE task_offer_refusals.refusal IS DISTINCT FROM EXCLUDED.refusal",
     )
     .bind(task)
     .bind(project)
@@ -259,13 +327,14 @@ pub async fn clear(pool: &PgPool, task: Uuid) {
 }
 
 /// Composition resolves startup refusals. Keep an ancestry wait until the
-/// current Graph prerequisites and the exact export pass the publication fence.
+/// current Graph prerequisites and the exact export pass the publication fence,
+/// and a slot that is too small until an offer is published.
 pub async fn clear_after_compose(pool: &PgPool, task: Uuid) {
     clear_matching(pool, task, false).await;
 }
 
 async fn clear_matching(pool: &PgPool, task: Uuid, include_ancestry: bool) {
-    let cleared = sqlx::query("DELETE FROM task_offer_refusals WHERE task_id=$1 AND ($2 OR refusal->>'code' IS DISTINCT FROM 'delivery_ancestry_wait')")
+    let cleared = sqlx::query("DELETE FROM task_offer_refusals WHERE task_id=$1 AND ($2 OR refusal->>'code' NOT IN ('delivery_ancestry_wait','slot_resources_short'))")
         .bind(task)
         .bind(include_ancestry)
         .execute(pool)
@@ -329,5 +398,32 @@ mod tests {
         };
         assert_eq!(missing.shown(1)["code"], "platform_text_missing");
         assert!(missing.message().contains("environment `lab`"));
+    }
+
+    #[test]
+    fn a_slot_too_small_for_the_memory_names_memory_and_both_values() {
+        use super::SlotResources;
+        let slot = |memory_bytes| SlotResources::new(2000, memory_bytes, 1 << 30);
+        let node = uuid::Uuid::new_v4();
+        let (needed, offered) = (slot(6 << 30), slot(4 << 30));
+        assert_eq!(offered.short_on(offered, node), None);
+        let refusal = needed.short_on(offered, node).unwrap();
+        let shown = refusal.shown(7);
+        assert_eq!(shown["code"], "slot_resources_short");
+        assert_eq!(shown["node_id"], node.to_string());
+        assert_eq!(shown["required"]["memory_bytes"], 6u64 << 30);
+        assert_eq!(shown["available"]["memory_bytes"], 4u64 << 30);
+        let message = refusal.message();
+        assert!(
+            message.contains(&format!("node {node}"))
+                && message.contains(
+                    "memory 6.0 GiB (6442450944 bytes) needed, 4.0 GiB (4294967296 bytes) available"
+                ),
+            "{message}"
+        );
+        assert!(
+            !message.contains("cpu") && !message.contains("disk"),
+            "{message}"
+        );
     }
 }

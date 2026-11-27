@@ -256,6 +256,16 @@ async fn locked(
         return Err(refused());
     }
     let old = original(tx, request).await?;
+    if old.is_none() {
+        let scope = &offer.offered.offer.manifest.bindings;
+        crate::task_workspace_resume::fence_start(
+            tx,
+            scope.project_id,
+            scope.task_id,
+            request.binding.attempt_id,
+        )
+        .await?;
+    }
     let decision:Value=sqlx::query_scalar("SELECT d.decision FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) WHERE l.attempt_id=$1 FOR SHARE OF d").bind(request.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
     let decision: Decision = serde_json::from_value(decision).map_err(|_| refused())?;
     if let Some(grant) = &old {
@@ -267,14 +277,9 @@ async fn locked(
         {
             return Err(refused());
         }
-        resolver::fence_for_grant_replay(
-            state,
-            tx,
-            &decision,
-            &request.binding,
-            grant.body.grant.grant_id,
-        )
-        .await?;
+        resolver::Reservation::grant_replay(&request.binding, grant.body.grant.grant_id)
+            .fence(state, tx, &decision)
+            .await?;
         view.active_at(now(state)?)?;
     } else {
         if hot.status != Status::Preparing
@@ -351,6 +356,21 @@ async fn locked(
         return Err(refused());
     }
     let graph_spec = graph::Input::spec(tx, request.binding.attempt_id).await?;
+    #[cfg(feature = "project_environments")]
+    if old.is_none()
+        && aq_machine_control::task_needs::blocks_observation(
+            &mut **tx,
+            (
+                view.project_id,
+                graph_spec.task.task_id,
+                i64::try_from(graph_spec.task.version).map_err(|_| refused())?,
+            ),
+        )
+        .await
+        .map_err(db)?
+    {
+        return Err(refused());
+    }
     let mut graph_context = None;
     let mut expected = Vec::new();
     let mut ceiling = plan

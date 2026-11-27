@@ -52,6 +52,9 @@ impl Context {
                 prepared: self.prepared.clone(),
             })
             .map_err(|_| conflict())?;
+        self.check_journal(request)
+    }
+    fn check_journal(&self, request: &Request) -> Result<(), AppError> {
         let high = self
             .latest_renewal_revision
             .unwrap_or(0)
@@ -85,6 +88,15 @@ impl Context {
         {
             return Err(conflict());
         }
+        self.check_registration_locked(tx, node, request).await?;
+        self.check_prepared_locked(tx, request).await
+    }
+    async fn check_registration_locked(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        node: Uuid,
+        request: &Request,
+    ) -> Result<(), AppError> {
         let history = history::load_locked(tx, self.registration_id).await?;
         if history.metadata.request.identity.node_id != node
             || history.metadata.request.runtime != self.verifier.runtime
@@ -92,11 +104,35 @@ impl Context {
         {
             return Err(conflict());
         }
-        let link:Option<Uuid>=sqlx::query_scalar("SELECT registration_id FROM profiled_launch_registrations WHERE attempt_id=$1 AND node_id=$2 AND boot_id=$3 FOR SHARE").bind(request.binding.attempt_id).bind(node).bind(history.metadata.request.identity.boot_id).fetch_optional(&mut **tx).await.map_err(database)?;
+        let link: Option<Uuid> = sqlx::query_scalar(
+            "SELECT registration_id FROM profiled_launch_registrations WHERE attempt_id=$1 AND \
+             node_id=$2 AND boot_id=$3 FOR SHARE",
+        )
+        .bind(request.binding.attempt_id)
+        .bind(node)
+        .bind(history.metadata.request.identity.boot_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(database)?;
         if link != Some(self.registration_id) {
             return Err(conflict());
         }
-        let row=sqlx::query("SELECT phase,revision,digest,binding,grant_id FROM profiled_owner_journals WHERE attempt_id=$1 FOR SHARE").bind(request.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(database)?.ok_or_else(conflict)?;
+        Ok(())
+    }
+    async fn check_prepared_locked(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        request: &Request,
+    ) -> Result<(), AppError> {
+        let row = sqlx::query(
+            "SELECT phase,revision,digest,binding,grant_id FROM profiled_owner_journals WHERE \
+             attempt_id=$1 FOR SHARE",
+        )
+        .bind(request.binding.attempt_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(database)?
+        .ok_or_else(conflict)?;
         if row.get::<String, _>("phase") != "prepared"
             || row.get::<i64, _>("revision") != self.prepared.revision as i64
             || row.get::<String, _>("digest") != self.prepared.digest.as_str()

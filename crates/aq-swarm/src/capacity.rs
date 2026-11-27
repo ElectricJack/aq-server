@@ -69,6 +69,8 @@ pub struct NodeInput<'a> {
     pub ceiling: Option<NodeCeiling>,
     pub snapshot: Option<&'a Snapshot>,
     pub storage: Option<NodeStorage>,
+    /// The machine's deferral from its fresh machine report, if it defers.
+    pub sandbox_admission: Option<SandboxAdmission>,
 }
 
 pub fn node_capacity(input: NodeInput<'_>, now_ms: u64) -> Result<NodeCapacity, TimeError> {
@@ -83,6 +85,7 @@ pub fn node_capacity(input: NodeInput<'_>, now_ms: u64) -> Result<NodeCapacity, 
         ceiling,
         snapshot,
         storage,
+        sandbox_admission,
     } = input;
     let mut reasons = Vec::new();
     match health {
@@ -96,6 +99,10 @@ pub fn node_capacity(input: NodeInput<'_>, now_ms: u64) -> Result<NodeCapacity, 
         Some(_) => {}
     }
     reasons.extend(ceiling.map(ineligible_reason));
+    let deferred = sandbox_admission.is_some();
+    if deferred {
+        reasons.push(IneligibleReason::SandboxAdmissionDeferred);
+    }
     Ok(NodeCapacity {
         node: EntityRef {
             kind: "worker".into(),
@@ -109,7 +116,14 @@ pub fn node_capacity(input: NodeInput<'_>, now_ms: u64) -> Result<NodeCapacity, 
         slots: NodeSlots {
             total,
             occupied,
-            idle: total.map(|t| t.saturating_sub(occupied)),
+            // A deferring node takes no work, so none of its slots is idle.
+            idle: total.map(|t| {
+                if deferred {
+                    0
+                } else {
+                    t.saturating_sub(occupied)
+                }
+            }),
         },
         eligibility: Eligibility {
             state: if reasons.is_empty() {
@@ -125,6 +139,7 @@ pub fn node_capacity(input: NodeInput<'_>, now_ms: u64) -> Result<NodeCapacity, 
             .transpose()?,
         capability_fresh_until: snapshot.map(|s| timestamp(s.expires_at_ms)).transpose()?,
         storage,
+        sandbox_admission,
     })
 }
 
@@ -151,20 +166,18 @@ pub fn slot_summary(
     if truncated {
         gaps.push("Worker inventory exceeds the bounded read");
     }
-    let unknown_total = unadvertised || truncated;
+    let observed_total = |value| {
+        if unadvertised || truncated {
+            Total::unknown()
+        } else {
+            exact(value)
+        }
+    };
     let reason = (!gaps.is_empty()).then(|| gaps.join("; "));
     let summary = SlotSummary {
-        total: if unknown_total {
-            Total::unknown()
-        } else {
-            exact(total)
-        },
+        total: observed_total(total),
         occupied: exact(occupied_all),
-        idle: if unknown_total {
-            Total::unknown()
-        } else {
-            exact(idle)
-        },
+        idle: observed_total(idle),
         observed_at: timestamp(now_ms)?,
         coverage: Coverage {
             state: if reason.is_some() {

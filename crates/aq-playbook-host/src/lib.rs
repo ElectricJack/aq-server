@@ -16,12 +16,16 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
+use validation::validate_registry;
 
 pub mod drive;
 pub mod engine_retention;
+mod operations;
 pub mod plugins;
 pub mod protected;
 pub mod retention;
+mod validation;
+mod worker;
 pub use aq_playbooks_model as model;
 pub use aq_playbooks_postgres as postgres_storage;
 pub use aq_playbooks_runner as runner;
@@ -49,6 +53,11 @@ pub trait DomainHost: Host {
     /// Use the caller's logical time unless this host owns a live clock.
     fn transition_time(&self, now_ms: i64) -> i64 {
         now_ms
+    }
+    /// Resume an admitted decision, read an exact retained receipt, or prove
+    /// that an expired asynchronous operation was never admitted.
+    fn reconcile_delivery(&mut self, _intent: &Intent) -> Option<DispatchResult> {
+        None
     }
     fn dispatch_unavailable_plugin(&mut self, _intent: &Intent) -> DispatchResult {
         DispatchResult::Unknown {
@@ -115,27 +124,28 @@ impl Default for Limits {
 }
 impl Limits {
     fn validate(&self) -> Result<(), Error> {
-        if !(1..=128).contains(&self.work_queue)
-            || !(1..=32).contains(&self.control_queue)
-            || !(1024..=1_048_576).contains(&self.request_bytes)
-            || !(1024..=1_048_576).contains(&self.response_bytes)
-            || !(1..=64).contains(&self.transitions)
-            || !self.timeouts.valid()
-            || !self.retention.valid()
-            || !self.engine_retention.valid()
-            || self.engine.max_runs == 0
-            || self.engine.max_events == 0
-            || self.engine.max_runs > 10_000
-            || self.engine.max_events > 100_000
-            || self.engine.max_queued_destinations == 0
-            || self.engine.max_queued_destinations > 10_000
-            || self.engine.max_receipts == 0
-            || self.engine.max_receipts > 1_000_000
-            || !(1024..=67_108_864).contains(&self.engine.max_state_bytes)
-        {
-            return Err(Error::Invalid);
-        }
-        Ok(())
+        let valid = self.queues_valid() && self.engine_valid() && self.policies_valid();
+        valid.then_some(()).ok_or(Error::Invalid)
+    }
+
+    fn queues_valid(&self) -> bool {
+        (1..=128).contains(&self.work_queue)
+            && (1..=32).contains(&self.control_queue)
+            && (1024..=1_048_576).contains(&self.request_bytes)
+            && (1024..=1_048_576).contains(&self.response_bytes)
+            && (1..=64).contains(&self.transitions)
+    }
+
+    fn engine_valid(&self) -> bool {
+        (1..=10_000).contains(&self.engine.max_runs)
+            && (1..=100_000).contains(&self.engine.max_events)
+            && (1..=10_000).contains(&self.engine.max_queued_destinations)
+            && (1..=1_000_000).contains(&self.engine.max_receipts)
+            && (1024..=67_108_864).contains(&self.engine.max_state_bytes)
+    }
+
+    fn policies_valid(&self) -> bool {
+        self.timeouts.valid() && self.retention.valid() && self.engine_retention.valid()
     }
 }
 
@@ -217,6 +227,11 @@ pub enum Request {
     Recover {
         now_ms: i64,
     },
+    ReconcileDelivery {
+        intents: Vec<String>,
+        scan_after: Option<String>,
+        now_ms: i64,
+    },
     Binding {
         binding: String,
     },
@@ -242,75 +257,6 @@ impl Request {
                 | Self::DeactivateBinding { .. }
                 | Self::Stop
         )
-    }
-    fn validate(&self) -> Result<(), Error> {
-        let valid = |s: &str| !s.is_empty() && s.len() <= 512 && !s.contains('\0');
-        let authority = |a: &Authority| {
-            valid(&a.actor)
-                && valid(&a.scope)
-                && a.capabilities.len() <= 64
-                && a.capabilities.iter().all(|s| valid(s))
-        };
-        let ok = match self {
-            Self::Install { .. } => true,
-            Self::AdmitOnce { request, .. } => {
-                valid(&request.key)
-                    && valid(&request.binding)
-                    && valid(&request.entry)
-                    && authority(&request.authority)
-            }
-            Self::Admission { key } => valid(key) && key.len() <= 256,
-            Self::Binding { binding } => valid(binding),
-            Self::Event {
-                authenticated_producer,
-                ..
-            } => valid(authenticated_producer),
-            Self::Fanout {
-                event_key, limit, ..
-            } => valid(event_key) && (1..=64).contains(limit),
-            Self::Recover { .. } | Self::CancelEffects { .. } => true,
-            Self::EventStatus { event_key } => valid(event_key),
-            Self::Inspect { query } => query.validate().is_ok() && query.limit <= 32,
-            Self::Activate {
-                binding,
-                artifact,
-                authority: a,
-            }
-            | Self::ActivateAt {
-                binding,
-                artifact,
-                authority: a,
-                ..
-            } => valid(binding) && valid(artifact) && authority(a),
-            Self::ConfigureBinding {
-                binding,
-                artifact,
-                authority: a,
-                schedules,
-                ..
-            } => {
-                valid(binding)
-                    && valid(artifact)
-                    && authority(a)
-                    && model::schedules::BindingSchedule::validate_all(schedules).is_ok()
-            }
-            Self::DeactivateBinding {
-                binding, revision, ..
-            } => valid(binding) && *revision > 0,
-            Self::CollectIntervalEvents { .. } => true,
-            Self::Admit {
-                binding,
-                entry,
-                authority: a,
-                ..
-            } => valid(binding) && valid(entry) && authority(a),
-            Self::Runs { after, limit } => {
-                (1..=100).contains(limit) && after.as_ref().is_none_or(|s| valid(s))
-            }
-            Self::Cancel { run, .. } => valid(run),
-            Self::Tick { .. } | Self::Stop => true,
-        };
-        if ok { Ok(()) } else { Err(Error::Invalid) }
     }
 }
 
@@ -403,6 +349,21 @@ impl Drop for ThreadExit {
         self.0.wake.notify_all();
     }
 }
+pub struct Registration {
+    namespace: String,
+    limits: Limits,
+    registry: Registry,
+}
+impl Registration {
+    pub fn new(namespace: String, limits: Limits, registry: Registry) -> Self {
+        Self {
+            namespace,
+            limits,
+            registry,
+        }
+    }
+}
+
 impl Owner {
     /// The storage factory, including connection establishment and schema work,
     /// executes on the dedicated thread. It must configure bounded I/O itself.
@@ -411,18 +372,18 @@ impl Owner {
         S: Storage + 'static,
         F: FnOnce() -> Result<S, Error> + Send + 'static,
     {
-        Self::start_registered(namespace, limits, Registry::default(), factory, |_| {
-            Ok(UnavailableHost)
-        })
+        Self::start_registered(
+            Registration::new(namespace, limits, Registry::default()),
+            factory,
+            |_| Ok(UnavailableHost),
+        )
         .await
     }
     /// Explicit trusted host registration. Installation checks the full catalog.
     /// Restart reopens pinned artifacts and marks stale extension contracts for
     /// dispatch refusal. Callers supply the actual owning AQ service adapters.
     pub async fn start_registered<S, F, H, HF>(
-        namespace: String,
-        limits: Limits,
-        registry: Registry,
+        registration: Registration,
         factory: F,
         host_factory: HF,
     ) -> Result<Self, Error>
@@ -432,9 +393,14 @@ impl Owner {
         H: DomainHost + 'static,
         HF: FnOnce(AcquiredOwner) -> Result<H, Error> + Send + 'static,
     {
+        let Registration {
+            namespace,
+            limits,
+            registry,
+        } = registration;
         limits.validate()?;
         validate_registry(&registry)?;
-        if namespace.is_empty() || namespace.len() > 512 || namespace.contains('\0') {
+        if !validation::valid(&namespace) {
             return Err(Error::Invalid);
         }
         let shared = Arc::new(Shared {
@@ -456,39 +422,7 @@ impl Owner {
             .name("aq-playbook-owner".into())
             .spawn(move || {
                 let _exit = ThreadExit(shared.clone());
-                let result = factory().and_then(|store| {
-                    let mut engine =
-                        Engine::new(store, namespace, uuid::Uuid::new_v4().to_string())
-                            .map_err(engine_error)?;
-                    engine.config = shared.limits.engine.clone();
-                    let state = engine.snapshot().map_err(engine_error)?;
-                    if state
-                        .artifacts
-                        .values()
-                        .any(|a| !accepts_base(&shared.registry, &a.content.registry))
-                    {
-                        let _ = engine.release();
-                        return Err(Error::Invalid);
-                    }
-                    let mut stale_artifacts = BTreeSet::new();
-                    for (digest, artifact) in &state.artifacts {
-                        remember_contracts(&shared, &artifact.content.registry);
-                        if !plugins_match(&shared.registry, &artifact.content.registry) {
-                            stale_artifacts.insert(digest.clone());
-                        }
-                    }
-                    let _ = shared.stale_artifacts.set(stale_artifacts);
-                    if let Some(policy) = shared
-                        .limits
-                        .engine_retention
-                        .changed(&state.retention.policy)
-                        && let Err(error) = engine.set_retention_policy(policy)
-                    {
-                        let _ = engine.release();
-                        return Err(engine_error(error));
-                    }
-                    Ok(engine)
-                });
+                let result = factory().and_then(|store| worker::open(&shared, namespace, store));
                 let engine = match result {
                     Ok(engine) => engine,
                     Err(e) => {
@@ -496,26 +430,7 @@ impl Owner {
                         return;
                     }
                 };
-                // Probe only interface support at startup, through the actual
-                // acquired Engine. Never retain the returned current metadata.
-                match engine.inspect_catalog(&runner::CatalogQuery::first(
-                    runner::CatalogKind::Definitions,
-                    1,
-                )) {
-                    Ok(_) => {
-                        shared.catalog_supported.store(true, Ordering::Release);
-                    }
-                    Err(runner::CatalogError::Unsupported) => {}
-                    Err(error) => {
-                        let _ = engine.release();
-                        let _ = ready_tx.send(Err(engine_error(error)));
-                        return;
-                    }
-                }
-                let mut host = match host_factory(AcquiredOwner {
-                    namespace: engine.namespace.clone(),
-                    incarnation: engine.owner.clone(),
-                }) {
+                let mut host = match worker::host(&engine, &shared, host_factory) {
                     Ok(host) => host,
                     Err(error) => {
                         let _ = engine.release();
@@ -527,77 +442,7 @@ impl Owner {
                     let _ = engine.release();
                     return;
                 }
-                loop {
-                    let envelope = {
-                        let mut q = shared.queues.lock().unwrap_or_else(|e| e.into_inner());
-                        loop {
-                            if q.closing {
-                                q.work.clear();
-                                q.control.clear();
-                                break None;
-                            }
-                            if let Some(e) = q.control.pop_front().or_else(|| q.work.pop_front()) {
-                                break Some(e);
-                            }
-                            q = shared.wake.wait(q).unwrap_or_else(|e| e.into_inner());
-                        }
-                    };
-                    let Some(envelope) = envelope else {
-                        break;
-                    };
-                    let stop = matches!(
-                        &envelope,
-                        Envelope::Operation {
-                            request: Request::Stop,
-                            ..
-                        }
-                    );
-                    if stop {
-                        shared.catalog_supported.store(false, Ordering::Release);
-                    }
-                    match envelope {
-                        Envelope::Operation { request, reply } => {
-                            let result = if stop {
-                                engine.release().map(|_| Value::Null).map_err(engine_error)
-                            } else {
-                                execute(&engine, &mut host, request, &shared)
-                            };
-                            // A size failure after a commit is unknown, never 'not applied'.
-                            let result = result.and_then(|v| {
-                                if bounded_json(&v, shared.limits.response_bytes) {
-                                    Ok(v)
-                                } else {
-                                    Err(Error::Unknown)
-                                }
-                            });
-                            let _ = reply.send(result);
-                        }
-                        Envelope::Catalog { query, reply } => {
-                            let result = engine
-                                .inspect_catalog(&query)
-                                .map_err(CatalogCallError::Catalog)
-                                .and_then(|page| {
-                                    if serde_json::to_vec(&page).is_ok_and(|bytes| {
-                                        bytes.len() <= shared.limits.response_bytes
-                                    }) {
-                                        Ok(page)
-                                    } else {
-                                        Err(Error::Unknown.into())
-                                    }
-                                });
-                            let _ = reply.send(result);
-                        }
-                    }
-                    if stop {
-                        break;
-                    }
-                }
-                {
-                    let mut q = shared.queues.lock().unwrap_or_else(|e| e.into_inner());
-                    q.closing = true;
-                    q.work.clear();
-                    q.control.clear();
-                }
+                shared.serve(&engine, &mut host);
                 let _ = engine.release();
             })
             .map_err(|_| Error::Thread)?;
@@ -726,254 +571,196 @@ impl Host for UnavailableHost {
         CancellationResult::Refused
     }
 }
-fn execute<S: Storage>(
+
+fn reconcile_delivery<S: Storage>(
     engine: &Engine<S>,
     host: &mut impl DomainHost,
-    request: Request,
-    shared: &Shared,
+    ids: &[String],
+    scan_after: Option<&str>,
+    now_ms: i64,
 ) -> Result<Value, Error> {
-    if let Request::Activate { artifact, .. }
-    | Request::ActivateAt { artifact, .. }
-    | Request::ConfigureBinding { artifact, .. } = &request
-        && shared
-            .stale_artifacts
-            .get()
-            .is_some_and(|stale| stale.contains(artifact))
-    {
-        return Err(Error::Invalid);
-    }
-    host.set_mode(match request {
-        Request::Recover { .. } => HostMode::Reconcile,
-        Request::Cancel { .. } | Request::CancelEffects { .. } => HostMode::Cancel,
-        _ => HostMode::Dispatch,
-    });
-    let value = match request {
-        Request::Inspect { query } => serde_json::to_value(
-            engine
-                .store
-                .inspect(&engine.namespace, &query)
-                .map_err(engine_error)?,
-        )
-        .map_err(engine_error)?,
-        Request::CancelEffects { now_ms } => {
-            serde_json::json!({"cancelled": cancel_effect(engine, host, now_ms)?})
-        }
-        Request::EventStatus { event_key } => {
-            let snapshot = engine.snapshot().map_err(engine_error)?;
-            let event = snapshot.events.get(&event_key).ok_or(Error::Invalid)?;
-            let runs: Vec<_> = event
-                .destinations
-                .iter()
-                .filter_map(|d| d.run.as_deref())
-                .collect();
-            serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.len() - runs.len(),"runs":runs})
-        }
-        Request::AdmitOnce {
-            request,
-            requested_at_ms,
-            now_ms,
-        } => serde_json::to_value(
-            engine
-                .admit_once_at(*request, requested_at_ms, now_ms)
-                .map_err(runner_error)?,
-        )
-        .map_err(engine_error)?,
-        Request::Admission { key } => {
-            serde_json::to_value(engine.admission_receipt(&key).map_err(engine_error)?)
-                .map_err(engine_error)?
-        }
-        Request::Binding { binding } => serde_json::to_value(
-            engine
-                .snapshot()
-                .map_err(engine_error)?
-                .bindings
-                .get(&binding)
-                .ok_or(Error::Invalid)?,
-        )
-        .map_err(engine_error)?,
-        Request::Event {
-            authenticated_producer,
-            epoch,
-            event,
-            requested_at_ms,
-            now_ms,
-        } => serde_json::to_value(
-            engine
-                .admit_event_at(
-                    &authenticated_producer,
-                    *event,
-                    epoch,
-                    requested_at_ms,
-                    now_ms,
-                )
-                .map_err(runner_error)?,
-        )
-        .map_err(engine_error)?,
-        Request::Fanout {
-            event_key,
-            limit,
-            now_ms,
-        } => {
-            serde_json::json!({"admitted": engine.fanout(&event_key, limit, now_ms).map_err(runner_error)?})
-        }
-        Request::Recover { now_ms } => {
-            serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
-        }
-        Request::Install { artifact } => {
-            let registry = artifact.content.registry.clone();
-            engine.install(*artifact).map_err(engine_error)?;
-            remember_contracts(shared, &registry);
-            Value::Null
-        }
-        Request::Activate {
-            binding,
-            artifact,
-            authority,
-        } => {
-            engine
-                .activate(&binding, &artifact, authority)
-                .map_err(engine_error)?;
-            Value::Null
-        }
-        Request::ActivateAt {
-            binding,
-            artifact,
-            authority,
-            now_ms,
-        } => {
-            engine
-                .activate_at(&binding, &artifact, authority, now_ms)
-                .map_err(runner_error)?;
-            Value::Null
-        }
-        Request::ConfigureBinding {
-            binding,
-            artifact,
-            authority,
-            may_activate,
-            schedules,
-            interval_event,
-            now_ms,
-        } => Value::Bool(
-            engine
-                .configure_binding(
-                    &binding,
-                    &artifact,
-                    authority,
-                    may_activate,
-                    &schedules,
-                    interval_event,
-                    now_ms,
-                )
-                .map_err(runner_error)?,
-        ),
-        Request::DeactivateBinding {
-            binding,
-            revision,
-            now_ms,
-        } => Value::Bool(
-            engine
-                .deactivate_binding(&binding, revision, now_ms)
-                .map_err(runner_error)?,
-        ),
-        Request::CollectIntervalEvents { now_ms } => {
-            let count = engine
-                .collect_interval_events(now_ms, 2, |schedule, contract, occurrence| {
-                    EventEnvelope {
-                        producer: "aq.host.bridge@1".into(),
-                        event_id: occurrence.id.clone(),
-                        contract,
-                        scope: occurrence.scope,
-                        correlation: [("operation".into(), occurrence.id)].into(),
-                        subject: Some(occurrence.schedule_id.clone()),
-                        revision: Some(occurrence.index),
-                        causation: None,
-                        occurred_at_ms: Some(occurrence.scheduled_at_ms),
-                        observed_at_ms: Some(now_ms),
-                        payload: serde_json::json!({
-                            "outcome": "reported", "reference": schedule.reference(),
-                            "subject": {"id": occurrence.schedule_id, "revision": occurrence.index}
-                        }),
-                    }
-                })
-                .map_err(runner_error)?;
-            serde_json::json!(count)
-        }
-        Request::Admit {
-            binding,
-            entry,
-            input,
-            authority,
-            now_ms,
-        } => Value::String(
-            engine
-                .admit(&binding, &entry, input, authority, now_ms)
-                .map_err(engine_error)?,
-        ),
-        Request::Runs { after, limit } => serde_json::to_value(
-            engine
-                .query(&IndexQuery::Runs { after, limit })
-                .map_err(engine_error)?,
-        )
-        .map_err(engine_error)?,
-        Request::Tick { now_ms } => {
-            let mut now_ms = now_ms.max(host.transition_time(now_ms));
-            if shared.plugin_artifacts.load(Ordering::Acquire)
-                && engine
-                    .snapshot()
-                    .map_err(engine_error)?
-                    .intents
-                    .values()
-                    .any(|intent| {
-                        intent.deadline_at_ms > now_ms
-                            && !intent.cancel_requested
-                            && matches!(
-                                intent.status,
-                                IntentStatus::Dispatched | IntentStatus::Unknown
-                            )
-                            && plugins::command_plugin(&intent.command.name).is_some()
-                    })
-            {
-                host.set_mode(HostMode::RetryPlugins);
-                let recovery = engine.recover(host, now_ms);
-                host.set_mode(HostMode::Dispatch);
-                recovery.map_err(engine_error)?;
-            }
-            let mut guarded = PluginCatalogHost {
-                engine,
-                host,
-                stale_artifacts: shared
-                    .stale_artifacts
-                    .get()
-                    .filter(|stale| !stale.is_empty()),
-            };
-            // A slow host operation can use most of a tick. Start each new
-            // command's deadline when its own transition runs and check an
-            // existing deadline against the current time before dispatch.
-            let mut transitions = 0;
-            while transitions < shared.limits.transitions {
-                now_ms = now_ms.max(guarded.host.transition_time(now_ms));
-                if engine
-                    .drive(&mut guarded, now_ms, 1)
-                    .map_err(engine_error)?
-                    == 0
-                {
-                    break;
-                }
-                transitions += 1;
-            }
-            serde_json::json!({"transitions": transitions})
-        }
-        Request::Cancel { run, now_ms } => {
-            engine.cancel(&run, now_ms).map_err(engine_error)?;
-            cancel_effect(engine, host, now_ms)?;
-            Value::Null
-        }
-        // Stop acknowledgement proves this thread reached a boundary, not that
-        // external effects stopped; this foundation has no registered effects.
-        Request::Stop => Value::Null,
+    use runner::transition::{TransitionOutcome, TransitionRequest};
+    let mut page = (Vec::new(), None);
+    let mut plan = |state: &mut runner::State| {
+        page = delivery_recovery_page(state, ids, scan_after, now_ms)?;
+        Ok(false)
     };
-    Ok(value)
+    let request = &mut TransitionRequest {
+        operation: "read_delivery_recovery_page",
+        plan: &mut plan,
+    };
+    match engine
+        .store
+        .transition_v1(&engine.namespace, &engine.owner, request)
+        .map_err(engine_error)?
+    {
+        TransitionOutcome::Unsupported => {
+            page = delivery_recovery_page(
+                &engine.snapshot().map_err(engine_error)?,
+                ids,
+                scan_after,
+                now_ms,
+            )
+            .map_err(engine_error)?;
+        }
+        TransitionOutcome::Unchanged => {}
+        TransitionOutcome::Committed { .. } => return Err(Error::Unknown),
+    }
+    let (candidates, next_after) = page;
+    let mut count = 0;
+    for intent in candidates {
+        if routing_expired_before_dispatch(&intent) {
+            let at = host.transition_time(now_ms).max(now_ms);
+            engine.cancel(&intent.run, at).map_err(engine_error)?;
+            count += 1;
+            continue;
+        }
+        let Some(answer) = host.reconcile_delivery(&intent) else {
+            continue;
+        };
+        let close = matches!(&answer, DispatchResult::Rejected { reason } if reason == DELIVERY_ADMISSION_EXPIRED);
+        if !close
+            && !matches!(
+                answer,
+                DispatchResult::Accepted { .. } | DispatchResult::Completed { .. }
+            )
+        {
+            continue;
+        }
+        let at = host.transition_time(now_ms).max(now_ms);
+        if !close || intent.reason.as_deref() != Some(DELIVERY_ADMISSION_EXPIRED) {
+            engine
+                .record_result(&intent.id, answer, at)
+                .map_err(engine_error)?;
+        }
+        if close {
+            // A rejected reply leaves an already blocked run blocked in the
+            // engine. Retire this exact run after sealing its no-effect result.
+            // A later page also finds the rejected intent if the process stops
+            // between these two engine commits.
+            engine.cancel(&intent.run, at).map_err(engine_error)?;
+        }
+        count += 1;
+    }
+    Ok(serde_json::json!({"reconciled":count,"next_after":next_after}))
+}
+
+pub const DELIVERY_ADMISSION_EXPIRED: &str = "delivery_request_expired_before_admission";
+
+fn delivery_recovery_page(
+    state: &runner::State,
+    ids: &[String],
+    after: Option<&str>,
+    now_ms: i64,
+) -> runner::Result<(Vec<Intent>, Option<String>)> {
+    const SCAN: usize = 32;
+    let mut candidates = reconcilable_delivery(state, ids)?;
+    let keys = state.intents.keys_after(after, SCAN);
+    let mut expired = 0;
+    for key in &keys {
+        if ids.contains(key) {
+            continue;
+        }
+        if let Some(intent) = reconcilable_delivery(state, std::slice::from_ref(key))?.pop()
+            && intent.deadline_at_ms <= now_ms
+        {
+            candidates.push(intent);
+            expired += 1;
+            if expired == 4 {
+                return Ok((candidates, Some(key.clone())));
+            }
+        }
+    }
+    let next = (keys.len() == SCAN).then(|| keys.last().cloned()).flatten();
+    Ok((candidates, next))
+}
+
+/// Commands that durably admit an asynchronous delivery operation before doing any external work.
+pub const ASYNC_DELIVERY_COMMANDS: [&str; 6] = [
+    "main.sync",
+    "branch.publish",
+    "pull_request.open",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.close",
+];
+
+/// The async delivery operations and the locally fenced delivery effects.
+/// A receipt or pending record commits before any change outside that transaction.
+pub const DELIVERY_RECOVERY_COMMANDS: [&str; 11] = [
+    ASYNC_DELIVERY_COMMANDS[0],
+    ASYNC_DELIVERY_COMMANDS[1],
+    ASYNC_DELIVERY_COMMANDS[2],
+    ASYNC_DELIVERY_COMMANDS[3],
+    ASYNC_DELIVERY_COMMANDS[4],
+    ASYNC_DELIVERY_COMMANDS[5],
+    "work.read",
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
+];
+
+/// Rejected routing commands can have external effects. Retire only an expiry
+/// the engine recorded before ever handing the command to the host.
+fn routing_expired_before_dispatch(intent: &Intent) -> bool {
+    matches!(
+        intent.command.name.as_str(),
+        "work.route" | "work.unroutable"
+    ) && intent.status == IntentStatus::Rejected
+        && intent.dispatch_sequence.is_none()
+        && intent.reason.as_deref() == Some("command deadline expired before dispatch")
+}
+
+fn reconcilable_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
+    let mut found = Vec::new();
+    for id in ids {
+        let Some(intent) = state
+            .intents
+            .get(id)
+            .filter(|intent| !intent.cancel_requested)
+        else {
+            continue;
+        };
+        let Some(run) = state.runs.get(&intent.run) else {
+            continue;
+        };
+        if run.status.terminal()
+            || !matches!(&run.pending, Some(runner::Pending::Effect { intent: pending }) if pending == &intent.id)
+        {
+            continue;
+        }
+        let blocked_rejection =
+            run.status == runner::RunStatus::Blocked && intent.status == IntentStatus::Rejected;
+        if blocked_rejection && routing_expired_before_dispatch(intent) {
+            found.push(intent.clone());
+            continue;
+        }
+        if !DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
+            || !(blocked_rejection
+                || (intent.status == IntentStatus::Rejected
+                    && intent.reason.as_deref() == Some(DELIVERY_ADMISSION_EXPIRED))
+                || matches!(
+                    intent.status,
+                    IntentStatus::Dispatched | IntentStatus::Unknown
+                )
+                || (intent.status == IntentStatus::Prepared && intent.dispatch_sequence.is_some()))
+        {
+            continue;
+        }
+        let authority = &intent.authority;
+        let scope = model::digest(&(&authority.actor, &authority.scope))?;
+        if state.execution_denied.contains(&run.artifact)
+            || state
+                .authority_revocations
+                .get(&scope)
+                .is_some_and(|revoked| !revoked.is_disjoint(&intent.command.capabilities))
+        {
+            continue;
+        }
+        found.push(intent.clone());
+    }
+    Ok(found)
 }
 
 /// Run-local pins remain available to the owner even after an extension
@@ -1078,21 +865,38 @@ fn accepts_base(registry: &Registry, artifact: &Registry) -> bool {
 }
 
 /// Exact host contracts, including the pinned Host9 work.read on Host10 so
-/// the existing routing artifact can be installed in the new namespace.
+/// the existing routing artifact can be installed in the new namespace, and
+/// the catalog 2.6.0 work.read the delivery source is authored against.
 pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool {
     let current = registry.commands.get(&contract.name);
     if current == Some(contract) {
         return true;
     }
+<<<<<<< HEAD
     if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.3.0") {
+=======
+    #[cfg(feature = "delivery_playbook")]
+    if contract.name == "work.read" {
+        let pinned = |catalog: &'static OnceLock<Registry>, json: &str| {
+            catalog
+                .get_or_init(|| {
+                    serde_json::from_str(json).expect("vendored AQ host catalog parses")
+                })
+                .commands
+                .get(&contract.name)
+                == Some(contract)
+        };
+>>>>>>> refs/remotes/central/main
         static HOST9: OnceLock<Registry> = OnceLock::new();
-        let legacy = HOST9.get_or_init(|| {
-            serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.2.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.2.0 parses")
-        });
-        return legacy.commands.get(&contract.name) == Some(contract);
+        static DELIVERY: OnceLock<Registry> = OnceLock::new();
+        let host9 = include_str!("../../../vendor/aq-host-catalog-2.2.0/registry.json");
+        let delivery = include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
+        return match current.map(|c| c.version.as_str()) {
+            Some("2.3.0") => pinned(&HOST9, host9) || pinned(&DELIVERY, delivery),
+            // Catalog 2.5.0 (spec 0017): the delivery source keeps its 2.6.0 work.read.
+            Some("2.5.0") if cfg!(feature = "project_environments") => pinned(&DELIVERY, delivery),
+            _ => false,
+        };
     }
     false
 }
@@ -1104,6 +908,7 @@ pub fn plugins_match(registry: &Registry, artifact: &Registry) -> bool {
         plugins::command_plugin(name).is_none() || registry.events.get(name) == Some(contract)
     })
 }
+<<<<<<< HEAD
 fn validate_registry(registry: &Registry) -> Result<(), Error> {
     // Base host commands through catalog 2.4.0.
     const COMMANDS: [&str; 17] = [
@@ -1168,6 +973,8 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
     }
     Ok(())
 }
+=======
+>>>>>>> refs/remotes/central/main
 
 fn cancel_effect<S: Storage>(
     engine: &Engine<S>,

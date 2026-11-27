@@ -221,14 +221,20 @@ pub async fn release_finished_pins(conn: &mut PgConnection) -> Result<u64> {
     .await?;
     Ok(released.rows_affected())
 }
+#[derive(Clone, Copy)]
+struct Version {
+    revision: i64,
+    now_ms: i64,
+}
+
 /// Store `snapshot`, make it the active one at `revision`, and roll.
 async fn activate(
     conn: &mut PgConnection,
     snapshot: &Snapshot,
-    revision: i64,
+    version: Version,
     limits: &StoreLimits,
-    now_ms: i64,
 ) -> Result<()> {
+    let Version { revision, now_ms } = version;
     sqlx::query(
         "INSERT INTO role_snapshots(digest,snapshot,created_at_ms,activated_revision) VALUES($1,$2,$3,$4)
          ON CONFLICT(digest) DO UPDATE SET activated_revision=EXCLUDED.activated_revision",
@@ -248,6 +254,7 @@ async fn activate(
     roll_snapshots(conn, snapshot.digest(), limits.snapshots_kept).await
 }
 
+<<<<<<< HEAD
 /// Apply one change (see the crate documentation). `Error::Problems` when the
 /// resulting set is not valid, `Error::Conflict` when `expected_revision` is
 /// stale or the operation id was used for another request.
@@ -519,90 +526,64 @@ pub async fn apply_referenced(
     tx.commit().await?;
     Ok(receipt)
 }
+=======
+mod mutation;
+pub use mutation::{apply, apply_referenced};
+
+>>>>>>> refs/remotes/central/main
 /// Create or replace one document. `expected_revision` is the document's
 /// revision as last read, 0 when it does not exist yet.
-#[allow(clippy::too_many_arguments)]
-pub async fn save(
-    pool: &PgPool,
-    actor: Uuid,
-    kind: Kind,
-    id: &str,
-    markdown: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
+pub async fn save(edit: Edit<'_>, kind: Kind, id: &str, markdown: &str) -> Result<Receipt> {
     let change = Change::Save {
         kind,
         id: id.into(),
         markdown: markdown.into(),
     };
-    let mutation = Mutation {
-        change,
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(change).await
 }
 /// Delete one document. Refused with the problems when something still
 /// refers to it.
-pub async fn delete(
-    pool: &PgPool,
-    actor: Uuid,
-    kind: Kind,
-    id: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
+pub async fn delete(edit: Edit<'_>, kind: Kind, id: &str) -> Result<Receipt> {
     let change = Change::Delete {
         kind,
         id: id.into(),
     };
-    let mutation = Mutation {
-        change,
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(change).await
 }
 pub async fn save_selection_defaults(
-    pool: &PgPool,
-    actor: Uuid,
+    edit: Edit<'_>,
     defaults: &SelectionDefaults,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
 ) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::SelectionDefaults(defaults.clone()),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(Change::SelectionDefaults(defaults.clone()))
+        .await
 }
 /// Replace the routing document (spec 0014 §5.2: it has its own place in
 /// Settings). `expected_revision` is its revision as last read, 0 before the
 /// first save.
-pub async fn save_routing_document(
-    pool: &PgPool,
-    actor: Uuid,
-    markdown: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::RoutingDocument(markdown.into()),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+pub async fn save_routing_document(edit: Edit<'_>, markdown: &str) -> Result<Receipt> {
+    edit.apply(Change::RoutingDocument(markdown.into())).await
 }
 /// The routing document and its revision; empty at revision 0 until saved.
 pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.routing_markdown, settings.routing_revision))
+}
+/// Replace the project supervisor document (its role text). `expected_revision`
+/// is its revision as last read, 0 before the first save.
+pub async fn save_supervisor_document(edit: Edit<'_>, markdown: &str) -> Result<Receipt> {
+    edit.apply(Change::SupervisorDocument(markdown.into()))
+        .await
+}
+/// The project supervisor document and its revision; empty at revision 0
+/// until saved, which means the supervisor's compiled role text. Read apart
+/// from the other Settings values, as the observation limits are.
+pub async fn supervisor_document(conn: &mut PgConnection) -> sqlx::Result<(String, i64)> {
+    let (markdown, revision): (Option<String>, i64) = sqlx::query_as(
+        "SELECT supervisor_markdown,supervisor_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok((markdown.unwrap_or_default(), revision))
 }
 /// The Settings document a built-in playbook source is authored from, with its
 /// revision; `None` for a source that has none.
@@ -615,6 +596,7 @@ pub async fn document_of(pool: &PgPool, source: &str) -> Result<Option<(String, 
 }
 /// Replace the delivery document (spec 0016 §8). `expected_revision` is its
 /// revision as last read, 0 before the first save.
+<<<<<<< HEAD
 pub async fn save_delivery_document(
     pool: &PgPool,
     actor: Uuid,
@@ -629,6 +611,11 @@ pub async fn save_delivery_document(
         operation_id,
     };
     apply(pool, actor, &mutation, now_ms).await
+=======
+#[cfg(feature = "delivery_playbook")]
+pub async fn save_delivery_document(edit: Edit<'_>, markdown: &str) -> Result<Receipt> {
+    edit.apply(Change::DeliveryDocument(markdown.into())).await
+>>>>>>> refs/remotes/central/main
 }
 /// The delivery document and its revision; empty at revision 0 until saved,
 /// which means no delivery policy.
@@ -639,25 +626,33 @@ pub async fn delivery_document(pool: &PgPool) -> Result<(String, i64)> {
 /// Replace the delivery limits. They are validated
 /// ([`delivery::DeliveryLimits::validate`]) before anything is stored.
 pub async fn save_delivery_limits(
-    pool: &PgPool,
-    actor: Uuid,
+    edit: Edit<'_>,
     limits: &delivery::DeliveryLimits,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
 ) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::DeliveryLimits(*limits),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(Change::DeliveryLimits(
+        delivery::DeliveryLimitsChange::replace(*limits),
+    ))
+    .await
 }
 /// The delivery limits and their revision; the defaults at revision 0 until
 /// saved.
 pub async fn delivery_limits(pool: &PgPool) -> Result<(delivery::DeliveryLimits, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.delivery_limits, settings.delivery_limits_revision))
+}
+/// The node limits and their revision (the defaults at revision 0 until first
+/// saved), read on the caller's connection, apart from the other Settings values.
+pub async fn node_limits(conn: &mut PgConnection) -> sqlx::Result<(crate::node::NodeLimits, i64)> {
+    let (stored, revision): (Option<serde_json::Value>, i64) = sqlx::query_as(
+        "SELECT node_limits,node_limits_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    let limits = match stored {
+        Some(value) => serde_json::from_value(value).map_err(|e| sqlx::Error::Decode(e.into()))?,
+        None => Default::default(),
+    };
+    Ok((limits, revision))
 }
 /// The node observation limits and their revision (the defaults at revision
 /// 0 until first saved), read on the caller's connection: a cap check reads
@@ -678,20 +673,48 @@ pub async fn observation_limits(
     };
     Ok((limits, revision))
 }
-pub async fn save_limits(
+/// The environment limits and their revision (spec 0017 §6.7); the defaults
+/// at revision 0 until first saved.
+#[cfg(feature = "project_environments")]
+pub async fn environment_limits(
+    pool: &PgPool,
+) -> Result<(crate::environments::EnvironmentLimits, i64)> {
+    environment_limits_on(&mut *pool.acquire().await?).await
+}
+#[cfg(feature = "project_environments")]
+async fn environment_limits_on(
+    conn: &mut PgConnection,
+) -> Result<(crate::environments::EnvironmentLimits, i64)> {
+    let (stored, revision): (Option<serde_json::Value>, i64) = sqlx::query_as(
+        "SELECT environment_limits,environment_limits_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    let limits = match stored {
+        Some(value) => serde_json::from_value(value).map_err(|e| sqlx::Error::Decode(e.into()))?,
+        None => Default::default(),
+    };
+    Ok((limits, revision))
+}
+/// Replace the environment limits; they are validated before anything is stored.
+#[cfg(feature = "project_environments")]
+pub async fn save_environment_limits(
     pool: &PgPool,
     actor: Uuid,
-    limits: &StoreLimits,
+    limits: &crate::environments::EnvironmentLimits,
     expected_revision: i64,
     operation_id: Uuid,
     now_ms: i64,
 ) -> Result<Receipt> {
     let mutation = Mutation {
-        change: Change::Limits(*limits),
+        change: Change::EnvironmentLimits(*limits),
         expected_revision,
         operation_id,
     };
     apply(pool, actor, &mutation, now_ms).await
+}
+pub async fn save_limits(edit: Edit<'_>, limits: &StoreLimits) -> Result<Receipt> {
+    edit.apply(Change::Limits(*limits)).await
 }
 
 /// Install each shipped default document that was never installed in this
@@ -757,9 +780,11 @@ pub async fn activate_stored(pool: &PgPool, now_ms: i64) -> Result<(Option<Strin
         activate(
             &mut tx,
             &snapshot,
-            state.revision + 1,
+            Version {
+                revision: state.revision + 1,
+                now_ms,
+            },
             &state.limits,
-            now_ms,
         )
         .await?;
         tx.commit().await?;
@@ -830,8 +855,10 @@ pub async fn check_binding(
     };
     crate::tasks::check_binding(
         snapshot.as_ref(),
-        default_role,
-        default_intelligence,
+        crate::tasks::BindingDefaults {
+            role: default_role,
+            intelligence: default_intelligence,
+        },
         role_notes,
         state.limits.documents.max_document_bytes,
     )

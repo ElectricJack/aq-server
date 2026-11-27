@@ -95,6 +95,28 @@ pub async fn check_locked(
     let Some(row) = row.filter(|r| r.get::<Uuid, _>("node_id") == node) else {
         return Err(Error::Invalid("attempt_not_owned"));
     };
+    require_held(&row)?;
+    let reported: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
+         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1)",
+    )
+    .bind(request.attempt_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    if reported {
+        return Err(Error::Refused(
+            "lost_attempt_reported: its result or stop is on record",
+        ));
+    }
+    validate_recorded_proof(&row, &request.proof)?;
+    Ok(Lost {
+        task_id: row.get("task_id"),
+        reason,
+        charged: reason == LostReason::LostAfterCrash,
+    })
+}
+
+fn require_held(row: &sqlx::postgres::PgRow) -> Result<(), Error> {
     let status = row.get::<Option<String>, _>("status");
     if matches!(status.as_deref(), Some("offered" | "preparing")) {
         return Err(Error::Refused(
@@ -113,18 +135,10 @@ pub async fn check_locked(
             "lost_attempt_not_held: the attempt is not held as prior execution uncertain",
         ));
     }
-    let reported: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1)",
-    )
-    .bind(request.attempt_id)
-    .fetch_one(&mut *conn)
-    .await?;
-    if reported {
-        return Err(Error::Refused(
-            "lost_attempt_reported: its result or stop is on record",
-        ));
-    }
+    Ok(())
+}
+
+fn validate_recorded_proof(row: &sqlx::postgres::PgRow, proof: &StopProof) -> Result<(), Error> {
     let guardian_boot = row
         .get::<Option<Vec<u8>>, _>("request_bytes")
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -133,7 +147,7 @@ pub async fn check_locked(
                 .as_str()
                 .map(str::to_owned)
         });
-    match (&request.proof, &guardian_boot) {
+    match (proof, &guardian_boot) {
         (StopProof::BootChanged { .. }, None) => {
             return Err(Error::Refused(
                 "lost_attempt_boot_unknown: no Started report records the guardian's boot",
@@ -143,11 +157,7 @@ pub async fn check_locked(
             .validate(boot.as_deref().unwrap_or_default())
             .map_err(|_| Error::Invalid("lost_attempt_proof: the proof's facts do not hold"))?,
     }
-    Ok(Lost {
-        task_id: row.get("task_id"),
-        reason,
-        charged: reason == LostReason::LostAfterCrash,
-    })
+    Ok(())
 }
 
 /// Records why B4 still holds the released attempt's task (none once it is released), so
@@ -167,12 +177,15 @@ pub async fn record_held(
 /// Records the release once; a replay with the same proof is accepted, another refused.
 pub async fn record(
     conn: &mut PgConnection,
-    node: Uuid,
     request: &LostAttemptRelease,
     lost: &Lost,
-    receipt_digest: &str,
-    now: DateTime<Utc>,
+    receipt: ReleaseReceipt<'_>,
 ) -> Result<(), Error> {
+    let ReleaseReceipt {
+        node,
+        digest: receipt_digest,
+        recorded_at: now,
+    } = receipt;
     let proof = serde_json::to_value(&request.proof).map_err(|_| Error::Invalid("proof"))?;
     sqlx::query(
         "INSERT INTO lost_attempt_releases(attempt_id,node_id,proof_kind,proof,reason,charged,receipt_digest,recorded_at) \
@@ -238,4 +251,10 @@ pub fn hold_comment_body(attempt: Uuid, reason: LostReason, held: &str) -> Strin
         "AQ: this task is held. Its last attempt ({attempt}) was lost after {lost}, and {} (hold reason: {held}). An owner can retire the task or release the hold.",
         crate::holds::phrase(held)
     )
+}
+
+pub struct ReleaseReceipt<'a> {
+    pub node: Uuid,
+    pub digest: &'a str,
+    pub recorded_at: DateTime<Utc>,
 }

@@ -4,14 +4,12 @@
 //! reason placement would give now. Owner-only; nothing here grants placement.
 use super::{
     contract::*,
-    runtime::Runtime,
     service::{auth, envelope, fence, stamp, timestamp, tx},
     *,
 };
 use crate::{
     node_storage,
     profiled_execution::placement::{self, Ledger},
-    store::User,
 };
 use aq_swarm::capacity::{self as swarm, AccountInput, NodeInput, Snapshot};
 use sqlx::Row;
@@ -21,11 +19,10 @@ use std::collections::BTreeMap;
 const MAX_NODES: usize = 256;
 
 pub(super) async fn capacity(
-    state: &AppState,
-    runtime: &Runtime,
-    user: &User,
+    request: &DashboardRequest,
     scope: Scope,
 ) -> Result<Envelope<Capacity>> {
+    let (state, runtime, user) = request.parts();
     let a = auth(state, runtime, user).await?;
     if !a.owner {
         return Err(AppError::Forbidden("capacity requires owner".into()).into());
@@ -34,68 +31,21 @@ pub(super) async fn capacity(
     let now_at = (state.clock)();
     let offline_after = Duration::from_secs(state.config.workers.offline_after_secs);
     let mut tx = tx(runtime).await?;
-    let rows = sqlx::query(
-        "SELECT id,name,worker_version,protocol_version,enrolled_at,last_seen_at,revoked_at \
-         FROM nodes ORDER BY name,id LIMIT $1",
-    )
-    .bind((MAX_NODES + 1) as i64)
-    .fetch_all(&mut *tx)
-    .await?;
-    let truncated = rows.len() > MAX_NODES;
-    let nodes: Vec<crate::store::Node> = rows
-        .iter()
-        .take(MAX_NODES)
-        .map(|r| crate::store::Node {
-            id: r.get("id"),
-            name: r.get("name"),
-            worker_version: r.get("worker_version"),
-            protocol_version: r.get::<i32, _>("protocol_version") as u32,
-            enrolled_at: r.get("enrolled_at"),
-            last_seen_at: r.get("last_seen_at"),
-            revoked_at: r.get("revoked_at"),
-        })
-        .collect();
+    let (nodes, truncated) = capacity_nodes(&mut tx).await?;
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id).collect();
-    let snapshots: BTreeMap<Uuid, Snapshot> = sqlx::query_as::<_, (Uuid, serde_json::Value)>(
-        "SELECT node_id, snapshot FROM intelligence_node_snapshots WHERE node_id = ANY($1)",
-    )
-    .bind(&ids)
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .filter_map(|(node, value)| Some((node, serde_json::from_value(value).ok()?)))
-    .collect();
-    let book = crate::observations::catalog::rate_book(state);
-    let ledger = Ledger {
-        pool: &state.store.observation_pool,
-        book: &book,
-    };
-    let loads = placement::loads(&mut tx, &ledger, &ids, now).await?;
+    let snapshots = capacity_snapshots(&mut tx, &ids).await?;
+    let loads = node_loads(state, &mut tx, &ids, now).await?;
     let storage = node_storage::latest(&mut tx, &ids).await?;
+    let deferrals = aq_swarm::machine::deferrals(&mut tx, &ids, now).await?;
     let occupied_all: i64 =
-        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts WHERE holds_task AND native_attempt_holds_compute(attempt_id,node_id))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
+        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts a WHERE a.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=a.attempt_id AND c.released))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;
     let mut out = Vec::with_capacity(nodes.len());
     for (node, load) in nodes.iter().zip(&loads) {
         let health = swarm::health(crate::admin_api::worker_status(node, now_at, offline_after));
-        let storage = storage
-            .iter()
-            .find(|(n, ..)| *n == node.id)
-            .map(|(_, r, bps, at)| {
-                Ok::<_, Error>(NodeStorage {
-                    used_bps: u16::try_from(*bps).unwrap_or(10_000).min(10_000),
-                    disk_total_bytes: r.disk_total_bytes,
-                    disk_used_bytes: r.disk_used_bytes,
-                    disk_free_bytes: r.disk_free_bytes,
-                    disk_reserved_bytes: r.disk_reserved_bytes,
-                    preserved_count: r.preserved_count,
-                    preserved_bytes: r.preserved_bytes,
-                    observed_at: timestamp(*at)?,
-                })
-            })
-            .transpose()?;
+        let storage = node_storage_view(node.id, &storage)?;
         out.push(swarm::node_capacity(
             NodeInput {
                 id: node.id,
@@ -111,6 +61,9 @@ pub(super) async fn capacity(
                 ceiling: load.ceiling,
                 snapshot: snapshots.get(&node.id),
                 storage,
+                sandbox_admission: (deferrals.get(&node.id))
+                    .map(|(d, _)| deferral_view(d))
+                    .transpose()?,
             },
             now,
         )?);
@@ -134,6 +87,91 @@ pub(super) async fn capacity(
         },
         reason.as_deref(),
     )
+}
+
+async fn node_loads(
+    state: &AppState,
+    conn: &mut sqlx::PgConnection,
+    ids: &[Uuid],
+    now: u64,
+) -> Result<Vec<placement::Load>> {
+    let book = crate::observations::catalog::rate_book(state);
+    let ledger = Ledger {
+        pool: &state.store.observation_pool,
+        book: &book,
+    };
+    Ok(placement::loads(conn, &ledger, ids, now).await?)
+}
+
+pub(super) fn deferral_view(d: &aq_swarm::machine::AdmissionDeferral) -> Result<SandboxAdmission> {
+    Ok(SandboxAdmission {
+        code: d.code.clone(),
+        since: timestamp(d.since_ms)?,
+        available_bytes: d.available_bytes,
+        required_bytes: d.required_bytes,
+    })
+}
+
+fn node_storage_view(
+    node_id: Uuid,
+    storage: &[(Uuid, node_storage::StorageReport, i32, u64)],
+) -> Result<Option<NodeStorage>> {
+    storage
+        .iter()
+        .find(|(n, ..)| *n == node_id)
+        .map(|(_, r, bps, at)| {
+            Ok::<_, Error>(NodeStorage {
+                used_bps: u16::try_from(*bps).unwrap_or(10_000).min(10_000),
+                disk_total_bytes: r.disk_total_bytes,
+                disk_used_bytes: r.disk_used_bytes,
+                disk_free_bytes: r.disk_free_bytes,
+                disk_reserved_bytes: r.disk_reserved_bytes,
+                preserved_count: r.preserved_count,
+                preserved_bytes: r.preserved_bytes,
+                observed_at: timestamp(*at)?,
+            })
+        })
+        .transpose()
+}
+
+async fn capacity_nodes(conn: &mut sqlx::PgConnection) -> Result<(Vec<crate::store::Node>, bool)> {
+    let rows = sqlx::query(
+        "SELECT id,name,worker_version,protocol_version,enrolled_at,last_seen_at,revoked_at \
+         FROM nodes ORDER BY name,id LIMIT $1",
+    )
+    .bind((MAX_NODES + 1) as i64)
+    .fetch_all(&mut *conn)
+    .await?;
+    let truncated = rows.len() > MAX_NODES;
+    let nodes: Vec<crate::store::Node> = rows
+        .iter()
+        .take(MAX_NODES)
+        .map(|r| crate::store::Node {
+            id: r.get("id"),
+            name: r.get("name"),
+            worker_version: r.get("worker_version"),
+            protocol_version: r.get::<i32, _>("protocol_version") as u32,
+            enrolled_at: r.get("enrolled_at"),
+            last_seen_at: r.get("last_seen_at"),
+            revoked_at: r.get("revoked_at"),
+        })
+        .collect();
+    Ok((nodes, truncated))
+}
+
+async fn capacity_snapshots(
+    conn: &mut sqlx::PgConnection,
+    ids: &[Uuid],
+) -> Result<BTreeMap<Uuid, Snapshot>> {
+    Ok(sqlx::query_as::<_, (Uuid, serde_json::Value)>(
+        "SELECT node_id, snapshot FROM intelligence_node_snapshots WHERE node_id = ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .filter_map(|(node, value)| Some((node, serde_json::from_value(value).ok()?)))
+    .collect())
 }
 
 /// Per configured account: available while an unrevoked node holds a live binding.

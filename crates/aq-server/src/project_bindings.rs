@@ -1,6 +1,7 @@
 //! Revisioned central project policy. Graph tasks and Git bindings remain external.
 pub use aq_project_policy as domain;
 mod external;
+pub(crate) mod workspace;
 use crate::{AppState, authz::RequireOwner, error::AppError};
 use axum::{
     Json, Router,
@@ -41,6 +42,7 @@ struct Page {
 }
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
+        .merge(workspace::owner_routes())
         .route("/api/projects", get(list))
         .route("/api/projects/{id}", get(inspect).post(put))
         .route("/api/projects/{id}/revisions/{revision}", get(history))
@@ -155,6 +157,8 @@ async fn put(
 ) -> Result<Json<Value>> {
     put_request(&state, actor.id, id, request).await.map(Json)
 }
+/// The conflict of a binding that names an absent or revoked worker: it never validates.
+pub(crate) const ABSENT_WORKER: &str = "project refers to absent or revoked worker identity";
 /// Owner project-binding mutation core, shared by the route and D2 onboarding.
 pub(crate) async fn put_binding(
     state: &AppState,
@@ -209,9 +213,7 @@ async fn put_request(
             .await
             .map_err(db)?;
     if count != nodes.len() as i64 {
-        return Err(conflict(
-            "project refers to absent or revoked worker identity",
-        ));
+        return Err(conflict(ABSENT_WORKER));
     }
     let observation = external::observe(&state, &request.binding).await;
     if observation.repository != ExternalStatus::Verified
@@ -442,7 +444,16 @@ pub async fn check_eligibility(
     id: Uuid,
     request: &EligibilityRequest,
 ) -> Result<Eligibility> {
-    check_eligibility_current(state, id, request, false).await
+    check_eligibility_current(state, id, request, false, false).await
+}
+/// For an alternative justified by the scheduler's frozen workspace scope.
+pub(crate) async fn check_workspace_eligibility(
+    state: &AppState,
+    id: Uuid,
+    request: &EligibilityRequest,
+    workspace_alternative: bool,
+) -> Result<Eligibility> {
+    check_eligibility_current(state, id, request, false, workspace_alternative).await
 }
 /// Fresh current binding facts for continuing a pinned execution. This chooses
 /// no model and does not reuse an original admission observation or decision.
@@ -453,7 +464,7 @@ pub(crate) async fn check_execution_eligibility(
     id: Uuid,
     request: &EligibilityRequest,
 ) -> Result<Eligibility> {
-    check_eligibility_current(state, id, request, true).await
+    check_eligibility_current(state, id, request, true, false).await
 }
 /// A new launch names documents of the active role snapshot: the role exists
 /// and is enabled, the level exists, the execution profile is the role's and
@@ -461,6 +472,7 @@ pub(crate) async fn check_execution_eligibility(
 async fn launch_reason(
     state: &AppState,
     request: &EligibilityRequest,
+    workspace_alternative: bool,
 ) -> Result<Option<&'static str>> {
     let Some(snapshot) = crate::role_settings::active(&state.store.pool).await? else {
         return Ok(Some("role_snapshot_absent"));
@@ -479,7 +491,9 @@ async fn launch_reason(
         (launch.execution.environment.as_ref()).is_some_and(|e| *e != request.environment);
     Ok(if !launch.role.enabled {
         Some("role_disabled")
-    } else if launch.execution.id != request.execution_profile || elsewhere {
+    } else if launch.execution.id != request.execution_profile
+        || (elsewhere && !workspace_alternative)
+    {
         Some("profile_combination_denied")
     } else {
         None
@@ -490,6 +504,7 @@ async fn check_eligibility_current(
     id: Uuid,
     request: &EligibilityRequest,
     execution_read: bool,
+    workspace_alternative: bool,
 ) -> Result<Eligibility> {
     if request.expected_project_revision == 0 || request.node_id.is_nil() {
         return Err(bad("invalid eligibility identity/revision"));
@@ -516,16 +531,20 @@ async fn check_eligibility_current(
         &latest,
         request,
         &state.config.projects,
-        &observation,
-        node_live,
-        (state.clock)().timestamp_millis().max(1) as u64,
+        EligibilityEvidence::new(
+            &observation,
+            node_live,
+            (state.clock)().timestamp_millis().max(1) as u64,
+        ),
     );
     if latest.revision != record.revision {
         result
             .reasons
             .push("project_changed_during_external_validation".into());
     }
-    if !execution_read && let Some(reason) = launch_reason(state, request).await? {
+    if !execution_read
+        && let Some(reason) = launch_reason(state, request, workspace_alternative).await?
+    {
         result.reasons.push(reason.into());
     }
     if result.reasons.is_empty() {
@@ -562,7 +581,7 @@ pub(crate) async fn fence_for_offer(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     frozen: &FrozenProjectBinding,
 ) -> Result<()> {
-    let node = sqlx::query("SELECT revoked_at,last_seen_at FROM nodes WHERE id=$1 FOR SHARE")
+    let node = sqlx::query("SELECT revoked_at,last_seen_at FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(frozen.node_id)
         .fetch_optional(&mut **tx)
         .await
@@ -593,9 +612,11 @@ pub(crate) async fn fence_for_offer(
         &record,
         &request,
         &state.config.projects,
-        &frozen.binding_observation,
-        live,
-        now.timestamp_millis().max(1) as u64,
+        EligibilityEvidence::new(
+            &frozen.binding_observation,
+            live,
+            now.timestamp_millis().max(1) as u64,
+        ),
     );
     if aq_profiles::digest(&state.config.projects).map_err(|_| AppError::Internal)?
         != frozen.worker_membership_digest

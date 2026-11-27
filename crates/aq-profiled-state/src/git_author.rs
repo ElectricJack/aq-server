@@ -5,6 +5,8 @@
 //! assignment carries an author. The metadata does not grant launch authority.
 //! Attributed tasks require the opt-in for a new offer. Reoffers keep the
 //! presence and exact value recorded in the attempt's original offer.
+//! Workspace-capable polls can receive a pinned `workspace_required: true`.
+//! The worker must fetch the workspace plan before preparing that attempt.
 use aq_admission::{
     Invalid, Result,
     control::{MAX_REPLY_BYTES, NativePollPage},
@@ -30,26 +32,38 @@ pub struct GitAuthor {
 
 impl GitAuthor {
     pub fn validate(&self) -> Result<()> {
-        let safe = |c: char| !c.is_control() && !matches!(c, '<' | '>');
-        // Git strips these characters at both ends of a signature field.
-        let stripped = |c: char| {
-            c.is_ascii_whitespace() || matches!(c, ',' | ':' | ';' | '<' | '>' | '"' | '\'' | '\\')
-        };
-        let preserves_edges = |s: &str| !s.starts_with(stripped) && !s.ends_with(stripped);
         require(
-            !self.name.trim().is_empty()
-                && self.name.chars().count() <= 120
-                && self.name.chars().all(safe)
-                && preserves_edges(&self.name)
-                && self.email.len() <= 254
-                && self.email.chars().all(|c| safe(c) && !c.is_whitespace())
-                && preserves_edges(&self.email)
-                && self.email.split_once('@').is_some_and(|(local, domain)| {
-                    !local.is_empty() && !domain.is_empty() && !domain.contains('@')
-                }),
+            valid_name(&self.name) && valid_email(&self.email),
             "invalid task git author",
         )
     }
+}
+fn signature_char(c: char) -> bool {
+    !c.is_control() && !matches!(c, '<' | '>')
+}
+fn preserves_edges(s: &str) -> bool {
+    // Git strips these characters at both ends of a signature field.
+    let stripped = |c: char| {
+        c.is_ascii_whitespace() || matches!(c, ',' | ':' | ';' | '<' | '>' | '"' | '\'' | '\\')
+    };
+    !s.starts_with(stripped) && !s.ends_with(stripped)
+}
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.chars().count() <= 120
+        && name.chars().all(signature_char)
+        && preserves_edges(name)
+}
+fn valid_email(email: &str) -> bool {
+    let address = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+    });
+    address
+        && email.len() <= 254
+        && email
+            .chars()
+            .all(|c| signature_char(c) && !c.is_whitespace())
+        && preserves_edges(email)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +71,7 @@ impl GitAuthor {
 pub struct OfferDelivery {
     pub native: NativeOffer,
     pub git_author: Option<GitAuthor>,
+    pub workspace_required: bool,
 }
 
 impl OfferDelivery {
@@ -76,6 +91,8 @@ struct OfferWire {
     startup: Descriptor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     git_author: Option<GitAuthor>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    workspace_required: bool,
 }
 
 impl From<OfferDelivery> for OfferWire {
@@ -90,6 +107,7 @@ impl From<OfferDelivery> for OfferWire {
             offered,
             startup,
             git_author: value.git_author,
+            workspace_required: value.workspace_required,
         }
     }
 }
@@ -101,6 +119,7 @@ impl From<OfferWire> for OfferDelivery {
             offered,
             startup,
             git_author,
+            workspace_required,
         } = value;
         Self {
             native: NativeOffer {
@@ -109,6 +128,7 @@ impl From<OfferWire> for OfferDelivery {
                 startup,
             },
             git_author,
+            workspace_required,
         }
     }
 }
@@ -194,6 +214,20 @@ mod tests {
         assert!(page.offers.iter().all(|offer| offer.git_author.is_none()));
         assert_eq!(serde_json::to_value(PollReply::Poll(page)).unwrap(), value);
         decode_reply(&json).unwrap();
+    }
+
+    #[test]
+    fn explicit_workspace_requirement_survives_offer_delivery_round_trip() {
+        let (mut value, request) = fixture();
+        value["body"]["offers"][0]["workspace_required"] = json!(true);
+        let encoded = serde_json::to_vec(&value).unwrap();
+        let decoded = decode_poll_reply(&encoded, &request).unwrap();
+        assert!(decoded.offers[0].workspace_required);
+        assert_eq!(
+            serde_json::to_value(PollReply::Poll(decoded)).unwrap(),
+            value
+        );
+        assert!(decode_reply(&encoded).is_err());
     }
 
     #[test]

@@ -471,9 +471,18 @@ async fn switch_owner_availability(f: &phase_refresh_fixture::Prepared, on: bool
         .unwrap();
     let now = (f.c.env.env.state.clock)();
     let mut c = pool.acquire().await.unwrap();
-    aq_machine_control::set_owner_availability(&mut c, on, expected, owner, Uuid::new_v4(), now)
-        .await
-        .unwrap();
+    aq_machine_control::set_owner_availability(
+        &mut c,
+        on,
+        aq_machine_control::OwnerChange {
+            expected_generation: expected,
+            actor: owner,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
+    )
+    .await
+    .unwrap();
 }
 /// Fix round 2: with no observation row and the renewal past the policy's
 /// observation age (5 s here), a renewal is refused while the switch is unset

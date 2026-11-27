@@ -135,26 +135,25 @@ async fn swarm_rejects_incoherent_matrices_without_partial_writes() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let valid = save_request(&initial);
-    let mut cases = Vec::new();
-    let mut req = valid.clone();
-    req["normal"] = json!([]);
-    cases.push(req);
-    let mut req = valid.clone();
-    req["normal"][0]["limit"] = json!(-1);
-    cases.push(req);
-    let mut req = valid.clone();
-    req["normal"][0]["limit"] = json!(1.5);
-    cases.push(req);
-    let mut req = valid.clone();
-    req["normal"][0]["provider"] = json!("unsupported");
-    cases.push(req);
-    let mut req = valid.clone();
-    req["reduced"][0]["limit"] = json!(3);
-    cases.push(req);
-    let mut req = valid.clone();
-    let duplicate = req["normal"][0].clone();
-    req["normal"].as_array_mut().unwrap().push(duplicate);
-    cases.push(req);
+    let invalid_fields = [
+        ("/normal", json!([])),
+        ("/normal/0/limit", json!(-1)),
+        ("/normal/0/limit", json!(1.5)),
+        ("/normal/0/provider", json!("unsupported")),
+        ("/reduced/0/limit", json!(3)),
+    ];
+    let mut cases: Vec<_> = invalid_fields
+        .into_iter()
+        .map(|(path, value)| {
+            let mut request = valid.clone();
+            *request.pointer_mut(path).unwrap() = value;
+            request
+        })
+        .collect();
+    let mut duplicate = valid.clone();
+    let cell = duplicate["normal"][0].clone();
+    duplicate["normal"].as_array_mut().unwrap().push(cell);
+    cases.push(duplicate);
     for req in cases {
         let (status, body) = call(&app, SWARM, Some(req), true).await;
         assert!(
@@ -299,6 +298,16 @@ async fn swarm_waiting_counts_keep_unclassified_work_visible() {
     );
 }
 
+fn named_cells(snapshot: &Value, class: &str) -> Vec<(String, String)> {
+    (snapshot["cells"].as_array().unwrap().iter())
+        .filter(|c| c["intelligence_class"] == class)
+        .map(|c| {
+            let text = |key: &str| c[key].as_str().unwrap().to_owned();
+            (text("provider"), text("display_name"))
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn swarm_cells_are_the_providers_of_each_level_document() {
     let (_db, app, pool, initial) = installed().await;
@@ -307,17 +316,8 @@ async fn swarm_cells_are_the_providers_of_each_level_document() {
     assert_eq!(cells.len(), 9, "{initial}");
     assert!(cells.iter().all(|c| c["provider"] == "anthropic"));
     assert!(initial.get("catalog_revision").is_none());
-    let named = |snapshot: &Value, class: &str| -> Vec<(String, String)> {
-        (snapshot["cells"].as_array().unwrap().iter())
-            .filter(|c| c["intelligence_class"] == class)
-            .map(|c| {
-                let text = |key: &str| c[key].as_str().unwrap().to_owned();
-                (text("provider"), text("display_name"))
-            })
-            .collect()
-    };
     assert_eq!(
-        named(&initial, "standard-high"),
+        named_cells(&initial, "standard-high"),
         [("anthropic".to_owned(), "Standard, high".to_owned())]
     );
     // A new level document is a new class: one cell per provider it names,
@@ -336,7 +336,7 @@ async fn swarm_cells_are_the_providers_of_each_level_document() {
     let snapshot = call(&app, SWARM, None, false).await.1;
     assert_eq!(snapshot["cells"].as_array().unwrap().len(), 11);
     assert_eq!(
-        named(&snapshot, "night-shift"),
+        named_cells(&snapshot, "night-shift"),
         [
             ("anthropic".to_owned(), "Night shift".to_owned()),
             ("google".to_owned(), "Night shift".to_owned())

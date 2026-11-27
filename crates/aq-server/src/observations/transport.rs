@@ -8,11 +8,12 @@ fn digest<T: Serialize>(body: &T) -> Result<Digest> {
     ))
 }
 async fn boot(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<Uuid> {
-    let identity: Option<Value> =
-        sqlx::query_scalar("SELECT state->'identity' FROM execution_nodes WHERE node_id=$1")
-            .bind(node)
-            .fetch_optional(&mut **tx)
-            .await?;
+    let identity: Option<Value> = sqlx::query_scalar(
+        "SELECT state->'identity' FROM execution_nodes WHERE node_id=$1 FOR SHARE",
+    )
+    .bind(node)
+    .fetch_optional(&mut **tx)
+    .await?;
     let identity: aq_worker_protocol::NodeIdentity = parse(identity.ok_or(Error::Refused)?)?;
     if identity.node_id != node || identity.boot_id.is_nil() {
         return Err(Error::Refused);
@@ -54,6 +55,33 @@ pub async fn mutate_authenticated(
 ) -> Result<Reply> {
     mutate_subject(state, NodeSubject::Authenticated(context), request).await
 }
+fn require_owner(owner: Option<&Owner>, events: i64, sources: i32) -> Result<()> {
+    let nonempty = events != 0 || sources != 0;
+    if owner.is_none() && nonempty {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
+async fn prior_receipt(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &Request,
+) -> Result<Option<Receipt>> {
+    let old=sqlx::query("SELECT request,receipt FROM observation_transport_receipts WHERE node_id=$1 AND operation_id=$2").bind(request.node_id).bind(request.operation_id).fetch_optional(&mut **tx).await?;
+    old.map(|row| {
+        let saved: Request = parse(row.get("request"))?;
+        if &saved != request {
+            return Err(Error::Conflict);
+        }
+        let receipt: Receipt = parse(row.get("receipt"))?;
+        receipt
+            .validate_against(&saved)
+            .map_err(|_| Error::Invalid)?;
+        Ok(receipt)
+    })
+    .transpose()
+}
+
 async fn mutate_subject(
     state: &AppState,
     subject: NodeSubject<'_>,
@@ -73,25 +101,12 @@ async fn mutate_subject(
         .await?;
     let ledger=sqlx::query("SELECT through_sequence,event_count,source_count FROM observation_nodes WHERE node_id=$1 FOR UPDATE").bind(authenticated_node).fetch_one(&mut *tx).await?;
     let current = load(&mut tx, authenticated_node).await?;
-    if current.is_none()
-        && (ledger.get::<i64, _>("event_count") != 0 || ledger.get::<i32, _>("source_count") != 0)
-    {
-        return Err(Error::Conflict);
-    }
-    let old=sqlx::query("SELECT request,receipt FROM observation_transport_receipts WHERE node_id=$1 AND operation_id=$2").bind(authenticated_node).bind(request.operation_id).fetch_optional(&mut *tx).await?;
-    let previous = old
-        .map(|row| {
-            let saved: Request = parse(row.get("request"))?;
-            if &saved != request {
-                return Err(Error::Conflict);
-            }
-            let receipt: Receipt = parse(row.get("receipt"))?;
-            receipt
-                .validate_against(&saved)
-                .map_err(|_| Error::Invalid)?;
-            Ok(receipt)
-        })
-        .transpose()?;
+    require_owner(
+        current.as_ref(),
+        ledger.get("event_count"),
+        ledger.get("source_count"),
+    )?;
+    let previous = prior_receipt(&mut tx, request).await?;
     let claimed_boot = match request.operation {
         contract::Operation::Prepare { boot_id, .. } => Some(boot_id),
         contract::Operation::AdvanceBoot { new_boot_id, .. } => Some(new_boot_id),
@@ -106,8 +121,7 @@ async fn mutate_subject(
         new_boot_previously_owned: boot_seen,
     };
     let changed = contract::apply(
-        current.as_ref(),
-        previous.as_ref(),
+        contract::Retained::new(current.as_ref(), previous.as_ref()),
         request,
         &access,
         Some(Uuid::new_v4()),
@@ -149,9 +163,7 @@ async fn status_subject(state: &AppState, subject: NodeSubject<'_>) -> Result<St
     let ledger:Option<(i64,i64,i32)>=sqlx::query_as("SELECT through_sequence,event_count,source_count FROM observation_nodes WHERE node_id=$1 FOR UPDATE").bind(authenticated_node).fetch_optional(&mut *tx).await?;
     let owner = load(&mut tx, authenticated_node).await?;
     let (through, events, sources) = ledger.unwrap_or((0, 0, 0));
-    if owner.is_none() && (events != 0 || sources != 0) {
-        return Err(Error::Conflict);
-    }
+    require_owner(owner.as_ref(), events, sources)?;
     let status = Status {
         version: contract::VERSION,
         node_id: authenticated_node,

@@ -295,10 +295,7 @@ fn tokens_have_prefixes_and_are_unique() {
     assert_eq!(c.len(), 4 + 43);
 }
 
-#[tokio::test]
-async fn exact_schema_two_upgrades_preserving_node_and_result_receipt() {
-    let db = TestDb::create().await;
-    let pool = db.pool().await;
+async fn seed_schema_two(pool: &sqlx::PgPool) -> (uuid::Uuid, uuid::Uuid, String) {
     // Start with the actual prior SQL, not a current Store downgraded by metadata.
     let mut prior = pool.begin().await.unwrap();
     sqlx::raw_sql(include_str!("../../migrations/0001_foundation.sql"))
@@ -333,20 +330,33 @@ async fn exact_schema_two_upgrades_preserving_node_and_result_receipt() {
         .await
         .unwrap();
     prior.commit().await.unwrap();
+    (node_id, operation_id, credential_hash)
+}
+
+async fn node_and_receipt_snapshot(
+    pool: &sqlx::PgPool,
+    node_id: uuid::Uuid,
+    operation_id: uuid::Uuid,
+) -> serde_json::Value {
+    sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('node',(SELECT to_jsonb(n) - 'machine_key' - 'slot' FROM nodes n WHERE id=$1),'receipt',(SELECT to_jsonb(r) FROM execution_receipts r WHERE node_id=$1 AND operation_id=$2))")
+            .bind(node_id)
+            .bind(operation_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+}
+
+#[tokio::test]
+async fn exact_schema_two_upgrades_preserving_node_and_result_receipt() {
+    let db = TestDb::create().await;
+    let pool = db.pool().await;
+    let (node_id, operation_id, credential_hash) = seed_schema_two(&pool).await;
     let original_migrations: Vec<(i32, DateTime<Utc>)> =
         sqlx::query_as("SELECT version,applied_at FROM schema_migrations ORDER BY version")
             .fetch_all(&pool)
             .await
             .unwrap();
-    let snapshot = async || {
-        sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('node',(SELECT to_jsonb(n) - 'machine_key' - 'slot' FROM nodes n WHERE id=$1),'receipt',(SELECT to_jsonb(r) FROM execution_receipts r WHERE node_id=$1 AND operation_id=$2))")
-            .bind(node_id)
-            .bind(operation_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-    };
-    let before = snapshot().await;
+    let before = node_and_receipt_snapshot(&pool, node_id, operation_id).await;
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT value FROM meta WHERE key='state_format_version'")
             .fetch_one(&pool)
@@ -364,7 +374,10 @@ async fn exact_schema_two_upgrades_preserving_node_and_result_receipt() {
         assert_eq!(node.id, node_id);
         assert_eq!(node.worker_version, "0.2.0");
         assert_eq!(node.last_seen_at, Some(t0()));
-        assert_eq!(snapshot().await, before);
+        assert_eq!(
+            node_and_receipt_snapshot(&pool, node_id, operation_id).await,
+            before
+        );
         let migrations: Vec<(i32, DateTime<Utc>)> =
             sqlx::query_as("SELECT version,applied_at FROM schema_migrations ORDER BY version")
                 .fetch_all(&pool)

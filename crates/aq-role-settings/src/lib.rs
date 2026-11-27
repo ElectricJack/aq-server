@@ -15,6 +15,7 @@ pub mod delivery;
 #[cfg(feature = "project_environments")]
 pub mod environments;
 pub mod http;
+pub mod node;
 pub mod observation;
 pub mod refusals;
 mod store;
@@ -22,11 +23,14 @@ pub mod suggestions;
 pub mod tasks;
 pub use store::{
     activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, document_of,
-    get, install_defaults, list, observation_limits, pin, release_finished_pins, routing_document,
-    save, save_limits, save_routing_document, save_selection_defaults, selection_defaults,
-    settings, snapshot, startup, unpin,
+    get, install_defaults, list, node_limits, observation_limits, pin, release_finished_pins,
+    routing_document, save, save_limits, save_routing_document, save_selection_defaults,
+    save_supervisor_document, selection_defaults, settings, snapshot, startup, supervisor_document,
+    unpin,
 };
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
+#[cfg(feature = "project_environments")]
+pub use store::{environment_limits, save_environment_limits};
 
 /// Something outside this store that names one of its documents, such as a
 /// project binding's default role.
@@ -155,11 +159,62 @@ pub enum Change {
     RoutingDocument(String),
     /// The node observation limits. They are not part of a snapshot.
     ObservationLimits(observation::ObservationLimits),
+    /// The node limits. They are not part of a snapshot.
+    NodeLimits(node::NodeLimits),
+    /// The project supervisor's role text. It is not part of a snapshot.
+    SupervisorDocument(String),
     /// The delivery document. It is not part of a snapshot.
     DeliveryDocument(String),
     /// The delivery limits. They are not part of a snapshot.
+<<<<<<< HEAD
     DeliveryLimits(delivery::DeliveryLimits),
+=======
+    #[cfg(feature = "delivery_playbook")]
+    DeliveryLimits(delivery::DeliveryLimitsChange),
+    /// The environment limits (spec 0017 §6.7). They are not part of a snapshot.
+    #[cfg(feature = "project_environments")]
+    EnvironmentLimits(environments::EnvironmentLimits),
+>>>>>>> refs/remotes/central/main
 }
+/// Owner and clock for a change in this settings store.
+#[derive(Clone, Copy)]
+pub struct Writer<'a> {
+    pool: &'a sqlx::PgPool,
+    actor: Uuid,
+    now_ms: i64,
+}
+impl<'a> Writer<'a> {
+    pub fn new(pool: &'a sqlx::PgPool, actor: Uuid, now_ms: i64) -> Self {
+        Self {
+            pool,
+            actor,
+            now_ms,
+        }
+    }
+    pub fn edit(self, expected_revision: i64, operation_id: Uuid) -> Edit<'a> {
+        Edit {
+            writer: self,
+            expected_revision,
+            operation_id,
+        }
+    }
+}
+pub struct Edit<'a> {
+    writer: Writer<'a>,
+    expected_revision: i64,
+    operation_id: Uuid,
+}
+impl Edit<'_> {
+    async fn apply(self, change: Change) -> Result<Receipt> {
+        let mutation = Mutation {
+            change,
+            expected_revision: self.expected_revision,
+            operation_id: self.operation_id,
+        };
+        apply_referenced(self.writer, &mutation, None).await
+    }
+}
+
 /// A change with its fence and its retry identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mutation {

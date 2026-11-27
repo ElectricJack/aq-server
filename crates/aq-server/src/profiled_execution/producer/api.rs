@@ -31,8 +31,22 @@ async fn poll(
         .get_all(git_author::HEADER)
         .iter()
         .eq([axum::http::HeaderValue::from_static(git_author::VERSION)].iter());
-    let reply =
-        super::workflow::poll_slot(&state, &auth, &request, slot, supports_git_author).await?;
+    let supports_workspace = headers
+        .get_all(crate::task_workspace_resume::HEADER)
+        .iter()
+        .eq([axum::http::HeaderValue::from_static(
+            crate::task_workspace_resume::VERSION,
+        )]
+        .iter());
+    let reply = super::workflow::poll_slot(
+        &state,
+        &auth,
+        &request,
+        slot,
+        supports_git_author,
+        supports_workspace,
+    )
+    .await?;
     let value = git_author::PollReply::Poll(reply);
     if serde_json::to_vec(&value)
         .map_err(|_| AppError::Internal)?

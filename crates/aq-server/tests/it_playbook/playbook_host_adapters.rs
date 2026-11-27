@@ -354,13 +354,48 @@ async fn host11_activates_only_subtrees_of_ensured_tasks_and_retains_counts() {
 async fn work_ensure_is_idempotent_by_key() {
     let (f, h) = profiled_host().await;
     let pool = f.db.pool().await;
+    let lineage = &f.selection.lineage;
+    sqlx::query(
+        "INSERT INTO task_git_authors
+         (source,operation_id,project_id,workspace_id,task_id,requester_id,name,email)
+         VALUES('human_graph',$1,$2,$3,$1,$4,'Requester','Requester@example.test')",
+    )
+    .bind(lineage.task_id)
+    .bind(lineage.project_id)
+    .bind(lineage.workspace_id)
+    .bind(f.actor)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let input = |key, context| {
+        let mut input = ensure_input(key, context);
+        input["subject"] = json!({"id":lineage.task_id,"revision":1});
+        input
+    };
     let first = h
-        .run(&h.intent("ensure-1", "work.ensure", ensure_input("feature-x", "ctx")))
+        .run(&h.intent("ensure-1", "work.ensure", input("feature-x", "ctx")))
         .await
         .unwrap();
     assert_eq!(first.outcome, "ensured", "ensured is not completion");
     let task = first.output["subject"]["id"].as_str().unwrap().to_string();
     assert_eq!(first.output["subject"]["revision"], 1);
+    {
+        let requests = h.graph.replies.lock().unwrap();
+        let (request, _) = requests.values().next().unwrap();
+        assert_eq!(request["operations"][1]["edge_type"], "motivated_by");
+        assert_eq!(request["operations"][1]["target"], json!(lineage.task_id));
+    }
+    assert_eq!(
+        aq_server::task_git_author::lookup(
+            &pool,
+            lineage.project_id,
+            lineage.workspace_id,
+            task.parse().unwrap(),
+        )
+        .await
+        .unwrap(),
+        None
+    );
     assert_eq!(
         first.output["reference"],
         format!("aq.playbook.work/{task}")
@@ -368,14 +403,14 @@ async fn work_ensure_is_idempotent_by_key() {
     assert_eq!(h.graph.mutations(), 1);
     // A second intent with the same logical key ensures the same work.
     let second = h
-        .run(&h.intent("ensure-2", "work.ensure", ensure_input("feature-x", "ctx")))
+        .run(&h.intent("ensure-2", "work.ensure", input("feature-x", "ctx")))
         .await
         .unwrap();
     assert_eq!(second.output["subject"]["id"], json!(task));
     assert_eq!(h.graph.mutations(), 1, "logical key is idempotent");
     // Replay of one intent returns the retained result and performs nothing.
     let replay = h
-        .run(&h.intent("ensure-1", "work.ensure", ensure_input("feature-x", "ctx")))
+        .run(&h.intent("ensure-1", "work.ensure", input("feature-x", "ctx")))
         .await
         .unwrap();
     assert_eq!(replay, first);
@@ -384,7 +419,7 @@ async fn work_ensure_is_idempotent_by_key() {
             .host_retained(
                 h.grant,
                 1,
-                &h.intent("ensure-1", "work.ensure", ensure_input("feature-x", "ctx"))
+                &h.intent("ensure-1", "work.ensure", input("feature-x", "ctx"))
             )
             .await
             .unwrap(),
@@ -392,25 +427,21 @@ async fn work_ensure_is_idempotent_by_key() {
     );
     // Same intent id, different bytes: conflict.
     assert!(matches!(
-        h.run(&h.intent("ensure-1", "work.ensure", ensure_input("feature-y", "ctx")))
+        h.run(&h.intent("ensure-1", "work.ensure", input("feature-y", "ctx")))
             .await,
         Err(Error::Conflict)
     ));
     // Same logical key, different declared work: conflict, never a re-point.
     assert!(matches!(
-        h.run(&h.intent(
-            "ensure-3",
-            "work.ensure",
-            ensure_input("feature-x", "other")
-        ))
-        .await,
+        h.run(&h.intent("ensure-3", "work.ensure", input("feature-x", "other")))
+            .await,
         Err(Error::Conflict)
     ));
     assert_eq!(h.graph.mutations(), 1);
     // Owner admission and the outbox event committed together per ensured intent.
     assert_eq!(outbox(&pool, h.service.namespace.namespace_id).await, 2);
     // Undeclared kinds never reach an adapter.
-    let mut bad = ensure_input("feature-z", "ctx");
+    let mut bad = input("feature-z", "ctx");
     bad["kind"] = json!("deploy");
     assert!(matches!(
         h.run(&h.intent("ensure-4", "work.ensure", bad)).await,

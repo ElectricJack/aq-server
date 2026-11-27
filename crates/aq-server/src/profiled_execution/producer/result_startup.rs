@@ -3,11 +3,13 @@
 //! module creates no client, credential, local channel or execution authority.
 use super::refused;
 use crate::{AppState, error::AppError, profiled_execution::definitions::Definition};
-use aq_admission::{ArtifactRef, DOCKER_LOCAL_PROFILES, Digest, Text};
+use aq_admission::{ArtifactRef, DOCKER_LOCAL_PROFILES, Digest, DockerLocalProfile, Text};
 use serde::Deserialize;
 
 pub(super) const STARTUP_ID: &str = "aq.agent-result-startup";
 const STARTUP_DIGEST: &str = "667d48a537baa35335fb3da1e589846e9d294a2bc24a8df58cf682181b15229a";
+/// Byte length of the pinned startup instruction.
+const STARTUP_LEN: usize = 1929;
 const CONTRACT_DIGEST: &str = "4fe711c405ead85b55a54de2d7446b2c106c4b8809b16bc57497ba2af1d35ef9";
 const ADAPTER_ID: &str = "aq.codex-result-local-adapter";
 /// Docker-local executors (long phase, no terminal input): `DOCKER_LOCAL_PROFILES`.
@@ -51,6 +53,28 @@ pub(super) fn from_definitions(
     if !result_adapter(adapter.id.as_str()) {
         return Ok(None);
     }
+    let opt = selected_opt_in(adapter, definitions)?;
+    // A docker-local adapter identity carries only its own profile.
+    let sandbox = DOCKER_LOCAL_PROFILES
+        .iter()
+        .find(|p| p.adapter == adapter.id.as_str());
+    if sandbox.is_some_and(|p| p.profile != opt.profile) {
+        return Err(refused());
+    }
+    if !supported_opt_in(&opt, adapter)? {
+        return Err(refused());
+    }
+    let (artifact, text) = startup_instruction(definitions)?;
+    let interactive = opt.profile == INTERACTIVE_PROFILE;
+    Ok(Some(ReportingInstruction {
+        artifact,
+        text,
+        interactive,
+        long_phase: interactive || sandbox.is_some(),
+    }))
+}
+/// The opt-in metadata of the whole definition selected for `adapter`.
+fn selected_opt_in(adapter: &ArtifactRef, definitions: &[Definition]) -> Result<OptIn, AppError> {
     // Definition revisions advance when whole runtime/environment bytes change.
     // The Definition owner validates the revision; protocol versions stay below.
     let selected = definitions
@@ -60,57 +84,60 @@ pub(super) fn from_definitions(
     if Digest::of(selected.body().as_bytes()) != adapter.digest {
         return Err(refused());
     }
-    let opt: OptIn = serde_json::from_str(selected.body()).map_err(|_| refused())?;
-    let recipe_matches = match opt.profile.as_str() {
-        PROFILE => {
-            opt.recipe.id.as_str() == "aq.codex-result-local-recipe"
-                && opt.recipe.version.as_str() == "1"
-        }
+    serde_json::from_str(selected.body()).map_err(|_| refused())
+}
+/// Schema one, the recipe pinned for the profile and the public contract.
+fn supported_opt_in(opt: &OptIn, adapter: &ArtifactRef) -> Result<bool, AppError> {
+    Ok(opt.schema_version == 1
+        && recipe_matches(opt, adapter)?
+        && opt.contract == public_reference("aq.agent-result-local", CONTRACT_DIGEST)?)
+}
+/// The opt-in names the recipe its profile pins for `adapter`.
+fn recipe_matches(opt: &OptIn, adapter: &ArtifactRef) -> Result<bool, AppError> {
+    let recipe = &opt.recipe;
+    let version_one = recipe.version.as_str() == "1";
+    Ok(match opt.profile.as_str() {
+        PROFILE => recipe.id.as_str() == "aq.codex-result-local-recipe" && version_one,
         INTERACTIVE_PROFILE => {
-            opt.recipe
+            *recipe
                 == public_reference(
                     "aq.codex-interactive-result-local-recipe",
                     INTERACTIVE_RECIPE_DIGEST,
                 )?
         }
-        profile => DOCKER_LOCAL_PROFILES.iter().any(|p| {
-            p.profile == profile
-                && p.adapter == adapter.id.as_str()
-                && p.recipe_id == opt.recipe.id.as_str()
-                && opt.recipe.version.as_str() == "1"
-                && p.recipe_digest
-                    .is_none_or(|d| d == opt.recipe.digest.as_str())
-        }),
-    };
-    // A docker-local adapter identity carries only its own profile.
-    let sandbox = DOCKER_LOCAL_PROFILES
-        .iter()
-        .find(|p| p.adapter == adapter.id.as_str());
-    if sandbox.is_some_and(|p| p.profile != opt.profile) {
-        return Err(refused());
-    }
-    if opt.schema_version != 1
-        || !recipe_matches
-        || opt.contract != public_reference("aq.agent-result-local", CONTRACT_DIGEST)?
-    {
-        return Err(refused());
-    }
+        profile => {
+            version_one
+                && DOCKER_LOCAL_PROFILES
+                    .iter()
+                    .filter(|p| p.profile == profile && p.adapter == adapter.id.as_str())
+                    .any(|p| pins_recipe(p, recipe))
+        }
+    })
+}
+/// The docker-local profile pins `recipe`'s id and, where it has one, digest.
+fn pins_recipe(sandbox: &DockerLocalProfile, recipe: &ArtifactRef) -> bool {
+    sandbox.recipe_id == recipe.id.as_str()
+        && sandbox
+            .recipe_digest
+            .is_none_or(|d| d == recipe.digest.as_str())
+}
+/// The exact public startup instruction, by pinned reference and length.
+fn startup_instruction(definitions: &[Definition]) -> Result<(ArtifactRef, String), AppError> {
     let artifact = public_reference(STARTUP_ID, STARTUP_DIGEST)?;
     let instruction = definitions
         .iter()
         .find(|d| d.artifact() == &artifact)
         .ok_or_else(|| refused())?;
-    if instruction.body().len() != 1929
+    if instruction.body().len() != STARTUP_LEN
         || Digest::of(instruction.body().as_bytes()) != artifact.digest
     {
         return Err(refused());
     }
-    Ok(Some(ReportingInstruction {
-        artifact,
-        text: instruction.body().to_owned(),
-        interactive: opt.profile == INTERACTIVE_PROFILE,
-        long_phase: opt.profile == INTERACTIVE_PROFILE || sandbox.is_some(),
-    }))
+    Ok((artifact, instruction.body().to_owned()))
+}
+/// Profiles that run under the long (schema 3) phase policy.
+fn long_phase_profile(profile: &str) -> bool {
+    profile == INTERACTIVE_PROFILE || DOCKER_LOCAL_PROFILES.iter().any(|p| p.profile == profile)
 }
 pub(super) fn interactive_runtime(
     runtime: &ArtifactRef,
@@ -121,17 +148,12 @@ pub(super) fn interactive_runtime(
         runtime: ArtifactRef,
         profile: String,
     }
-    for definition in definitions {
-        if !result_adapter(definition.artifact().id.as_str()) {
-            continue;
-        }
+    let result_definitions = definitions
+        .iter()
+        .filter(|d| result_adapter(d.artifact().id.as_str()));
+    for definition in result_definitions {
         let pin: RuntimePin = serde_json::from_str(definition.body()).map_err(|_| refused())?;
-        if pin.runtime == *runtime
-            && (pin.profile == INTERACTIVE_PROFILE
-                || DOCKER_LOCAL_PROFILES
-                    .iter()
-                    .any(|p| p.profile == pin.profile))
-        {
+        if pin.runtime == *runtime && long_phase_profile(&pin.profile) {
             return Ok(from_definitions(definition.artifact(), definitions)?
                 .is_some_and(|value| value.long_phase));
         }
@@ -150,21 +172,29 @@ pub(super) fn for_adapter(
         .profiled_execution
         .as_ref()
         .ok_or_else(|| refused())?;
+    // A derived adapter (spec 0017) reports as the boot adapter it derives from.
+    #[cfg(feature = "project_environments")]
+    let adapter = &(aq_environments::boot_adapter(
+        adapter,
+        config.definition_bodies.iter().map(Definition::artifact),
+    ))
+    .unwrap_or_else(|| adapter.clone());
     from_definitions(adapter, &config.definition_bodies)
 }
 impl ReportingInstruction {
     pub fn validate_rendered(&self, count: usize, bytes: &[u8]) -> Result<(), AppError> {
-        if count != 1
-            || bytes
-                .windows(self.text.len())
-                .filter(|part| *part == self.text.as_bytes())
-                .count()
-                != 1
-        {
+        if count != 1 || occurrences(bytes, self.text.as_bytes()) != 1 {
             return Err(refused());
         }
         Ok(())
     }
+}
+/// Possibly overlapping occurrences of a non-empty `needle` in `bytes`.
+fn occurrences(bytes: &[u8], needle: &[u8]) -> usize {
+    bytes
+        .windows(needle.len())
+        .filter(|part| *part == needle)
+        .count()
 }
 
 #[cfg(test)]
@@ -185,9 +215,24 @@ mod tests {
             "contract":public_reference("aq.agent-result-local",CONTRACT_DIGEST).unwrap(),"recipe":reference("aq.codex-result-local-recipe"),
             "permission_digest":Digest::of(b"whole existing compiled permission plan"),"reserved_client_bytes":67108864})
     }
+    fn interactive_body() -> Value {
+        let mut value = body();
+        value["profile"] = json!(INTERACTIVE_PROFILE);
+        value["recipe"] = json!(
+            public_reference(
+                "aq.codex-interactive-result-local-recipe",
+                INTERACTIVE_RECIPE_DIGEST,
+            )
+            .unwrap()
+        );
+        value
+    }
     fn definitions(body: Value) -> (ArtifactRef, Vec<Definition>) {
-        let bytes = serde_json::to_string(&body).unwrap();
-        let mut adapter = reference(ADAPTER_ID);
+        selected(reference(ADAPTER_ID), &body)
+    }
+    /// `adapter`, pinned to the bytes of `body`, beside the public startup.
+    fn selected(mut adapter: ArtifactRef, body: &Value) -> (ArtifactRef, Vec<Definition>) {
+        let bytes = serde_json::to_string(body).unwrap();
         adapter.digest = Digest::of(bytes.as_bytes());
         let definitions = vec![
             Definition::new(adapter.clone(), ArtifactKind::Definition, bytes).unwrap(),
@@ -223,51 +268,32 @@ mod tests {
     #[test]
     fn docker_local_profiles_run_the_long_phase_with_their_pinned_recipe_only() {
         for sandbox in &DOCKER_LOCAL_PROFILES {
-            let (_, startup) = definitions(body());
             let select = |adapter: &str, recipe: ArtifactRef| {
                 let mut value = body();
                 value["profile"] = json!(sandbox.profile);
                 value["recipe"] = json!(recipe);
-                let bytes = serde_json::to_string(&value).unwrap();
-                let mut adapter = reference(adapter);
-                adapter.digest = Digest::of(bytes.as_bytes());
-                let mut defs = startup.clone();
-                defs[0] =
-                    Definition::new(adapter.clone(), ArtifactKind::Definition, bytes).unwrap();
-                (adapter, defs)
+                selected(reference(adapter), &value)
             };
             let pin = public_reference(sandbox.recipe_id, sandbox.recipe_digest.unwrap()).unwrap();
             let (adapter, defs) = select(sandbox.adapter, pin.clone());
             let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
             assert!(!reporting.interactive && reporting.long_phase);
             assert!(interactive_runtime(&reference("runtime-code"), &defs).unwrap());
-            // Another recipe body under the same profile is refused.
-            let (adapter, defs) = select(sandbox.adapter, reference(sandbox.recipe_id));
-            assert!(
-                from_definitions(&adapter, &defs).is_err(),
-                "{}",
-                sandbox.harness
-            );
-            // A docker-local profile under the Codex result adapter identity is refused.
-            let (adapter, defs) = select(ADAPTER_ID, pin);
-            assert!(
-                from_definitions(&adapter, &defs).is_err(),
-                "{}",
-                sandbox.harness
-            );
+            for (adapter, recipe) in [
+                // Another recipe body under the same profile is refused.
+                (sandbox.adapter, reference(sandbox.recipe_id)),
+                // A docker-local profile under the Codex result adapter identity is refused.
+                (ADAPTER_ID, pin.clone()),
+            ] {
+                let (adapter, defs) = select(adapter, recipe);
+                let refused = from_definitions(&adapter, &defs).is_err();
+                assert!(refused, "{}", sandbox.harness);
+            }
         }
     }
     #[test]
     fn interactive_profile_requires_its_exact_public_recipe_and_keeps_counted_startup() {
-        let mut value = body();
-        value["profile"] = json!(INTERACTIVE_PROFILE);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.codex-interactive-result-local-recipe",
-                INTERACTIVE_RECIPE_DIGEST,
-            )
-            .unwrap()
-        );
+        let mut value = interactive_body();
         let (adapter, defs) = definitions(value.clone());
         let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
         assert_eq!(reporting.text, TEXT);
@@ -284,25 +310,11 @@ mod tests {
     #[test]
     fn definition_revision_two_preserves_schema_recipe_and_contract_one() {
         fn revision_two(body: Value) -> (ArtifactRef, Vec<Definition>) {
-            let (mut adapter, mut defs) = definitions(body);
+            let mut adapter = reference(ADAPTER_ID);
             adapter.version = Text::new("2").unwrap();
-            defs[0] = Definition::new(
-                adapter.clone(),
-                ArtifactKind::Definition,
-                defs[0].body().to_owned(),
-            )
-            .unwrap();
-            (adapter, defs)
+            selected(adapter, &body)
         }
-        let mut value = body();
-        value["profile"] = json!(INTERACTIVE_PROFILE);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.codex-interactive-result-local-recipe",
-                INTERACTIVE_RECIPE_DIGEST,
-            )
-            .unwrap()
-        );
+        let value = interactive_body();
         let (adapter, defs) = revision_two(value.clone());
         assert!(
             from_definitions(&adapter, &defs)
@@ -334,15 +346,7 @@ mod tests {
         let runtime = reference("runtime-code");
         let (_, defs) = definitions(body());
         assert!(!interactive_runtime(&runtime, &defs).unwrap());
-        let mut value = body();
-        value["profile"] = json!(INTERACTIVE_PROFILE);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.codex-interactive-result-local-recipe",
-                INTERACTIVE_RECIPE_DIGEST,
-            )
-            .unwrap()
-        );
+        let mut value = interactive_body();
         let (_, defs) = definitions(value.clone());
         assert!(interactive_runtime(&runtime, &defs).unwrap());
         assert!(!interactive_runtime(&reference("other-runtime"), &defs).unwrap());

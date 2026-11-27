@@ -5,7 +5,7 @@ use super::{accepted_owner, phase_owner};
 use crate::{
     AppState,
     error::AppError,
-    execution::authority::{self, Kind, Policy},
+    execution::authority::{self, Policy},
     profiled_execution::closure,
     worker_api::{self, AuthenticatedNode},
 };
@@ -66,11 +66,7 @@ async fn read_inner(
         Policy::IdentityOnly,
     )
     .await?;
-    if view.kind != Kind::ProfiledV1
-        || view.offer_id != request.binding.offer_id
-        || view.launch_manifest_digest.as_ref() != Some(&request.binding.launch_manifest_digest)
-        || view.execution_spec_digest != request.binding.execution_spec_digest.as_str()
-    {
+    if !super::common::authority_matches_binding(&view, &request.binding) {
         return Err(conflict());
     }
     let accepted = accepted_owner::load_accepted_history_locked(&mut tx, &request.binding).await?;

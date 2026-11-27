@@ -226,6 +226,8 @@ pub(super) async fn fence_locked(
     let supports = |h: &aq_selection::InstalledHarness| {
         renewal::choice_supported_by_harness(h, c, input.policy)
     };
+    let qualified = &loaded.config.qualified_harnesses;
+    let qualified = super::super::definitions::qualified(state, tx, qualified).await?;
     if row.get::<Uuid, _>("boot_id") != boot
         || inventory.target != target
         || inventory.revision != revision
@@ -234,7 +236,7 @@ pub(super) async fn fence_locked(
         || inventory.harnesses.len() > 16
         || inventory.credential_bindings.len() > 32
         || !inventory.harnesses.iter().any(supports)
-        || !loaded.config.qualified_harnesses.iter().any(supports)
+        || !qualified.iter().any(supports)
     {
         return Err(refused());
     }
@@ -312,7 +314,15 @@ pub(super) async fn fence_locked(
     // The switch's attestation, as in selection; rows and attestation within 1,024.
     let credentials = std::slice::from_ref(credential);
     let mine = crate::intelligence::resolver::relevant(availability.clone(), credentials, node);
-    let owner = aq_machine_control::owner_attested(tx, credentials, &mine, registry_revision, time);
+    let owner = aq_machine_control::owner_attested(
+        tx,
+        credentials,
+        &mine,
+        aq_machine_control::AttestationTime {
+            revision: registry_revision,
+            now_ms: time,
+        },
+    );
     availability.extend(owner.await?);
     if availability.len() > 1024 {
         return Err(refused());

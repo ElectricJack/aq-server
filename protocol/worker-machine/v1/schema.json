@@ -52,6 +52,17 @@
       "format": "uint64",
       "minimum": 0
     },
+    "sandbox_admission": {
+      "description": "Present while the machine cannot admit a sandbox and rechecks automatically.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AdmissionDeferral"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "schema_version": {
       "type": "integer",
       "format": "uint32",
@@ -74,6 +85,44 @@
     "cpu_busy_bps"
   ],
   "$defs": {
+    "AdmissionDeferral": {
+      "description": "Why a machine defers sandbox admission (`sandbox_disk_headroom_unavailable`, ...), since\nwhen on the worker's clock, and for a disk shortfall the bytes available and required.",
+      "type": "object",
+      "properties": {
+        "available_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "required_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "since_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "since_ms"
+      ]
+    },
     "HostProbe": {
       "type": "string",
       "enum": [

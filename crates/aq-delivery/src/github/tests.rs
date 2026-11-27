@@ -100,6 +100,23 @@ async fn handle(State(mock): State<Mock>, request: Request) -> Response {
     }
     response
 }
+/// GraphQL's look at pull request 7's merge queue: whether its base has one,
+/// its entry, and its last queue event (`[typename, reason, createdAt]`).
+fn queue_look(enabled: bool, entry: Option<&str>, last: Option<(&str, &str, &str)>) -> Value {
+    let nodes: Vec<Value> = last
+        .into_iter()
+        .map(|(kind, reason, at)| json!({"__typename": kind, "reason": reason, "createdAt": at}))
+        .collect();
+    json!({"data": {"repository": {"pullRequest": {
+        "id": "PR_7", "isMergeQueueEnabled": enabled,
+        "mergeQueueEntry": entry.map(|state| json!({"state": state})),
+        "timelineItems": {"nodes": nodes}
+    }}}})
+}
+/// The base branch has no merge queue: a direct merge follows.
+fn no_queue(mock: &Mock) {
+    mock.reply(200, vec![], queue_look(false, None, None));
+}
 /// A local GitHub stand-in and an App pointed at it, with installation 77
 /// for owner `Acme`.
 async fn app() -> (GitHubApp, Mock) {
@@ -127,13 +144,14 @@ fn jwt_claims_and_signature_verify_with_the_app_key() {
     let creds = credentials();
     let now = Utc::now();
     let claims = verify(&creds.jwt_at(now).unwrap(), true);
-    assert_eq!(claims.iss, APP_ID.to_string());
-    assert_eq!(claims.iat, now.timestamp() - 60, "iat is 60 s in the past");
-    assert!(
-        claims.exp - now.timestamp() <= 600,
-        "exp at most 10 min ahead"
+    assert_eq!(
+        (claims.iss.as_str(), claims.iat),
+        (APP_ID.to_string().as_str(), now.timestamp() - 60)
     );
-    assert!(claims.exp > now.timestamp());
+    assert!(
+        (1..=600).contains(&(claims.exp - now.timestamp())),
+        "expiry is within the next ten minutes"
+    );
     assert_eq!(creds.claims_at(now), claims);
 }
 
@@ -172,22 +190,37 @@ async fn mints_a_token_for_one_repository_with_the_documented_request() {
     let expires = Utc::now() + Span::hours(1);
     mock.token("ghs_first", expires);
     let token = app.installation_token("acme", "widgets").await.unwrap();
-    assert_eq!(token.secret(), "ghs_first");
-    assert_eq!(token.installation_id, 77);
-    assert_eq!(token.expires_at.timestamp(), expires.timestamp());
+    assert_eq!(
+        (
+            token.secret(),
+            token.installation_id,
+            token.expires_at.timestamp()
+        ),
+        ("ghs_first", 77, expires.timestamp())
+    );
     assert!(!format!("{token:?}").contains("ghs_first"), "Debug redacts");
 
     let seen = mock.seen();
-    assert_eq!(seen.len(), 1);
-    let r = &seen[0];
-    assert_eq!(r.method, "POST");
-    assert_eq!(r.path, "/api/v3/app/installations/77/access_tokens");
-    assert_eq!(r.body, json!({"repositories": ["widgets"]}));
+    let [r] = seen.as_slice() else {
+        panic!("expected one token request, got {}", seen.len())
+    };
+    assert_eq!(
+        (r.method.as_str(), r.path.as_str(), &r.body),
+        (
+            "POST",
+            "/api/v3/app/installations/77/access_tokens",
+            &json!({"repositories":["widgets"]})
+        )
+    );
     let header = |name: &str| r.headers.get(name).unwrap().to_str().unwrap().to_string();
-    assert_eq!(header("accept"), "application/vnd.github+json");
-    assert_eq!(header("x-github-api-version"), "2022-11-28");
-    assert_eq!(header("user-agent"), "aq-server");
-    assert_eq!(header("content-type"), "application/json");
+    for (name, expected) in [
+        ("accept", "application/vnd.github+json"),
+        ("x-github-api-version", "2022-11-28"),
+        ("user-agent", "aq-server"),
+        ("content-type", "application/json"),
+    ] {
+        assert_eq!(header(name), expected, "{name}");
+    }
     let jwt = header("authorization")
         .strip_prefix("Bearer ")
         .unwrap()
@@ -204,10 +237,8 @@ async fn installation_token_authenticates_api_calls() {
     let repo: Value = app
         .client()
         .send(
-            reqwest::Method::GET,
-            "/repos/Acme/widgets",
+            ApiRequest::new(reqwest::Method::GET, "/repos/Acme/widgets"),
             Auth::Installation(&token),
-            None,
         )
         .await
         .unwrap();
@@ -333,15 +364,17 @@ fn error_statuses_map_onto_github_api_errors() {
             reset_at: Some(now + Span::seconds(120))
         }
     );
-    // Secondary limit without any reset header.
-    assert_eq!(
-        map(
-            403,
-            &HeaderMap::new(),
-            &body("You have exceeded a secondary rate limit")
-        ),
-        GitHubApiError::Retryable { reset_at: None }
-    );
+    for (status, message) in [(403, "You have exceeded a secondary rate limit"), (429, "")] {
+        let payload = if message.is_empty() {
+            Vec::new()
+        } else {
+            body(message)
+        };
+        assert_eq!(
+            map(status, &HeaderMap::new(), &payload),
+            GitHubApiError::Retryable { reset_at: None }
+        );
+    }
     // A permission 403 is not a rate limit.
     assert_eq!(
         map(
@@ -353,10 +386,6 @@ fn error_statuses_map_onto_github_api_errors() {
             status: 403,
             message: "Resource not accessible by integration".into()
         }
-    );
-    assert_eq!(
-        map(429, &HeaderMap::new(), b""),
-        GitHubApiError::Retryable { reset_at: None }
     );
     assert_eq!(map(404, &HeaderMap::new(), b""), GitHubApiError::NotFound);
     assert_eq!(
@@ -508,9 +537,13 @@ fn delivery_task_allowlist_narrows_enrolled_projects() {
     };
     assert!(parse(None).unwrap().enrolls(project, Uuid::new_v4()));
     let pilot = parse(Some(vec![task])).unwrap();
-    assert!(pilot.enrolls(project, task));
-    assert!(!pilot.enrolls(project, Uuid::new_v4()));
-    assert!(!pilot.enrolls(Uuid::new_v4(), task));
+    for (project, task, expected) in [
+        (project, task, true),
+        (project, Uuid::new_v4(), false),
+        (Uuid::new_v4(), task, false),
+    ] {
+        assert_eq!(pilot.enrolls(project, task), expected);
+    }
     assert!(!parse(Some(vec![])).unwrap().has_enrollment());
     assert!(parse(Some(vec![Uuid::nil()])).is_err());
     assert!(deserialize(json!({"project_allowlist": [project]})).is_err());

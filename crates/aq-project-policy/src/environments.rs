@@ -1,8 +1,8 @@
 //! Spec 0017 §5: which environment an attempt runs in. Pure: the caller
 //! reads the task's metadata, the binding, the profile and the definitions.
-//! This is the default rule of §5.4; the router (step 4) will feed the same
-//! [`place`] with the environment the routing document chose.
-use crate::{ProjectBinding, labels};
+//! This is the default rule of §5.4; the environment the routing document
+//! chose comes in as `kept` when the attempt continues none.
+use crate::{ProjectBinding, validation::labels};
 use serde_json::Value;
 
 /// The task metadata key that holds what a task needs from its environment.
@@ -56,6 +56,10 @@ pub struct Missing {
     pub environment: String,
     pub missing: Vec<String>,
 }
+pub struct FixedEnvironments<'a> {
+    pub pinned: Option<&'a str>,
+    pub kept: Option<&'a str>,
+}
 /// The environment of an attempt (spec 0017 §5.4): the profile's `pinned`
 /// one, else the one the attempt it continues ran in (`kept`), else the
 /// binding's `default_environment` if it provides every need, else the
@@ -64,8 +68,7 @@ pub struct Missing {
 /// every need; `Missing` names the labels the first candidate lacks.
 pub fn place(
     binding: &ProjectBinding,
-    pinned: Option<&str>,
-    kept: Option<&str>,
+    fixed: FixedEnvironments,
     needs: &[String],
     provides: impl Fn(&str) -> Vec<String>,
 ) -> Result<String, Missing> {
@@ -76,7 +79,7 @@ pub fn place(
             .cloned()
             .collect()
     };
-    let fixed = pinned.or(kept);
+    let fixed = fixed.pinned.or(fixed.kept);
     let default = binding.default_environment.as_deref();
     let fits = (binding.allowed_environments.iter())
         .filter(|e| lacking(e).is_empty())
@@ -96,6 +99,31 @@ pub fn place(
         environment: first.to_owned(),
         missing: lacking(first),
     })
+}
+
+/// A durable workspace service requirement can make the former environment
+/// unusable. Only that service, not arbitrary task metadata, permits an
+/// alternative to an existing pin. All capabilities still have to be present.
+pub fn place_with_services(
+    binding: &ProjectBinding,
+    fixed: FixedEnvironments<'_>,
+    needs: &[String],
+    services: &[String],
+    provides: impl Fn(&str) -> Vec<String>,
+) -> Result<(String, bool), Missing> {
+    let has_anchor = fixed.pinned.or(fixed.kept).is_some();
+    match place(binding, fixed, needs, &provides) {
+        Err(missing)
+            if has_anchor && missing.missing.iter().any(|label| services.contains(label)) =>
+        {
+            let alternative = FixedEnvironments {
+                pinned: None,
+                kept: None,
+            };
+            place(binding, alternative, needs, provides).map(|environment| (environment, true))
+        }
+        result => result.map(|environment| (environment, false)),
+    }
 }
 
 #[cfg(test)]
@@ -127,7 +155,53 @@ mod tests {
         kept: Option<&str>,
         n: &[&str],
     ) -> Result<String, Missing> {
-        super::place(&binding(default), pinned, kept, &needs(n), provides)
+        super::place(
+            &binding(default),
+            FixedEnvironments { pinned, kept },
+            &needs(n),
+            provides,
+        )
+    }
+
+    #[test]
+    fn an_approved_service_can_move_a_successor_with_a_pinned_environment() {
+        let mut b = binding(Some("web"));
+        b.allowed_environments.push("web-postgres@1".into());
+        let provides_service = |name: &str| {
+            if name == "web-postgres@1" {
+                needs(&["node", "postgres"])
+            } else {
+                provides(name)
+            }
+        };
+        let pin = || FixedEnvironments {
+            pinned: Some("web"),
+            kept: Some("web"),
+        };
+        let postgres = needs(&["postgres"]);
+        let required = needs(&["node", "postgres"]);
+        assert_eq!(
+            place_with_services(&b, pin(), &required, &postgres, provides_service),
+            Ok(("web-postgres@1".into(), true))
+        );
+        assert!(place_with_services(&b, pin(), &required, &[], provides_service).is_err());
+        let unrelated = needs(&["rust"]);
+        assert!(place_with_services(&b, pin(), &unrelated, &postgres, provides_service).is_err());
+        assert_eq!(
+            place_with_services(&b, pin(), &needs(&["node"]), &[], provides_service),
+            Ok(("web".into(), false))
+        );
+        let pinned_postgres = FixedEnvironments {
+            pinned: Some("web-postgres@1"),
+            kept: Some("web"),
+        };
+        assert_eq!(
+            place_with_services(&b, pinned_postgres, &required, &postgres, provides_service),
+            Ok(("web-postgres@1".into(), false))
+        );
+        b.allowed_environments
+            .retain(|environment| environment != "web-postgres@1");
+        assert!(place_with_services(&b, pin(), &required, &postgres, provides_service).is_err());
     }
 
     #[test]

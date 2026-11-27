@@ -54,12 +54,26 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
     }
 }
 
-/// The catalog a source is authored against, whole: catalog 2.3.0 for the
+/// The catalog a source is authored against, whole: catalog 2.6.0 for the
 /// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
-/// every other.
+/// every other. With spec 0017, 2.5.0 for the routing source and for a
+/// delivery record that asks the environment commands (keeping the 2.6.0
+/// `work.read`).
 pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
+<<<<<<< HEAD
+=======
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if environment_delivery(record) {
+        return catalog_2_5_delivery();
+    }
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::ROUTING {
+        return catalog_2_5();
+    }
+    #[cfg(feature = "delivery_playbook")]
+>>>>>>> refs/remotes/central/main
     if record.id == crate::builtin::DELIVERY {
-        return catalog_2_3();
+        return catalog_2_6();
     }
     let _ = record;
     Ok(docs::catalog_registry())
@@ -70,19 +84,104 @@ pub fn catalog_2_3() -> Result<Registry> {
         .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()))
 }
 
+/// Catalog 2.6.0: 2.3.0 with the `work.read` whose facts add the task's
+/// acceptance criteria and its latest result's conclusion.
+#[cfg(feature = "delivery_playbook")]
+pub const CATALOG_2_6_REGISTRY: &str =
+    include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
+#[cfg(feature = "delivery_playbook")]
+const CATALOG_2_6_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.6.0/notes.json");
+
+#[cfg(feature = "delivery_playbook")]
+pub fn catalog_2_6() -> Result<Registry> {
+    serde_json::from_str(CATALOG_2_6_REGISTRY)
+        .map_err(|_| Error::Invalid("catalog 2.6.0 does not parse".into()))
+}
+
+/// Catalog 2.5.0 (spec 0017).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const CATALOG_2_5_REGISTRY: &str =
+    include_str!("../../../vendor/aq-host-catalog-2.5.0/registry.json");
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+const CATALOG_2_5_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.5.0/notes.json");
+
+/// Catalog 2.5.0 whole: the routing source's (spec 0017 §5.4), whose
+/// `work.read` and `work.route` carry the environment.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn catalog_2_5() -> Result<Registry> {
+    serde_json::from_str(CATALOG_2_5_REGISTRY)
+        .map_err(|_| Error::Invalid("catalog 2.5.0 does not parse".into()))
+}
+
+/// The built-in delivery record of a namespace that serves environments
+/// ([`crate::builtin::delivery`]).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+fn environment_delivery(record: &SourceRecord) -> bool {
+    record.id == crate::builtin::DELIVERY && record.commands.contains("environment.build")
+}
+
+/// The delivery source's catalog 2.5.0: the environment commands and events
+/// added, every 2.3.0 contract it uses unchanged and the 2.6.0 `work.read`
+/// (the 2.5.0 one adds the routing facts of spec 0017 §5.4).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn catalog_2_5_delivery() -> Result<Registry> {
+    let mut catalog = catalog_2_5()?;
+    let read = catalog_2_6()?.commands.remove("work.read");
+    catalog
+        .commands
+        .extend(read.map(|c| ("work.read".to_owned(), c)));
+    Ok(catalog)
+}
+
 /// `CATALOG.md` of the catalog the workspace actually uses.
 fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
+<<<<<<< HEAD
+=======
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if environment_delivery(record) {
+        // 2.5.0's notes, with 2.6.0's on the 2.6.0 work.read.
+        let parse = |text: &str| serde_json::from_str::<Value>(text).map_err(|_| Error::Corrupt);
+        let mut notes = parse(CATALOG_2_5_NOTES)?;
+        notes["commands"]["work.read"] = parse(CATALOG_2_6_NOTES)?["commands"]["work.read"].take();
+        let mut text = docs::catalog_with_extensions(
+            _catalog,
+            &notes.to_string(),
+            &record.commands,
+            &record.events,
+            &[],
+        )
+        .map_err(Error::Invalid)?;
+        text.push_str(include_str!("delivery_review_contract.md"));
+        return Ok(text);
+    }
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::ROUTING {
+        let (commands, events) = (&record.commands, &record.events);
+        return docs::catalog_with_extensions(_catalog, CATALOG_2_5_NOTES, commands, events, &[])
+            .map_err(Error::Invalid);
+    }
+    #[cfg(feature = "delivery_playbook")]
+    if record.id == crate::builtin::DELIVERY {
+        let mut text = docs::catalog_with_extensions(
+            _catalog,
+            CATALOG_2_6_NOTES,
+            &record.commands,
+            &record.events,
+            &[],
+        )
+        .map_err(Error::Invalid)?;
+        text.push_str(include_str!("delivery_review_contract.md"));
+        return Ok(text);
+    }
+    // Routing on a Host10 server: catalog 2.3.0.
+    #[cfg(feature = "delivery_playbook")]
+>>>>>>> refs/remotes/central/main
     if _catalog
         .commands
         .get("work.read")
         .is_some_and(|c| c.version == "2.3.0")
     {
-        let mut notes =
-            docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid)?;
-        if record.id == crate::builtin::DELIVERY {
-            notes.push_str(include_str!("delivery_review_contract.md"));
-        }
-        return Ok(notes);
+        return docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid);
     }
     docs::catalog(&record.commands, &record.events).map_err(Error::Invalid)
 }
@@ -115,18 +214,28 @@ fn case_file(index: usize, case: &Value) -> String {
     format!("{:02}-{slug}.json", index + 1)
 }
 
+/// The document and versioned facts the authoring agent reads.
+pub struct WorkspaceSource<'a> {
+    pub markdown: &'a str,
+    pub facts: &'a BTreeMap<String, Value>,
+    pub facts_version: &'a str,
+}
+
 /// Every file of the workspace, by relative path: the document, the host's
 /// record, catalog and facts, the guide, the language reference, the catalog
 /// in words, the worked examples and, when one is in effect, the previous
 /// playbook. `facts_version` is recorded with every fact the draft reads.
 pub fn workspace_files(
     record: &SourceRecord,
-    markdown: &str,
+    source: WorkspaceSource<'_>,
     catalog: &Registry,
-    facts: &BTreeMap<String, Value>,
-    facts_version: &str,
     previous: Option<&PreviousPlaybook>,
 ) -> Result<BTreeMap<String, String>> {
+    let WorkspaceSource {
+        markdown,
+        facts,
+        facts_version,
+    } = source;
     let mut files = BTreeMap::new();
     let mut put = |path: &str, text: String| files.insert(path.to_owned(), text);
     put(draft::SOURCE_FILE, markdown.to_owned());
@@ -138,7 +247,16 @@ pub fn workspace_files(
     put(draft::FACTS_FILE, pretty(facts)?);
     put("GUIDE.md", docs::GUIDE.to_owned());
     put("LANGUAGE.md", docs::LANGUAGE.to_owned());
-    put("CATALOG.md", catalog_notes(record, catalog)?);
+    let mut notes = catalog_notes(record, catalog)?;
+    if record.id == crate::builtin::ROUTING {
+        notes.push_str(concat!(
+            "\n## Queued task placement\n\n",
+            "Use `work.route` to choose the task's level and give ordered provider and harness preferences.\n",
+            "Other eligible candidates can still serve the task within its selected level and placement policy.\n",
+            "Omit `hold` when authoring a new route. AQ accepts the field in older drafts as a preference.\n",
+        ));
+    }
+    put("CATALOG.md", notes);
     for (path, text) in docs::example_files() {
         put(&format!("examples/{path}"), text.to_owned());
     }
@@ -216,7 +334,17 @@ mod tests {
     fn files(previous: Option<&PreviousPlaybook>) -> BTreeMap<String, String> {
         let facts = BTreeMap::from([("owner".to_string(), json!("user:owner-1"))]);
         let catalog = docs::catalog_registry();
-        workspace_files(&notify(), "Ask for it.\n", &catalog, &facts, "v1", previous).unwrap()
+        workspace_files(
+            &notify(),
+            WorkspaceSource {
+                markdown: "Ask for it.\n",
+                facts: &facts,
+                facts_version: "v1",
+            },
+            &catalog,
+            previous,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -243,10 +371,12 @@ mod tests {
         wrong.commands.insert("work.delete".into());
         let made = workspace_files(
             &wrong,
-            "",
+            WorkspaceSource {
+                markdown: "",
+                facts: &BTreeMap::new(),
+                facts_version: "v1",
+            },
             &docs::catalog_registry(),
-            &BTreeMap::new(),
-            "v1",
             None,
         );
         assert!(matches!(made, Err(Error::Invalid(_))));

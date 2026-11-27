@@ -12,7 +12,8 @@ use crate::{
     project_bindings::domain::ProjectBinding,
 };
 use aq_delivery::repository_onboarding::{
-    self as wire, Adoption, AdoptionError, Git, Github, Meta, Row, label, response, slug,
+    self as wire, Adoption, AdoptionError, Git, Github, Meta, Row, Transition, label, response,
+    slug,
 };
 use axum::{
     Json, Router,
@@ -25,6 +26,9 @@ pub use wire::{
     AdoptRequest, CredentialKind, CredentialProfile, GithubRepository, OnboardRequest,
     OnboardingConfig, PublicationRequest, Transport,
 };
+
+mod advance;
+use advance::advance;
 
 type Result<T> = std::result::Result<T, AppError>;
 const RESERVED: [&str; 5] = [
@@ -78,24 +82,6 @@ fn step_operation(operation_id: Uuid, step: &str) -> Uuid {
     uuid::Builder::from_random_bytes(bytes).into_uuid()
 }
 
-async fn aq_git(
-    state: &AppState,
-    operation_id: Uuid,
-    operation: &str,
-    repository_id: Uuid,
-    generation: u64,
-    params: Value,
-) -> Git {
-    wire::aq_git(
-        git_socket(state),
-        operation_id,
-        operation,
-        repository_id,
-        generation,
-        params,
-    )
-    .await
-}
 fn git_socket(state: &AppState) -> Option<&std::path::Path> {
     state
         .source_retention
@@ -106,72 +92,21 @@ async fn save(state: &AppState, operation_id: Uuid, step: &str, value: &Value) -
     wire::save(
         &state.store.pool,
         operation_id,
-        step,
-        value,
+        wire::Progress { step, state: value },
         (state.clock)().timestamp_millis(),
     )
     .await
     .map_err(db)
 }
 
-fn refusal(code: &str, reason: &str, source: &str, message: &str) -> Value {
-    json!({"code":code,"reason":reason,"source":source,"message":message})
-}
-fn transient(code: &str, message: &str) -> Value {
-    json!({"code":code,"message":message,"retry":true})
-}
-
-/// Pre-check the retained head's top-level tree against the v1 checkout
-/// profile (`no_attributes_v1`, no submodules, no LFS).
-fn tree_refusal(entries: &[Value]) -> Option<(&'static str, String)> {
-    for e in entries {
-        let path = e["path"]["value"].as_str().unwrap_or("");
-        let found = if e["mode"] == "160000" || path == ".gitmodules" {
-            Some("submodules")
-        } else if path == ".lfsconfig" {
-            Some("lfs")
-        } else if path == ".gitattributes" {
-            Some("gitattributes")
-        } else {
-            None
-        };
-        if let Some(reason) = found {
-            return Some((reason, format!("repository head contains {path}")));
-        }
-    }
-    None
-}
-
 fn validate(state: &AppState, r: &OnboardRequest) -> Result<(ProjectBinding, String)> {
-    if r.operation_id.is_nil() || r.project_id.is_nil() || r.repository_id.is_nil() {
-        return Err(bad("invalid onboarding identity"));
-    }
-    if !slug(&r.github.owner) || !slug(&r.github.name) {
-        return Err(bad("invalid GitHub repository name"));
-    }
-    if RESERVED.iter().any(|k| r.template.contains_key(*k)) {
-        return Err(bad(
-            "onboarding template must not set server-filled repository fields",
-        ));
-    }
+    validate_identity(r)?;
     let config = state
         .config
         .onboarding
         .as_ref()
         .ok_or_else(|| bad("repository onboarding is not configured"))?;
-    if let Some(name) = &r.credential_profile {
-        let profile = label(name)
-            .then(|| config.credential_profiles.get(name))
-            .flatten()
-            .ok_or_else(|| bad("unknown credential profile"))?;
-        let expected = match r.transport {
-            Transport::Ssh => CredentialKind::SshDeployKey,
-            Transport::Https => CredentialKind::HttpsFineGrainedToken,
-        };
-        if profile.kind != expected {
-            return Err(bad("credential profile does not match the transport"));
-        }
-    }
+    validate_credential(config, r)?;
     let remote_url = match r.transport {
         Transport::Ssh => format!(
             "ssh://git@github.com/{}/{}.git",
@@ -189,6 +124,41 @@ fn validate(state: &AppState, r: &OnboardRequest) -> Result<(ProjectBinding, Str
         .map_err(|_| bad("invalid project execution policy"))?;
     Ok((binding, remote_url))
 }
+fn validate_identity(r: &OnboardRequest) -> Result<()> {
+    if [r.operation_id, r.project_id, r.repository_id]
+        .iter()
+        .any(Uuid::is_nil)
+    {
+        return Err(bad("invalid onboarding identity"));
+    }
+    if !slug(&r.github.owner) || !slug(&r.github.name) {
+        return Err(bad("invalid GitHub repository name"));
+    }
+    if RESERVED.iter().any(|k| r.template.contains_key(*k)) {
+        return Err(bad(
+            "onboarding template must not set server-filled repository fields",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_credential(config: &OnboardingConfig, r: &OnboardRequest) -> Result<()> {
+    if let Some(name) = &r.credential_profile {
+        let profile = label(name)
+            .then(|| config.credential_profiles.get(name))
+            .flatten()
+            .ok_or_else(|| bad("unknown credential profile"))?;
+        let expected = match r.transport {
+            Transport::Ssh => CredentialKind::SshDeployKey,
+            Transport::Https => CredentialKind::HttpsFineGrainedToken,
+        };
+        if profile.kind != expected {
+            return Err(bad("credential profile does not match the transport"));
+        }
+    }
+    Ok(())
+}
+
 fn binding(r: &OnboardRequest, generation: u64, branch: &str) -> Result<ProjectBinding> {
     let policy = PublicationPolicy {
         mode: r.publication.mode,
@@ -251,10 +221,14 @@ pub async fn onboard(state: &AppState, actor: Uuid, request: OnboardRequest) -> 
         None => {
             wire::start(
                 &mut tx,
-                actor,
-                &digest,
-                &request,
-                remote_url,
+                wire::RequestOwner {
+                    actor,
+                    digest: &digest,
+                },
+                wire::NewOnboarding {
+                    request: &request,
+                    remote_url,
+                },
                 (state.clock)().timestamp_millis(),
             )
             .await
@@ -281,6 +255,7 @@ fn check_operation(row: &Row, actor: Uuid, digest: &str) -> Result<()> {
     Ok(())
 }
 
+<<<<<<< HEAD
 async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Row) -> Result<()> {
     let op = r.operation_id;
     let config = state.config.onboarding.as_ref().ok_or(AppError::Internal)?;
@@ -548,6 +523,8 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
     }
 }
 
+=======
+>>>>>>> refs/remotes/central/main
 async fn adopt_route(
     State(state): State<AppState>,
     RequireOwner(actor): RequireOwner,
@@ -570,9 +547,14 @@ pub async fn adopt(state: &AppState, actor: Uuid, request: AdoptRequest) -> Resu
             .as_ref()
             .and_then(|d| d.github.as_ref()),
     }
-    .record(actor, digest, request, || {
-        (state.clock)().timestamp_millis()
-    })
+    .record(
+        wire::RequestOwner {
+            actor,
+            digest: &digest,
+        },
+        request,
+        || (state.clock)().timestamp_millis(),
+    )
     .await
     .map_err(|e| match e {
         AdoptionError::Invalid(reason) => bad(reason),

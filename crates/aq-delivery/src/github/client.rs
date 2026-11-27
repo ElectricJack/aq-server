@@ -19,6 +19,50 @@ pub enum Auth<'a> {
     Installation(&'a InstallationToken),
 }
 
+impl Auth<'_> {
+    fn header(self) -> GitHubResult<HeaderValue> {
+        let secret = match self {
+            Self::App(jwt) => jwt,
+            Self::Installation(token) => token.secret(),
+        };
+        let mut value = HeaderValue::try_from(format!("Bearer {secret}"))
+            .map_err(|_| GitHubApiError::InvalidInput("credential is not a header value"))?;
+        value.set_sensitive(true);
+        Ok(value)
+    }
+}
+
+/// The method, repository-relative path and payload for one GitHub API call.
+pub struct ApiRequest<'a> {
+    method: Method,
+    path: std::borrow::Cow<'a, str>,
+    query: &'a [(&'a str, &'a str)],
+    body: Option<&'a serde_json::Value>,
+}
+
+impl<'a> ApiRequest<'a> {
+    pub fn new(method: Method, path: &'a str) -> Self {
+        Self {
+            method,
+            path: path.into(),
+            query: &[],
+            body: None,
+        }
+    }
+    pub fn query(mut self, query: &'a [(&'a str, &'a str)]) -> Self {
+        self.query = query;
+        self
+    }
+    pub fn json(mut self, value: &'a serde_json::Value) -> Self {
+        self.body = Some(value);
+        self
+    }
+    pub(super) fn under(mut self, prefix: &str) -> Self {
+        self.path = format!("{prefix}{}", self.path).into();
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
     http: reqwest::Client,
@@ -29,16 +73,21 @@ pub struct GitHubClient {
 /// (GitHub Enterprise `/api/v3`) is kept.
 pub(super) fn parse_base(raw: &str) -> Result<Url, &'static str> {
     let url = Url::parse(raw).map_err(|_| "api_base is not a URL")?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
+    let plain_path = url.query().is_none() && url.fragment().is_none();
+    if !valid_http_endpoint(&url) || !plain_path {
         return Err("api_base must be an http(s) URL without credentials, query or fragment");
     }
     Ok(url)
+}
+
+fn valid_http_endpoint(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https") && url.host_str().is_some() && no_credentials(url)
+}
+fn no_credentials(url: &Url) -> bool {
+    url.username().is_empty() && url.password().is_none()
+}
+fn transport(error: reqwest::Error) -> GitHubApiError {
+    GitHubApiError::Transport(error.without_url().to_string())
 }
 
 impl GitHubClient {
@@ -64,7 +113,8 @@ impl GitHubClient {
         &self.base
     }
     fn url(&self, path: &str) -> GitHubResult<Url> {
-        if !path.starts_with('/') || path.contains("..") || path.contains(['?', '#']) {
+        let escapes_path = path.contains("..") || path.contains(['?', '#']);
+        if !path.starts_with('/') || escapes_path {
             return Err(GitHubApiError::InvalidInput("invalid API path"));
         }
         let joined = format!("{}{path}", self.base.as_str().trim_end_matches('/'));
@@ -75,51 +125,25 @@ impl GitHubClient {
     /// (204) decodes as JSON `null`, so `()` and `Option<_>` work.
     pub async fn send<T: DeserializeOwned>(
         &self,
-        method: Method,
-        path: &str,
+        api: ApiRequest<'_>,
         auth: Auth<'_>,
-        body: Option<&serde_json::Value>,
     ) -> GitHubResult<T> {
-        self.send_query(method, path, &[], auth, body).await
-    }
-
-    /// [`send`](Self::send) with query parameters, percent-encoded here.
-    pub async fn send_query<T: DeserializeOwned>(
-        &self,
-        method: Method,
-        path: &str,
-        query: &[(&str, &str)],
-        auth: Auth<'_>,
-        body: Option<&serde_json::Value>,
-    ) -> GitHubResult<T> {
-        let mut url = self.url(path)?;
-        if !query.is_empty() {
-            url.query_pairs_mut().extend_pairs(query);
+        let mut url = self.url(&api.path)?;
+        if !api.query.is_empty() {
+            url.query_pairs_mut().extend_pairs(api.query);
         }
-        let secret = match auth {
-            Auth::App(jwt) => jwt,
-            Auth::Installation(token) => token.secret(),
-        };
-        let mut authorization = HeaderValue::try_from(format!("Bearer {secret}"))
-            .map_err(|_| GitHubApiError::InvalidInput("credential is not a header value"))?;
-        authorization.set_sensitive(true);
+        let authorization = auth.header()?;
         let mut request = self
             .http
-            .request(method, url)
+            .request(api.method, url)
             .header(AUTHORIZATION, authorization);
-        if let Some(body) = body {
+        if let Some(body) = api.body {
             request = request.json(body);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| GitHubApiError::Transport(e.without_url().to_string()))?;
+        let response = request.send().await.map_err(transport)?;
         let status = response.status();
         let headers = response.headers().clone();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| GitHubApiError::Transport(e.without_url().to_string()))?;
+        let bytes = response.bytes().await.map_err(transport)?;
         if status.is_success() {
             let bytes: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
             // serde's message can quote body values (a token); keep only
@@ -138,6 +162,60 @@ impl GitHubClient {
 }
 
 impl GitHubClient {
+    /// One GraphQL request (`POST /graphql`; `/api/graphql` beside a GitHub
+    /// Enterprise `/api/v3` base), its `data` decoded as `T`. GraphQL reports
+    /// a refusal in `errors` with status 200: a rate limit comes back as
+    /// `retryable`, `NOT_FOUND` as `not_found`, anything else as `invalid`
+    /// with GitHub's messages.
+    pub async fn graphql<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+        auth: Auth<'_>,
+    ) -> GitHubResult<T> {
+        #[derive(serde::Deserialize)]
+        struct Reply {
+            data: Option<serde_json::Value>,
+            #[serde(default)]
+            errors: Vec<serde_json::Value>,
+        }
+        let mut url = self.base.clone();
+        let path = url.path().trim_end_matches('/');
+        let path = match path.strip_suffix("/v3") {
+            Some(api) => format!("{api}/graphql"),
+            None => format!("{path}/graphql"),
+        };
+        url.set_path(&path);
+        let body = serde_json::json!({"query": query, "variables": variables});
+        let response = self
+            .http
+            .post(url)
+            .header(AUTHORIZATION, auth.header()?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response.bytes().await.map_err(transport)?;
+        if !status.is_success() {
+            return Err(map_error(status, &headers, &bytes, Utc::now()));
+        }
+        let reply: Reply = serde_json::from_slice(&bytes)
+            .map_err(|_| GitHubApiError::Protocol("unexpected GraphQL response body".into()))?;
+        if let Some(error) = reply.errors.first() {
+            return Err(match error["type"].as_str() {
+                Some("RATE_LIMITED") => GitHubApiError::Retryable { reset_at: None },
+                Some("NOT_FOUND") => GitHubApiError::NotFound,
+                _ => GitHubApiError::Invalid {
+                    message: message(&bytes),
+                },
+            });
+        }
+        serde_json::from_value(reply.data.unwrap_or_default())
+            .map_err(|_| GitHubApiError::Protocol("unexpected GraphQL data".into()))
+    }
+
     /// The last `keep + 1` bytes (at most) of a text download that `path`
     /// answers with a redirect, such as a job's logs. The redirect target is a
     /// signed URL: it is fetched once, without the installation token, and
@@ -148,15 +226,8 @@ impl GitHubClient {
         auth: Auth<'_>,
         keep: usize,
     ) -> GitHubResult<Vec<u8>> {
-        let transport = |e: reqwest::Error| GitHubApiError::Transport(e.without_url().to_string());
         let url = self.url(path)?;
-        let secret = match auth {
-            Auth::App(jwt) => jwt,
-            Auth::Installation(token) => token.secret(),
-        };
-        let mut authorization = HeaderValue::try_from(format!("Bearer {secret}"))
-            .map_err(|_| GitHubApiError::InvalidInput("credential is not a header value"))?;
-        authorization.set_sensitive(true);
+        let authorization = auth.header()?;
         let first = self
             .http
             .get(url.clone())
@@ -164,19 +235,8 @@ impl GitHubClient {
             .send()
             .await
             .map_err(transport)?;
-        let status = first.status();
-        let response = if status.is_redirection() {
-            let target = first
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|location| url.join(location).ok())
-                .filter(|t| {
-                    matches!(t.scheme(), "http" | "https")
-                        && t.username().is_empty()
-                        && t.password().is_none()
-                })
-                .ok_or_else(|| GitHubApiError::Protocol("unusable log redirect".into()))?;
+        let response = if first.status().is_redirection() {
+            let target = redirect_target(&first, &url)?;
             self.http
                 .get(target)
                 .header(reqwest::header::RANGE, format!("bytes=-{}", keep + 1))
@@ -186,26 +246,38 @@ impl GitHubClient {
         } else {
             first
         };
-        let status = response.status();
-        if !status.is_success() {
-            let headers = response.headers().clone();
-            let body = response.bytes().await.map_err(transport)?;
-            return Err(map_error(status, &headers, &body, Utc::now()));
-        }
-        let mut response = response;
-        let window = keep + 1;
-        let mut tail: Vec<u8> = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(transport)? {
-            tail.extend_from_slice(&chunk);
-            if tail.len() > 2 * window {
-                tail.drain(..tail.len() - window);
-            }
-        }
-        if tail.len() > window {
+        read_tail(response, keep + 1).await
+    }
+}
+
+fn redirect_target(response: &reqwest::Response, base: &Url) -> GitHubResult<Url> {
+    response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|location| base.join(location).ok())
+        .filter(|t| matches!(t.scheme(), "http" | "https") && no_credentials(t))
+        .ok_or_else(|| GitHubApiError::Protocol("unusable log redirect".into()))
+}
+
+async fn read_tail(mut response: reqwest::Response, window: usize) -> GitHubResult<Vec<u8>> {
+    let status = response.status();
+    if !status.is_success() {
+        let headers = response.headers().clone();
+        let body = response.bytes().await.map_err(transport)?;
+        return Err(map_error(status, &headers, &body, Utc::now()));
+    }
+    let mut tail: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport)? {
+        tail.extend_from_slice(&chunk);
+        if tail.len() > 2 * window {
             tail.drain(..tail.len() - window);
         }
-        Ok(tail)
     }
+    if tail.len() > window {
+        tail.drain(..tail.len() - window);
+    }
+    Ok(tail)
 }
 
 /// GitHub's `message`, followed by any `errors[].message` details.

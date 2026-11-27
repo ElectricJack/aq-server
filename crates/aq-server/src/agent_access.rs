@@ -7,6 +7,7 @@ mod graph;
 pub mod human;
 pub(crate) mod messaging;
 pub(crate) mod task_thread;
+mod workspace;
 pub use messaging::global as supervisor_conversation;
 mod mutations;
 pub(crate) mod native_binding;
@@ -49,7 +50,15 @@ pub(crate) async fn settlement_post(
     workspace: Uuid,
     bytes: Vec<u8>,
 ) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
-    mutations::post_human_creation(rt, workspace, bytes)
+    settlement_graph_request(rt, workspace, bytes, false).await
+}
+pub(crate) async fn settlement_graph_request(
+    rt: &Runtime,
+    workspace: Uuid,
+    bytes: Vec<u8>,
+    lookup: bool,
+) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
+    mutations::post_human_creation(rt, workspace, bytes, lookup)
         .await
         .map_err(|_| {
             crate::error::AppError::UpdatesUnavailable(
@@ -377,6 +386,7 @@ pub fn machine_routes(state: AppState) -> Router<AppState> {
         .merge(human::comments::machine_routes())
         .merge(results::machine_routes())
         .merge(agent_tasks::machine_routes())
+        .merge(workspace::routes())
         .route("/v1/agent/context", get(context))
         .route("/v1/agent/graph/read", post(read))
         .with_state(state.clone())
@@ -483,6 +493,40 @@ async fn lock_attempt(
         })
 }
 
+/// Project the exact sealed graph artifacts and reserve maximum credential widths.
+/// Callers select and lock their own authority policy before reaching this seam.
+fn launch_principal(
+    authority: &AuthorityView,
+    node: Uuid,
+    profile: &Value,
+    context: &Value,
+) -> Result<Principal> {
+    let graph = serde_json::to_value(&authority.graph)?;
+    if graph.is_null()
+        || graph["profile_id"] != profile["profile_id"]
+        || graph["profile_revision"] != profile["revision"]
+        || graph["profile_digest"] != digest(profile)?
+        || graph["context_digest"] != digest(context)?
+    {
+        return Err(Error("scope_denied"));
+    }
+    let binding = json!({"task_id":authority.task_id,"attempt_id":authority.attempt.attempt_id,"session_id":authority.attempt.session_id,"generation":authority.attempt.generation,"node_id":node,"boot_id":authority.identity.boot_id,"project_id":authority.project_id,"workspace_id":graph["workspace_id"],"resolved_spec_digest":authority.execution_spec_digest,"profile_digest":graph["profile_digest"],"context_digest":graph["context_digest"]});
+    if !contract::valid("Binding", &binding) {
+        return Err(Error("invalid_request"));
+    }
+    let principal = Principal {
+        binding,
+        profile: profile.clone(),
+        context: context.clone(),
+        version: i64::MAX,
+        revision: i64::MAX,
+        expires: 253402300799999,
+        ..Default::default()
+    };
+    graph::validate_launch(&principal)?;
+    Ok(principal)
+}
+
 async fn provision(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
@@ -505,29 +549,8 @@ async fn provision(
     if a.kind != crate::execution::authority::Kind::LegacyFixture {
         return Err(Error("scope_denied"));
     }
-    let graph = serde_json::to_value(&a.graph)?;
-    if graph.is_null()
-        || graph["profile_id"] != request.profile["profile_id"]
-        || graph["profile_revision"] != request.profile["revision"]
-        || graph["profile_digest"] != digest(&request.profile)?
-        || graph["context_digest"] != digest(&request.context)?
-    {
-        return Err(Error("scope_denied"));
-    }
-    let binding = json!({"task_id":a.task_id,"attempt_id":a.attempt.attempt_id,"session_id":a.attempt.session_id,"generation":a.attempt.generation,"node_id":node,"boot_id":a.identity.boot_id,"project_id":a.project_id,"workspace_id":graph["workspace_id"],"resolved_spec_digest":a.execution_spec_digest,"profile_digest":graph["profile_digest"],"context_digest":graph["context_digest"]});
-    if !contract::valid("Binding", &binding) {
-        return Err(Error("invalid_request"));
-    }
-    let principal = Principal {
-        binding: binding.clone(),
-        profile: request.profile.clone(),
-        context: request.context.clone(),
-        version: i64::MAX,
-        revision: i64::MAX,
-        expires: 253402300799999,
-        ..Default::default()
-    };
-    graph::validate_launch(&principal)?;
+    let principal = launch_principal(&a, node, &request.profile, &request.context)?;
+    let binding = principal.binding.clone();
     let grants = request
         .grants
         .map(aq_agent_grants::GrantSet::new)
@@ -573,7 +596,7 @@ async fn revoke(
             .fetch_optional(&state.store.pool)
             .await?;
     let mut tx = state.store.pool.begin().await?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node.ok_or(Error("not_found"))?)
         .execute(&mut *tx)
         .await?;
@@ -816,6 +839,95 @@ mod tests {
             "../../../protocol/agent-access/v1/fixtures/base.json"
         ))
         .unwrap()
+    }
+    fn launch_authority(c: &Value) -> AuthorityView {
+        use crate::execution::authority::{Kind, Rows};
+        let b = &c["binding"];
+        AuthorityView {
+            kind: Kind::LegacyFixture,
+            session: aq_session_protocol::SessionIdentity::Remote {
+                node_id: id(b, "node_id").unwrap(),
+                boot_id: id(b, "boot_id").unwrap(),
+                attempt_id: id(b, "attempt_id").unwrap(),
+                assignment_generation: 1,
+                session_id: id(b, "session_id").unwrap(),
+            },
+            identity: serde_json::from_value(json!({"node_id": b["node_id"], "boot_id": b["boot_id"]})).unwrap(),
+            attempt: serde_json::from_value(json!({"attempt_id": b["attempt_id"], "session_id": b["session_id"], "generation": b["generation"]})).unwrap(),
+            offer_id: Uuid::new_v4(),
+            project_id: id(b, "project_id").unwrap(),
+            task_id: id(b, "task_id").unwrap(),
+            graph: Some(serde_json::from_value(json!({
+                "workspace_id": b["workspace_id"], "profile_id": c["profile"]["profile_id"],
+                "profile_revision": c["profile"]["revision"], "profile_digest": b["profile_digest"],
+                "context_digest": b["context_digest"]
+            })).unwrap()),
+            source: None,
+            record_revision: 1,
+            authority_revision: 1,
+            grant_revision: 1,
+            status: crate::execution::profiled::Status::Granted,
+            holds_task: true,
+            grant_id: None,
+            grant_expires_at_ms: 0,
+            execution_deadline_ms: None,
+            execution_spec_digest: b["resolved_spec_digest"].as_str().unwrap().into(),
+            launch_manifest_digest: None,
+            terminal_policy: None,
+            selection_digest: None,
+            cancellation_id: None,
+            revoked: false,
+            stopped: false,
+            stop: None,
+            retention: None,
+            effects: None,
+            release_ready: false,
+            retention_released: false,
+            rows: Rows::Lock,
+        }
+    }
+    #[test]
+    fn launch_projection_preserves_sealed_artifacts_and_maximum_versions() {
+        let c = fixture()["context"].clone();
+        let a = launch_authority(&c);
+        let p = launch_principal(&a, a.identity.node_id, &c["profile"], &c["context"]).unwrap();
+        assert_eq!(p.binding, c["binding"]);
+        assert_eq!(p.profile, c["profile"]);
+        assert_eq!(p.context, c["context"]);
+        assert_eq!(p.version, i64::MAX);
+        assert_eq!(p.revision, i64::MAX);
+        assert_eq!(p.expires, 253402300799999);
+        assert!(p.issuance_response(&"a".repeat(47)).is_ok());
+    }
+    #[test]
+    fn launch_projection_refuses_mismatched_artifacts_before_binding_validation() {
+        let c = fixture()["context"].clone();
+        let a = launch_authority(&c);
+        for key in [
+            "profile_id",
+            "profile_revision",
+            "profile_digest",
+            "context_digest",
+        ] {
+            let mut changed = serde_json::to_value(&a.graph).unwrap();
+            changed[key] = json!("changed");
+            let mut a = a.clone();
+            a.graph = Some(serde_json::from_value(changed).unwrap());
+            assert!(matches!(
+                launch_principal(&a, Uuid::nil(), &c["profile"], &c["context"]),
+                Err(Error("scope_denied"))
+            ));
+        }
+        let mut absent = a.clone();
+        absent.graph = None;
+        assert!(matches!(
+            launch_principal(&absent, a.identity.node_id, &c["profile"], &c["context"]),
+            Err(Error("scope_denied"))
+        ));
+        assert!(matches!(
+            launch_principal(&a, Uuid::nil(), &c["profile"], &c["context"]),
+            Err(Error("invalid_request"))
+        ));
     }
     #[test]
     fn canonical_digest_matches_published_profile_and_context() {

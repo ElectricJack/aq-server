@@ -7,16 +7,30 @@ use sqlx::{PgConnection, Row};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+pub use aq_intelligence_config::AttestationTime;
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
+pub mod allocation;
 pub mod attempts;
+pub mod closed_launch;
 pub mod fresh;
+mod handoffs;
 pub mod holds;
+pub use handoffs::{
+    HandoffCandidate, MAX_LINEAGE_HOPS, export_scope, handoff_of, lineage_base, pending_counts,
+    pending_handoffs, record_handoff, request_handoffs, set_handoff_candidate,
+};
+mod owner_availability;
+pub use owner_availability::{
+    owner_attested, owner_availability, owner_switch, set_owner_availability,
+};
 pub mod lapse;
 pub mod launch;
 pub mod limits;
 pub mod lost;
 pub mod management;
 pub mod offer_assembly;
+pub mod owner_retry;
+pub mod platform_retry;
 pub mod recent;
 pub mod slots;
 
@@ -56,6 +70,20 @@ pub struct Control {
     pub generation: u64,
     pub updated_at_ms: Option<u64>,
     pub operation_id: Option<Uuid>,
+}
+/// Identity and revision fence for an owner change to machine controls.
+#[derive(Clone, Copy)]
+pub struct OwnerChange {
+    pub expected_generation: u64,
+    pub actor: Uuid,
+    pub operation_id: Uuid,
+    pub now: DateTime<Utc>,
+}
+/// Nodes and per-slot credential verifiers requested in one issuance.
+pub struct SlotRequest<'a> {
+    pub wanted: u32,
+    pub template: &'a NewSlot<'a>,
+    pub hashes: &'a [String],
 }
 pub struct NewSlot<'a> {
     pub base_name: &'a str,
@@ -182,7 +210,7 @@ fn reason_of(s: &str) -> Result<HandoffReason, Error> {
     match s {
         "owner_stop" => Ok(HandoffReason::OwnerStop),
         "service_stop" => Ok(HandoffReason::ServiceStop),
-        "restart" => Ok(HandoffReason::Restart),
+        "restart" | "workspace_expansion" => Ok(HandoffReason::Restart),
         _ => Err(Error::Invalid("reason")),
     }
 }
@@ -216,30 +244,25 @@ pub async fn machine_of(conn: &mut PgConnection, node: Uuid) -> Result<MachineNo
     })
 }
 
-/// Review I3: the per-machine-key transaction lock that serializes claiming,
-/// minting and revocation. A caller that also locks node rows takes it first.
-/// N1/N2: an owner action that locks node rows waits at most this long for each.
-/// It bounds how long the action can hold the rows it already has.
-pub const OWNER_LOCK_TIMEOUT: &str = "1s";
+/// N1/N2: an owner action that locks node rows waits at most
+/// `owner_lock_timeout_ms` (Settings) for each. It bounds how long the action
+/// can hold the rows it already has.
 async fn bound(tx: &mut PgConnection) -> Result<(), Error> {
+    let wait = limits::pg_ms(limits::current().owner_lock_timeout_ms);
     sqlx::query("SELECT set_config('lock_timeout',$1,true)")
-        .bind(OWNER_LOCK_TIMEOUT)
+        .bind(wait)
         .execute(&mut *tx)
         .await?;
     Ok(())
 }
-/// N1: locks the live node rows (all of them, or one machine's) in id order, so
-/// two owner actions that lock several nodes wait for each other instead of
-/// deadlocking (40P01). Callers then update the rows they hold.
-pub async fn lock_live_nodes(tx: &mut PgConnection, key: Option<&str>) -> Result<(), Error> {
-    sqlx::query(
-        "SELECT id FROM nodes WHERE revoked_at IS NULL AND ($1::text IS NULL OR machine_key=$1) \
-         ORDER BY id FOR UPDATE",
+/// N1: the live nodes (all of them, or one machine's) in id order.
+async fn live_nodes(tx: &mut PgConnection, key: Option<&str>) -> Result<Vec<Uuid>, Error> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM nodes WHERE revoked_at IS NULL AND ($1::text IS NULL OR machine_key=$1) ORDER BY id",
     )
     .bind(key)
-    .execute(&mut *tx)
-    .await?;
-    Ok(())
+    .fetch_all(&mut *tx)
+    .await?)
 }
 
 pub async fn lock_machine(tx: &mut PgConnection, key: &str) -> Result<(), Error> {
@@ -276,15 +299,20 @@ pub async fn claim_key(tx: &mut PgConnection, node: Uuid, key: &str) -> Result<M
     if taken {
         return Err(Error::KeyInUse);
     }
-    sqlx::query("UPDATE nodes SET machine_key=$2, slot=1 WHERE id=$1")
-        .bind(node)
-        .bind(key)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
-            Some(code) if code == "23505" => Error::KeyInUse,
-            _ => Error::Db(e),
-        })?;
+    // The credential check no longer excludes a concurrent claim by the same node.
+    let claimed =
+        sqlx::query("UPDATE nodes SET machine_key=$2, slot=1 WHERE id=$1 AND machine_key IS NULL")
+            .bind(node)
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
+                Some(code) if code == "23505" => Error::KeyInUse,
+                _ => Error::Db(e),
+            })?;
+    if claimed.rows_affected() != 1 {
+        return Err(Error::Invalid("not_slot_one"));
+    }
     Ok(MachineNode {
         node_id: node,
         machine_key: Some(key.into()),
@@ -298,11 +326,14 @@ pub async fn claim_key(tx: &mut PgConnection, node: Uuid, key: &str) -> Result<M
 pub async fn mint_slots(
     tx: &mut PgConnection,
     caller: &MachineNode,
-    wanted: u32,
-    new: &NewSlot<'_>,
-    hashes: &[String],
+    request: SlotRequest<'_>,
     now: DateTime<Utc>,
 ) -> Result<Vec<MintedSlot>, Error> {
+    let SlotRequest {
+        wanted,
+        template: new,
+        hashes,
+    } = request;
     if !(1..=MAX_MACHINE_SLOTS).contains(&wanted) {
         return Err(Error::Invalid("slots_out_of_range"));
     }
@@ -397,24 +428,22 @@ pub async fn set_desired(
     tx: &mut PgConnection,
     key: &str,
     desired: DesiredState,
-    expected_generation: u64,
-    actor: Uuid,
-    operation_id: Uuid,
-    now: DateTime<Utc>,
+    change: OwnerChange,
 ) -> Result<Control, Error> {
+    let OwnerChange {
+        expected_generation,
+        actor,
+        operation_id,
+        now,
+    } = change;
     let next = expected_generation as i64 + 1;
-    // Review I2: touch the machine's live node rows first. A publication holds
-    // its node row lock while it re-checks the gate, so it either commits
+    // Review I2: fence the machine's live nodes first. A publication holds
+    // its allocation row while it re-checks the gate, so it either commits
     // before this change (and its attempt is then handed off) or fails to
     // serialize after it. N1: locked in id order, with a bounded wait.
     bound(tx).await?;
-    lock_live_nodes(tx, Some(key)).await?;
-    sqlx::query(
-        "UPDATE nodes SET machine_key=machine_key WHERE machine_key=$1 AND revoked_at IS NULL",
-    )
-    .bind(key)
-    .execute(&mut *tx)
-    .await?;
+    let nodes = live_nodes(tx, Some(key)).await?;
+    allocation::fence(tx, Some(&nodes)).await?;
     let done = if expected_generation == 1 {
         sqlx::query(
             "INSERT INTO machine_controls(machine_key,desired,generation,operation_id,updated_at,updated_by) \
@@ -454,218 +483,6 @@ pub async fn set_desired(
         }
     }
     control(tx, key).await
-}
-
-/// Inserts an `owner_stop` row for every profiled attempt on the machine's live
-/// nodes that holds its task and whose hot stop kind is 'unknown' or 'running'.
-/// Returns the attempt ids now pending.
-pub async fn request_handoffs(
-    tx: &mut PgConnection,
-    key: &str,
-    now: DateTime<Utc>,
-) -> Result<Vec<Uuid>, Error> {
-    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(RUNNING_ATTEMPTS)
-        .bind(key)
-        .fetch_all(&mut *tx)
-        .await?;
-    for (attempt, node) in &rows {
-        sqlx::query(
-            "INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) \
-             VALUES($1,$2,'owner_stop',$3) ON CONFLICT DO NOTHING",
-        )
-        .bind(attempt)
-        .bind(node)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-    }
-    Ok(rows.into_iter().map(|(a, _)| a).collect())
-}
-
-/// Attempts with any handoff row that still hold their task and are running.
-pub async fn pending_handoffs(conn: &mut PgConnection, key: &str) -> Result<Vec<Uuid>, Error> {
-    Ok(sqlx::query_scalar(&format!(
-        "SELECT f.attempt_id {PENDING_FILTER} AND n.machine_key=$1 ORDER BY f.attempt_id LIMIT 64"
-    ))
-    .bind(key)
-    .fetch_all(&mut *conn)
-    .await?)
-}
-
-/// Pending handoff counts per key, for the swarm read.
-pub async fn pending_counts(
-    conn: &mut PgConnection,
-    keys: &[String],
-) -> Result<BTreeMap<String, u32>, Error> {
-    let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
-        "SELECT n.machine_key, count(*) {PENDING_FILTER} AND n.machine_key = ANY($1) GROUP BY n.machine_key"
-    ))
-    .bind(keys)
-    .fetch_all(&mut *conn)
-    .await?;
-    Ok(rows.into_iter().map(|(k, n)| (k, n as u32)).collect())
-}
-
-/// Node-announced handoff (review I1). The attempt must belong to `node`. An
-/// exempt reason (`owner_stop`, `service_stop`) is refused unless the attempt
-/// still holds its task and runs. A node-posted `owner_stop` counts only while
-/// the machine is desired stopped by a stop requested before the handoff (one
-/// minute of slack); otherwise it is stored as `restart`. Returns the reason
-/// on record (an earlier row, such as the owner's own Stop, wins).
-pub async fn record_handoff(
-    conn: &mut PgConnection,
-    node: Uuid,
-    attempt: Uuid,
-    reason: HandoffReason,
-    now: DateTime<Utc>,
-) -> Result<HandoffReason, Error> {
-    let row = sqlx::query(
-        "SELECT a.node_id, COALESCE(a.holds_task AND h.state->'stop'->>'kind' IN ('unknown','running'), FALSE) AS running, \
-         COALESCE(c.desired = 'stopped' AND c.updated_at <= $2 + interval '1 minute', FALSE) AS stopped \
-         FROM execution_attempts a JOIN nodes n ON n.id = a.node_id \
-         LEFT JOIN profiled_authority_hot h ON h.attempt_id = a.attempt_id \
-         LEFT JOIN machine_controls c ON c.machine_key = n.machine_key WHERE a.attempt_id=$1",
-    )
-    .bind(attempt)
-    .bind(now)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let Some(row) = row.filter(|r| r.get::<Uuid, _>("node_id") == node) else {
-        return Err(Error::Invalid("attempt_not_owned"));
-    };
-    if reason != HandoffReason::Restart && !row.try_get::<bool, _>("running")? {
-        return Err(Error::Refused(
-            "handoff_not_running: the attempt is no longer running",
-        ));
-    }
-    let reason = match reason {
-        HandoffReason::OwnerStop if !row.try_get::<bool, _>("stopped")? => HandoffReason::Restart,
-        r => r,
-    };
-    sqlx::query(
-        "INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) \
-         VALUES($1,$2,$3,$4) ON CONFLICT (attempt_id) DO NOTHING",
-    )
-    .bind(attempt)
-    .bind(node)
-    .bind(reason_str(reason))
-    .bind(now)
-    .execute(&mut *conn)
-    .await?;
-    let stored: String =
-        sqlx::query_scalar("SELECT reason FROM attempt_handoffs WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *conn)
-            .await?;
-    reason_of(&stored)
-}
-
-/// The commit a task's lineage started from (review C-1). A handoff successor is admitted on
-/// its predecessor's saved commit, the handoff candidate; that candidate was built on the
-/// predecessor's own admitted base (its frozen `base` input), followed back through every
-/// handoff of the task. An attempt not admitted on a handoff candidate starts from `base`.
-/// `None` (R1-M1): more than [`MAX_LINEAGE_HOPS`] handoffs; the caller holds, never guesses.
-pub async fn lineage_base(
-    conn: &mut PgConnection,
-    task: Uuid,
-    base: &str,
-) -> Result<Option<String>, Error> {
-    let mut current = base.to_owned();
-    if !has_format(conn).await? {
-        return Ok(Some(current));
-    }
-    for _ in 0..=MAX_LINEAGE_HOPS {
-        let earlier: Option<Option<String>> = sqlx::query_scalar(
-            "SELECT i.inputs->'base'->>'hex' FROM attempt_handoffs h \
-             JOIN execution_attempts a ON a.attempt_id=h.attempt_id \
-             JOIN delivery_intents i ON i.operation_id=h.candidate_operation_id \
-             WHERE a.task_id=$1 AND h.candidate_oid=$2 AND i.operation='candidate.create' \
-             ORDER BY h.requested_at LIMIT 1",
-        )
-        .bind(task)
-        .bind(&current)
-        .fetch_optional(&mut *conn)
-        .await?;
-        match earlier.flatten() {
-            Some(earlier) if earlier != current => current = earlier,
-            _ => return Ok(Some(current)),
-        }
-    }
-    Ok(None)
-}
-/// Handoffs [`lineage_base`] follows back; a task has a few (5 exempt, then charged).
-pub const MAX_LINEAGE_HOPS: usize = 64;
-pub async fn handoff_of(
-    conn: &mut PgConnection,
-    attempt: Uuid,
-) -> Result<Option<HandoffRow>, Error> {
-    let Some(r) = sqlx::query(
-        "SELECT attempt_id,node_id,reason,candidate_operation_id,candidate_oid,note_comment_id \
-         FROM attempt_handoffs WHERE attempt_id=$1",
-    )
-    .bind(attempt)
-    .fetch_optional(&mut *conn)
-    .await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(HandoffRow {
-        attempt_id: r.try_get("attempt_id")?,
-        node_id: r.try_get("node_id")?,
-        reason: reason_of(&r.try_get::<String, _>("reason")?)?,
-        candidate_operation_id: r.try_get("candidate_operation_id")?,
-        candidate_oid: r.try_get("candidate_oid")?,
-        note_comment_id: r.try_get("note_comment_id")?,
-    }))
-}
-
-/// Live acceptance D5: the project, repository and binding generation of
-/// `attempt`'s own source export, which its handoff candidate must share.
-pub async fn export_scope(
-    conn: &mut PgConnection,
-    attempt: Uuid,
-) -> Result<Option<(Uuid, Uuid, u64)>, Error> {
-    let row = sqlx::query(
-        "SELECT e.project_id, (q.v->>'repository_id')::uuid AS repository, \
-         (q.v->>'binding_generation')::bigint AS generation \
-         FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id), \
-         LATERAL (SELECT convert_from(e.request_bytes,'UTF8')::jsonb AS v) q \
-         WHERE x.attempt_id=$1 LIMIT 1",
-    )
-    .bind(attempt)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let Some(row) = row else { return Ok(None) };
-    let generation = u64::try_from(row.try_get::<i64, _>("generation")?)
-        .map_err(|_| Error::Invalid("source export scope"))?;
-    Ok(Some((
-        row.try_get("project_id")?,
-        row.try_get("repository")?,
-        generation,
-    )))
-}
-
-/// Only fills NULL columns; equal values are a no-op.
-pub async fn set_handoff_candidate(
-    conn: &mut PgConnection,
-    attempt: Uuid,
-    operation: Uuid,
-    oid: &str,
-    note_comment: Option<Uuid>,
-) -> Result<(), Error> {
-    let n = sqlx::query(
-        "UPDATE attempt_handoffs SET candidate_operation_id=COALESCE(candidate_operation_id,$2), \
-         candidate_oid=COALESCE(candidate_oid,$3), note_comment_id=COALESCE(note_comment_id,$4) \
-         WHERE attempt_id=$1",
-    )
-    .bind(attempt)
-    .bind(operation)
-    .bind(oid)
-    .bind(note_comment)
-    .execute(&mut *conn)
-    .await?
-    .rows_affected();
-    if n == 0 { Err(Error::NotFound) } else { Ok(()) }
 }
 
 /// desired == Running for the node's key; true for a legacy node (no key).
@@ -789,13 +606,18 @@ pub const MACHINE_NODE: &str =
     "machine_node: this node belongs to a service machine; revoke the whole machine by its key";
 
 /// `machine` is a key or `node:<uuid>`. Sets revoked_at on every live node of
-/// it and deletes its machine_controls row. Returns the number of nodes revoked.
+/// it and deletes its machine_controls row. Returns the nodes revoked; once
+/// the caller commits, it calls [`drain_revoked`] for them.
 /// A `node:` that holds a machine key is refused (`MACHINE_NODE`).
+///
+/// The node rows are locked FOR NO KEY UPDATE, which worker credential checks
+/// (FOR KEY SHARE) do not block: the revocation commits at once, and from then
+/// on no new check passes, so a stream of checks cannot hold it off.
 pub async fn revoke_machine(
     tx: &mut PgConnection,
     machine: &str,
     now: DateTime<Utc>,
-) -> Result<u32, Error> {
+) -> Result<Vec<Uuid>, Error> {
     bound(tx).await?;
     if let Some(id) = machine.strip_prefix("node:") {
         let id: Uuid = id.parse().map_err(|_| Error::Invalid("machine"))?;
@@ -803,7 +625,7 @@ pub async fn revoke_machine(
         // locks this row first) is seen or waits for the revocation.
         if has_format(tx).await? {
             let key: Option<Option<String>> = sqlx::query_scalar(
-                "SELECT machine_key FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE",
+                "SELECT machine_key FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR NO KEY UPDATE",
             )
             .bind(id)
             .fetch_optional(&mut *tx)
@@ -820,13 +642,18 @@ pub async fn revoke_machine(
         .fetch_all(&mut *tx)
         .await?;
         lost::release_revoked(tx, &revoked, now).await?;
-        return Ok(revoked.len() as u32);
+        return Ok(revoked);
     }
     if !valid_machine_key(machine) {
         return Err(Error::Invalid("machine"));
     }
     lock_machine(tx, machine).await?;
-    lock_live_nodes(tx, Some(machine)).await?;
+    sqlx::query(
+        "SELECT id FROM nodes WHERE revoked_at IS NULL AND machine_key=$1 ORDER BY id FOR NO KEY UPDATE",
+    )
+    .bind(machine)
+    .execute(&mut *tx)
+    .await?;
     let revoked: Vec<Uuid> = sqlx::query_scalar(
         "UPDATE nodes SET revoked_at=$2 WHERE machine_key=$1 AND revoked_at IS NULL RETURNING id",
     )
@@ -839,72 +666,65 @@ pub async fn revoke_machine(
         .bind(machine)
         .execute(&mut *tx)
         .await?;
-    Ok(revoked.len() as u32)
+    Ok(revoked)
 }
 
-pub async fn owner_availability(conn: &mut PgConnection) -> Result<OwnerAvailability, Error> {
-    let row = sqlx::query(
-        "SELECT o.available, o.generation, o.operation_id, COALESCE(u.role = 'owner', FALSE) AS by_owner, \
-         (extract(epoch FROM o.updated_at) * 1000)::bigint AS at_ms \
-         FROM owner_availability o LEFT JOIN users u ON u.id = o.updated_by",
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
-    let Some(r) = row else {
-        return Ok(OwnerAvailability {
-            state: Availability::Unset,
-            generation: 1,
-            updated_at_ms: None,
-            operation_id: None,
-            set_by_former_owner: false,
-        });
-    };
-    let by_owner: bool = r.try_get("by_owner")?;
-    Ok(OwnerAvailability {
-        state: match (by_owner, r.try_get("available")?) {
-            (false, _) => Availability::Unset,
-            (true, true) => Availability::On,
-            (true, false) => Availability::Off,
-        },
-        generation: ms(r.try_get("generation")?),
-        updated_at_ms: Some(ms(r.try_get("at_ms")?)),
-        operation_id: Some(r.try_get("operation_id")?),
-        set_by_former_owner: !by_owner,
-    })
-}
-
-/// Spec 0007 Q2: the owner's attestation of `credentials` at `now_ms` while the
-/// switch is on (`aq_intelligence_config::owner_attestations`), else none.
-/// Its generation is the only fact a fence compares, so a flip refuses.
-pub async fn owner_attested(
-    conn: &mut PgConnection,
-    credentials: &[aq_selection::AuthorizedCredential],
-    observed: &[aq_selection::AvailabilityObservation],
-    revision: u64,
-    now_ms: u64,
-) -> Result<Vec<aq_selection::AvailabilityObservation>, Error> {
-    Ok(match owner_switch(conn).await? {
-        Some(on) => {
-            aq_intelligence_config::owner_attestations(credentials, observed, on, revision, now_ms)
+/// After a revocation committed: waits until every worker transaction that
+/// passed its credential check before the revocation has ended. Taking the
+/// rows FOR UPDATE waits for their FOR KEY SHARE checks, and no new check can
+/// pass any more. Then the revocation's effects are applied again, for what
+/// those transactions committed meanwhile (a permit, a claimed attempt).
+/// Each try waits `revoke_drain_wait_ms`, at most `revoke_drain_tries` tries
+/// (Settings); `Refused` when they still run.
+pub async fn drain_revoked(
+    pool: &sqlx::PgPool,
+    nodes: &[Uuid],
+    now: DateTime<Utc>,
+) -> Result<(), Error> {
+    if nodes.is_empty() {
+        return Ok(());
+    }
+    let limits = limits::current();
+    for _ in 0..limits.revoke_drain_tries {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT set_config('lock_timeout',$1,true)")
+            .bind(limits::pg_ms(limits.revoke_drain_wait_ms))
+            .execute(&mut *tx)
+            .await?;
+        let locked = sqlx::query("SELECT id FROM nodes WHERE id=ANY($1) ORDER BY id FOR UPDATE")
+            .bind(nodes)
+            .execute(&mut *tx)
+            .await;
+        match locked {
+            Ok(_) => {}
+            Err(e) if is_lock_timeout(&e) => continue,
+            Err(e) => return Err(e.into()),
         }
-        None => vec![],
-    })
+        // Fires `delegated_node_revoke` again for permits issued meanwhile.
+        sqlx::query(
+            "UPDATE nodes SET revoked_at=revoked_at WHERE id=ANY($1) AND revoked_at IS NOT NULL",
+        )
+        .bind(nodes)
+        .execute(&mut *tx)
+        .await?;
+        lost::release_revoked(&mut tx, nodes, now).await?;
+        return Ok(tx.commit().await?);
+    }
+    Err(Error::Refused(
+        "revoke_draining: the revocation is recorded; worker requests authorized before it are still running",
+    ))
 }
 
-/// Fix round 2 (review I2): the publication's first lock, on its node row. A
-/// serialization failure here means a machine change (Stop, Drain) or an
-/// availability change committed after the transaction began, and a lock
-/// timeout means one is still open: `Ok(false)`, which publishes no offer.
+/// Fix round 2 (review I2): the publication's first lock, on its allocation
+/// row (and its machine's, under a machine maximum). A serialization failure
+/// here means a machine change (Stop, Drain), an availability or a Settings
+/// change committed after the transaction began, and a lock timeout means one
+/// is still open: `Ok(false)`, which publishes no offer.
 pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
-    management::lock(tx).await?;
-    let locked = sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(node)
-        .execute(&mut *tx)
-        .await;
-    match locked {
-        Ok(_) => Ok(true),
-        Err(e) if is_serialization_failure(&e) || is_lock_timeout(&e) => Ok(false),
-        Err(e) => Err(e.into()),
+    match allocation::lock(tx, node).await {
+        Ok(()) => Ok(true),
+        Err(Error::Db(e)) if is_serialization_failure(&e) || is_lock_timeout(&e) => Ok(false),
+        Err(e) => Err(e),
     }
 }
 /// SQLSTATE 55P03: the publication's `lock_timeout` passed waiting for the row.
@@ -922,104 +742,6 @@ pub fn is_serialization_failure(e: &sqlx::Error) -> bool {
     e.as_database_error()
         .and_then(|d| d.code())
         .is_some_and(|c| c == "40001" || c == "40P01")
-}
-
-/// Spec 0007 Q2: `(principal, generation)` of the owner's switch while it is
-/// on; None when unset or off, below 101, or (fix round 2) when the user who
-/// switched it on is no longer an owner: that switch counts as unset.
-/// Selection synthesizes the owner's attestation from it, so the admission
-/// fences change only when the owner flips the switch.
-pub async fn owner_switch(conn: &mut PgConnection) -> Result<Option<(Uuid, u64)>, Error> {
-    if !has_format(conn).await? {
-        return Ok(None);
-    }
-    let on: Option<(Uuid, i64)> = sqlx::query_as(
-        "SELECT o.updated_by, o.generation FROM owner_availability o \
-         JOIN users u ON u.id = o.updated_by AND u.role = 'owner' WHERE o.available FOR SHARE OF o",
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
-    Ok(on.map(|(by, g)| (by, ms(g))))
-}
-
-/// Compare-and-swap on the singleton, as `set_desired`. Setting the state it
-/// already has (on to on, off to off) at the current generation changes
-/// nothing and returns the current generation (fix round 2).
-pub async fn set_owner_availability(
-    tx: &mut PgConnection,
-    available: bool,
-    expected_generation: u64,
-    actor: Uuid,
-    operation_id: Uuid,
-    now: DateTime<Utc>,
-) -> Result<OwnerAvailability, Error> {
-    // The effective state: a former owner's switch is unset, so setting it
-    // again writes a new row under the current owner.
-    let unchanged = |current: &OwnerAvailability| {
-        let same = matches!(
-            (current.state, available),
-            (Availability::On, true) | (Availability::Off, false)
-        );
-        same && current.generation == expected_generation
-    };
-    // N2: a no-op or a stale generation locks and writes no node row.
-    let current = owner_availability(tx).await?;
-    if unchanged(&current) {
-        return Ok(current);
-    }
-    if current.generation != expected_generation {
-        let generation = current.generation;
-        return Err(Error::Conflict { generation });
-    }
-    // Fix round 3 (I2 race): touch the live node rows first, as set_desired
-    // does, so a publication racing this change waits or fails to serialize.
-    // N1: locked in id order, with a bounded wait. The state is re-read under them.
-    bound(tx).await?;
-    lock_live_nodes(tx, None).await?;
-    sqlx::query("UPDATE nodes SET machine_key=machine_key WHERE revoked_at IS NULL")
-        .execute(&mut *tx)
-        .await?;
-    let current = owner_availability(tx).await?;
-    if unchanged(&current) {
-        return Ok(current);
-    }
-    let done = if expected_generation == 1 {
-        sqlx::query(
-            "INSERT INTO owner_availability(available,generation,operation_id,updated_at,updated_by) \
-             VALUES($1,2,$2,$3,$4) ON CONFLICT DO NOTHING",
-        )
-        .bind(available)
-        .bind(operation_id)
-        .bind(now)
-        .bind(actor)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-    } else {
-        0
-    };
-    if done == 0 {
-        let updated = sqlx::query(
-            "UPDATE owner_availability SET available=$1, generation=$2, operation_id=$3, updated_at=$4, updated_by=$5 \
-             WHERE generation=$6",
-        )
-        .bind(available)
-        .bind(expected_generation as i64 + 1)
-        .bind(operation_id)
-        .bind(now)
-        .bind(actor)
-        .bind(expected_generation as i64)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        if updated == 0 {
-            let current = owner_availability(tx).await?;
-            return Err(Error::Conflict {
-                generation: current.generation,
-            });
-        }
-    }
-    owner_availability(tx).await
 }
 
 #[cfg(test)]
@@ -1047,3 +769,5 @@ pub async fn attempt_released(pool: &sqlx::PgPool, attempt: uuid::Uuid, node: uu
         .await;
     released.ok().flatten().unwrap_or(false)
 }
+
+pub mod task_needs;

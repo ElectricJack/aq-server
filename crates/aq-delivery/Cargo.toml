@@ -15,12 +15,22 @@ base64.workspace = true
 bytes = "1"
 chrono.workspace = true
 hex.workspace = true
+<<<<<<< HEAD
 http = "1"
 http-body = "=1.1.0"
 http-body-util.workspace = true
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 jsonwebtoken.workspace = true
+=======
+http = { version = "1", optional = true }
+http-body = { version = "=1.1.0", optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { version = "1", features = ["client", "http1", "server"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+jsonwebtoken = { workspace = true, optional = true }
+nix.workspace = true
+>>>>>>> refs/remotes/central/main
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,12 +44,36 @@ unicode-normalization = "=0.1.26"
 uuid.workspace = true
 
 [features]
+<<<<<<< HEAD
 # A fake aq-git git-HTTP socket backed by
+=======
+source_observation = ["dep:aq-admission"]
+# Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
+delivery_playbook = [
+    "dep:jsonwebtoken",
+    "dep:aq-role-settings",
+    "aq-role-settings/delivery_playbook",
+    "dep:tracing",
+    "dep:aq-admission",
+    "dep:bytes",
+    "dep:http",
+    "dep:http-body",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+]
+# Spec 0017 §6.2 (aq-environments' `delivery_playbook`): an attempt may also
+# force-push its own `refs/heads/aq-try/<attempt>`, the `aq environment try`
+# checkpoint, which delivery never publishes.
+environment_try = ["delivery_playbook"]
+# With `delivery_playbook`: a fake aq-git git-HTTP socket backed by
+>>>>>>> refs/remotes/central/main
 # `git http-backend`, for tests of the server that depends on this crate.
-test-support = []
+test-support = ["nix/signal"]
 
 [dev-dependencies]
 axum.workspace = true
+nix = { workspace = true, features = ["signal"] }
 rand.workspace = true
 rsa.workspace = true
 tempfile.workspace = true

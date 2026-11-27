@@ -24,6 +24,7 @@ import uuid
 from migration_catalog import state_format as migration_state_format
 
 ROOT = Path(__file__).resolve().parents[1]
+ACCEPT_PATH = "/v2/worker/accept"
 spec = importlib.util.spec_from_file_location("product_smoke", ROOT / "scripts/product-smoke.py")
 product = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(product)
@@ -56,6 +57,15 @@ class RecoveryFixture(product.Fixture):
         return super().run(command, name=self.case + "-" + name, **kwargs)
 
     def setup(self):
+        source = self.snapshot_recovery_source()
+        inventory = {str(p.relative_to(source)): product.sha(p.read_bytes())
+                     for p in sorted(source.rglob("*")) if p.is_file()}
+        original_checker_root = product.checker.ROOT
+        server, worker = self.build_recovery_images(source, inventory)
+        self.start_recovery_stack(server, worker, original_checker_root)
+        self.start_proxy()
+
+    def snapshot_recovery_source(self):
         # Build the explicit test-feature server separately; the production
         # Dockerfile and release path never acquire recovery fixture controls.
         source = self.temp / "recovery-source"
@@ -68,24 +78,28 @@ class RecoveryFixture(product.Fixture):
         (source / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/worker-init-volumes.sh", source / "scripts/worker-init-volumes.sh")
         if self.prototype_revision:
-            raw = subprocess.check_output(["git", "archive", "--format=tar", self.prototype_revision], cwd=self.prototype_repository)
-            compressed = gzip.compress(raw, mtime=0)
-            with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
-                package = tomllib.loads(tar.extractfile("crates/aq-worker/Cargo.toml").read().decode())["package"]
-                lock = tar.extractfile("Cargo.lock").read()
-                worker_state_format = int(re.search(r"pub const STATE_FORMAT: u32 = (\d+);", tar.extractfile("crates/aq-worker/src/journal.rs").read().decode()).group(1))
-            candidate = json.loads((source / "vendor/worker-candidate.json").read_text())
-            candidate.update(source_revision=self.prototype_revision, version=package["version"],
-                             archive_sha256=product.sha(compressed), lockfile_sha256=product.sha(lock),
-                             worker_journal_format=worker_state_format, distribution="PROTOTYPE recovery fixture only; not a qualified release")
-            (source / "vendor/aq-worker-source.tar.gz").write_bytes(compressed)
-            (source / "vendor/worker-candidate.json").write_text(json.dumps(candidate, indent=2) + "\n")
-            (source / "vendor/worker-candidate.sha256").write_text(candidate["archive_sha256"] + "  aq-worker-source.tar.gz\n")
-            self.record["prototype_only"] = True
+            self.record_prototype_candidate(source)
         shutil.copy2(ROOT / "scripts/recovery-smoke-server.Dockerfile", source / "Dockerfile.recovery")
-        inventory = {str(p.relative_to(source)): product.sha(p.read_bytes()) for p in sorted(source.rglob("*")) if p.is_file()}
+        return source
+
+    def record_prototype_candidate(self, source):
+        raw = subprocess.check_output(["git", "archive", "--format=tar", self.prototype_revision], cwd=self.prototype_repository)
+        compressed = gzip.compress(raw, mtime=0)
+        with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+            package = tomllib.loads(tar.extractfile("crates/aq-worker/Cargo.toml").read().decode())["package"]
+            lock = tar.extractfile("Cargo.lock").read()
+            worker_state_format = int(re.search(r"pub const STATE_FORMAT: u32 = (\d+);", tar.extractfile("crates/aq-worker/src/journal.rs").read().decode()).group(1))
+        candidate = json.loads((source / "vendor/worker-candidate.json").read_text())
+        candidate.update(source_revision=self.prototype_revision, version=package["version"],
+                         archive_sha256=product.sha(compressed), lockfile_sha256=product.sha(lock),
+                         worker_journal_format=worker_state_format, distribution="PROTOTYPE recovery fixture only; not a qualified release")
+        (source / "vendor/aq-worker-source.tar.gz").write_bytes(compressed)
+        (source / "vendor/worker-candidate.json").write_text(json.dumps(candidate, indent=2) + "\n")
+        (source / "vendor/worker-candidate.sha256").write_text(candidate["archive_sha256"] + "  aq-worker-source.tar.gz\n")
+        self.record["prototype_only"] = True
+
+    def build_recovery_images(self, source, inventory):
         tree = product.sha(product.canonical(inventory))
-        original_checker_root = product.checker.ROOT
         product.checker.ROOT = source
         candidate = product.checker.candidate()
         state_format = str(migration_state_format(source))
@@ -106,6 +120,9 @@ class RecoveryFixture(product.Fixture):
                   "--build-arg", "AQ_VERSION=" + candidate["version"],
                   "--build-arg", "CARGO_PROFILE=" + product.IMAGE_PROFILE, "-t", worker, str(source)],
                  name="build-fixture-worker", timeout=1800)
+        return server, worker
+
+    def start_recovery_stack(self, server, worker, original_checker_root):
         saved = {key: os.environ.get(key) for key in ["AQ_SMOKE_SERVER_IMAGE", "AQ_SMOKE_WORKER_IMAGE", "AQ_SMOKE_FIXTURE_IMAGE"]}
         os.environ.update(AQ_SMOKE_SERVER_IMAGE=server, AQ_SMOKE_WORKER_IMAGE=worker, AQ_SMOKE_FIXTURE_IMAGE=worker)
         try:
@@ -121,6 +138,8 @@ class RecoveryFixture(product.Fixture):
         self.server_image, self.worker_image = server, worker
         self.record["test_control"] = self.test_control()
         self.rules({})
+
+    def start_proxy(self):
         proxy_source = self.temp / "recovery-smoke-proxy.py"
         shutil.copy2(ROOT / "scripts/recovery-smoke-proxy.py", proxy_source)
         shutil.copy2(proxy_source, self.logs / "harness/recovery-smoke-proxy.actual.py")
@@ -330,65 +349,81 @@ class RecoveryFixture(product.Fixture):
     def case_transport(self, kind):
         self.start_case(kind)
         token = str(uuid.uuid4())
-        route = "/v2/worker/accept" if kind in {"lost-acceptance", "late-grant"} else "/v2/worker/result"
+        self.configure_transport(kind, token)
+        self.start_driver()
+        identity = self.registered()
+        offer = self.offer(identity, ttl_ms=1000 if kind == "late-grant" else 60000)
+        if kind == "late-grant":
+            self.verify_late_grant(offer, token)
+        else:
+            self.verify_resumed_transport(kind, offer, token)
+        self.rules({})
+        self.finish_case()
+
+    def configure_transport(self, kind, token):
+        route = ACCEPT_PATH if kind in {"lost-acceptance", "late-grant"} else "/v2/worker/result"
         mode = "drop_after_commit" if kind == "lost-acceptance" else "hold_after_commit"
         if kind == "cancel-first":
             mode = "hold_before_forward"
         self.rules({route: {"mode": mode, "token": token, "once": kind == "lost-acceptance",
                             "barrier_before_drop": kind == "lost-acceptance"}})
-        self.start_driver()
-        identity = self.registered()
-        offer = self.offer(identity, ttl_ms=1000 if kind == "late-grant" else 60000)
-        if kind == "late-grant":
+
+    def verify_late_grant(self, offer, token):
+        self.barrier(token)
+        self.advance_worker(2000)
+        self.release(token)
+        self.driver_exit(0)
+        local = self.record_for(offer, "late-grant-refused")
+        assert local["phase"] == "retired" and not local.get("launch_id") and not local["start_intent"]
+        assert local["stop_certainty"] == "not_started"
+        settled = self.inspect(offer)
+        assert settled["stopped"] and settled["report"]["outcome"] == "expired" and not settled["report"]["claimed_success"]
+        rejected = self.http(ACCEPT_PATH, local["acceptance"], machine=True, credential=self.credential, expected=409)
+        assert rejected["code"] in {"cancelled", "grant_expired"}
+        self.case_data["terminal_reservation_replay"] = rejected
+        self.case_data["result"] = settled
+
+    def verify_resumed_transport(self, kind, offer, token):
+        first_grant_state = None
+        if kind == "lost-acceptance":
             self.barrier(token)
-            self.advance_worker(2000)
+            first_grant_state = self.inspect(offer)
             self.release(token)
-            self.driver_exit(0)
-            local = self.record_for(offer, "late-grant-refused")
-            assert local["phase"] == "retired" and not local.get("launch_id") and not local["start_intent"]
-            assert local["stop_certainty"] == "not_started"
-            settled = self.inspect(offer)
-            assert settled["stopped"] and settled["report"]["outcome"] == "expired" and not settled["report"]["claimed_success"]
-            rejected = self.http("/v2/worker/accept", local["acceptance"], machine=True, credential=self.credential, expected=409)
-            assert rejected["code"] in {"cancelled", "grant_expired"}
-            self.case_data["terminal_reservation_replay"] = rejected
-            self.case_data["result"] = settled
-        else:
-            first_grant_state = None
-            if kind == "lost-acceptance":
-                self.barrier(token)
-                first_grant_state = self.inspect(offer)
-                self.release(token)
-            local = self.running(offer)
-            if first_grant_state:
-                replayed_state = self.inspect(offer)
-                assert replayed_state["grant_expires_at_ms"] == first_grant_state["grant_expires_at_ms"]
-                self.case_data["grant_absolute_deadline_ms"] = first_grant_state["grant_expires_at_ms"]
-            self.release_writers(local["launch_id"])
-            if kind != "lost-acceptance":
-                self.barrier(token)
-                before = self.inspect(offer)
-                assert (before["disposition"] is not None) == (kind == "result-first")
-                self.cancel(offer)
-                self.release(token)
-            value = self.stopped_result(offer)
-            expected = "retained_cancelled" if kind == "cancel-first" else "accepted"
-            assert value["disposition"]["disposition"] == expected
-            replay = self.http("/v2/worker/result", value["report"], machine=True, credential=self.credential)
-            assert replay == value["disposition"]
-            if kind == "lost-acceptance":
-                events = [e for e in self.proxy_events() if e.get("path") == route and e.get("operation_id") == local["acceptance"]["operation_id"]]
-                assert any(e.get("event") == "connection_closed_after_upstream_commit" for e in events)
-                assert len({e["body_sha256"] for e in events}) == 1
-                assert len([e for e in events if e.get("event") == "upstream_response"]) >= 2
-                responses = [e for e in events if e.get("event") == "upstream_response"]
-                local_immutable = {key: value for key, value in local["grant"].items() if key != "valid_for_ms"}
-                assert {e["immutable_grant_sha256"] for e in responses} == {product.sha(product.canonical(local_immutable))}
-                ttls = [e["grant_remaining_ms"] for e in responses]
-                assert all(later <= earlier for earlier, later in zip(ttls, ttls[1:]))
-                self.case_data["transport_replay_events"] = events
-        self.rules({})
-        self.finish_case()
+        local = self.running(offer)
+        if first_grant_state:
+            replayed_state = self.inspect(offer)
+            assert replayed_state["grant_expires_at_ms"] == first_grant_state["grant_expires_at_ms"]
+            self.case_data["grant_absolute_deadline_ms"] = first_grant_state["grant_expires_at_ms"]
+        self.release_writers(local["launch_id"])
+        if kind != "lost-acceptance":
+            self.barrier(token)
+            before = self.inspect(offer)
+            assert (before["disposition"] is not None) == (kind == "result-first")
+            self.cancel(offer)
+            self.release(token)
+        value = self.stopped_result(offer)
+        expected = "retained_cancelled" if kind == "cancel-first" else "accepted"
+        assert value["disposition"]["disposition"] == expected
+        replay = self.http("/v2/worker/result", value["report"], machine=True, credential=self.credential)
+        assert replay == value["disposition"]
+        if kind == "lost-acceptance":
+            self.verify_lost_reply_replay(local)
+
+    def verify_lost_reply_replay(self, local):
+        operation_id = local["acceptance"]["operation_id"]
+        events = [e for e in self.proxy_events() if e.get("path") == ACCEPT_PATH and e.get("operation_id") == operation_id]
+        assert any(e.get("event") == "connection_closed_after_upstream_commit" for e in events)
+        assert len({e["body_sha256"] for e in events}) == 1
+        responses = [e for e in events if e.get("event") == "upstream_response"]
+        assert len(responses) >= 2
+        self.verify_replayed_grants(responses, local["grant"])
+        self.case_data["transport_replay_events"] = events
+
+    def verify_replayed_grants(self, responses, grant):
+        local_immutable = {key: value for key, value in grant.items() if key != "valid_for_ms"}
+        assert {e["immutable_grant_sha256"] for e in responses} == {product.sha(product.canonical(local_immutable))}
+        ttls = [e["grant_remaining_ms"] for e in responses]
+        assert all(later <= earlier for earlier, later in zip(ttls, ttls[1:]))
 
     def case_spawn_crash(self, checkpoint):
         self.start_case("crash-" + checkpoint if checkpoint else "worker-restart")
@@ -398,48 +433,65 @@ class RecoveryFixture(product.Fixture):
         if checkpoint == "report-durable":
             running = self.running(offer)
             self.release_writers(running["launch_id"])
+        marker = self.wait_for_crash_marker(checkpoint, offer)
+        before = self.record_for(offer, "before-worker-kill")
+        assert marker["launch_id"] == before["launch_id"]
+        if checkpoint in {"start-sent-before-receipt", "start-receipt-durable"}:
+            self.verify_live_descendant(before)
+        self.worker_signal("KILL")
+        self.driver_exit(137)
+        self.start_driver(descendants=True)
+        code = self.driver_exit()
+        after = self.record_for(offer, "after-restart")
+        self.verify_recovery_after_crash(checkpoint, offer, before, after)
+        self.case_data["restart_exit_code"] = code
+        self.case_data["daemon_after_restart"] = self.inspect(offer)
+        self.finish_case()
+
+    def wait_for_crash_marker(self, checkpoint, offer):
         if checkpoint:
             marker = self.poll("durable crash checkpoint", lambda: self.read_json("/state/runtime/faults/" + checkpoint + ".json", optional=True))
         else:
             running = self.running(offer)
             marker = {"launch_id": running["launch_id"]}
             self.poll("live escaped descendant", lambda: self.read("/state/runtime/launches/" + running["launch_id"] + "/descendant-counter", optional=True))
-        before = self.record_for(offer, "before-worker-kill")
-        assert marker["launch_id"] == before["launch_id"]
-        if checkpoint in {"start-sent-before-receipt", "start-receipt-durable"}:
-            path = "/state/runtime/launches/" + before["launch_id"] + "/descendant-counter"
-            first = int(self.poll("escaped descendant before crash", lambda: self.read(path, optional=True)))
-            self.poll("escaped descendant writes before crash", lambda: int(self.read(path)) > first)
-            self.case_data["escaped_descendant_observed"] = True
-        self.worker_signal("KILL")
-        self.driver_exit(137)
-        self.start_driver(descendants=True)
-        code = self.driver_exit()
-        after = self.record_for(offer, "after-restart")
+        return marker
+
+    def verify_live_descendant(self, before):
+        path = "/state/runtime/launches/" + before["launch_id"] + "/descendant-counter"
+        first = int(self.poll("escaped descendant before crash", lambda: self.read(path, optional=True)))
+        self.poll("escaped descendant writes before crash", lambda: int(self.read(path)) > first)
+        self.case_data["escaped_descendant_observed"] = True
+
+    def verify_recovery_after_crash(self, checkpoint, offer, before, after):
         assert after["launch_id"] == before["launch_id"], "crash caused blind new launch"
         if checkpoint in {None, "start-receipt-durable"}:
             assert after["stop_certainty"] == "confirmed_stopped", "surviving established guardian was not recovered"
         if after["stop_certainty"] == "confirmed_stopped":
-            proof = after.get("stopped_proof")
-            assert proof and proof["kernel_wait_echild"] and proof["phase"] == "stopped"
-            assert proof["identity"]["attempt"] == offer["attempt"]
-            if self.case_data.get("escaped_descendant_observed"):
-                assert proof["reaped_count"] >= 2, "escaped descendant was not part of kernel stop proof"
-            self.case_data["kernel_stop_proof"] = proof
+            self.verify_kernel_stop(offer, after)
         elif after["stop_certainty"] == "not_started":
-            assert not after["start_intent"] and (after["launch_id"] is None or after["ownership_profile"] == "linux-subreaper-guardian-v1")
-            assert after["phase"] == "retired", "proven nonstart was not reconciled"
-            assert after["report"]["claimed_success"] is False
-            self.case_data["nonstart_proof"] = "durable Start intent never crossed; guardian profile forbids writer fork before Start"
+            self.verify_durable_nonstart(after)
         else:
             assert after["stop_certainty"] == "stop_uncertain" and after["phase"] != "retired"
             assert after["offer"]["spec"]["resources"] == before["offer"]["spec"]["resources"]
             assert not any(e.get("event") == "registered" for e in self.events())
             self.same_task_refused(offer)
             self.case_data["explicit_uncertainty"] = True
-        self.case_data["restart_exit_code"] = code
-        self.case_data["daemon_after_restart"] = self.inspect(offer)
-        self.finish_case()
+
+    def verify_kernel_stop(self, offer, after):
+        proof = after.get("stopped_proof")
+        assert proof and proof["kernel_wait_echild"] and proof["phase"] == "stopped"
+        assert proof["identity"]["attempt"] == offer["attempt"]
+        if self.case_data.get("escaped_descendant_observed"):
+            assert proof["reaped_count"] >= 2, "escaped descendant was not part of kernel stop proof"
+        self.case_data["kernel_stop_proof"] = proof
+
+    def verify_durable_nonstart(self, after):
+        assert not after["start_intent"]
+        assert after["launch_id"] is None or after["ownership_profile"] == "linux-subreaper-guardian-v1"
+        assert after["phase"] == "retired", "proven nonstart was not reconciled"
+        assert after["report"]["claimed_success"] is False
+        self.case_data["nonstart_proof"] = "durable Start intent never crossed; guardian profile forbids writer fork before Start"
 
     def case_guardian_loss(self):
         self.start_case("guardian-loss")
@@ -616,45 +668,60 @@ class RecoveryFixture(product.Fixture):
         self.running(offer)
         limits = self.test_control(bulk_blocked=True)
         count = limits["bulk_limit"]
-        latencies = []
         pool = ThreadPoolExecutor(max_workers=count)
         # These are feature-gated synthetic bulk operations holding real general
         # DB connections and bulk HTTP permits, not simulated graph throughput.
         pending = [pool.submit(self.http, "/api/execution/test-bulk", {}) for _ in range(count)]
         try:
-            saturated = self.poll("all bulk permits occupied", lambda: (v if (v := self.test_control())["bulk_active"] == count else None))
-            busy = self.http("/api/execution/test-bulk", {}, expected=503)
-            assert busy["error"] == "overloaded"
-            boundary = len(self.proxy_events())
-            self.advance_worker(11000)
-            self.poll("real worker renew under bulk saturation", lambda: any(e.get("path") == "/v2/worker/renew" and e.get("status") == 200 for e in self.proxy_events()[boundary:]))
-            for _ in range(40):
-                started = time.monotonic()
-                self.test_control()
-                latencies.append((time.monotonic() - started) * 1000)
-            started = time.monotonic()
-            self.cancel(offer)
-            acknowledgements = self.poll("cancellation recognition under load", lambda: [e for e in self.proxy_events()[boundary:] if e.get("path") == "/v2/worker/directive-ack" and e.get("status") == 200])
-            recognition_ms = (time.monotonic() - started) * 1000
-            result = self.stopped_result(offer)
-            cancellation_ms = (time.monotonic() - started) * 1000
-            assert acknowledgements, "worker never acknowledged cancellation under load"
-            worker_controls = [e for e in self.proxy_events()[boundary:] if e.get("path") in {"/v2/worker/poll", "/v2/worker/renew"} and e.get("event") == "upstream_response"]
-            assert worker_controls and all(e["status"] == 200 and e["upstream_latency_ms"] <= 1000 for e in worker_controls)
-            assert result["disposition"]["disposition"] == "retained_cancelled"
-            assert sorted(latencies)[int(len(latencies) * .95) - 1] <= 1000
-            assert max(latencies) <= 2000 and cancellation_ms <= 2000 and 0 <= recognition_ms <= 1100
-            self.case_data["control_load"] = {"bulk_profile": saturated, "control_inspection_count": len(latencies),
-                                             "control_inspection_latency_ms": latencies, "worker_control_events": worker_controls,
-                                             "cancellation_recognition_ms": recognition_ms, "cancellation_to_stopped_report_ms": cancellation_ms,
-                                             "budgets_ms": {"control_p95": 1000, "control_max": 2000, "cancel_recognition": 1100, "cancel_to_stopped_report": 2000},
-                                             "scope": "local2bulk-admission fixture; not500-agent or graph capacity acceptance"}
+            self.verify_control_under_bulk(offer, count)
         finally:
             self.test_control(bulk_blocked=False)
             for future in pending:
                 assert future.result(timeout=10)["released"]
             pool.shutdown(wait=True)
         self.finish_case()
+
+    def verify_control_under_bulk(self, offer, count):
+        saturated = self.poll("all bulk permits occupied",
+                              lambda: (v if (v := self.test_control())["bulk_active"] == count else None))
+        busy = self.http("/api/execution/test-bulk", {}, expected=503)
+        assert busy["error"] == "overloaded"
+        boundary = len(self.proxy_events())
+        self.advance_worker(11000)
+        self.poll("real worker renew under bulk saturation", lambda: any(
+            e.get("path") == "/v2/worker/renew" and e.get("status") == 200 for e in self.proxy_events()[boundary:]))
+        latencies = self.measure_control_inspections()
+        recognition_ms, cancellation_ms, worker_controls = self.measure_cancellation(offer, boundary)
+        assert sorted(latencies)[int(len(latencies) * .95) - 1] <= 1000
+        assert max(latencies) <= 2000 and cancellation_ms <= 2000 and 0 <= recognition_ms <= 1100
+        self.case_data["control_load"] = {"bulk_profile": saturated, "control_inspection_count": len(latencies),
+                                         "control_inspection_latency_ms": latencies, "worker_control_events": worker_controls,
+                                         "cancellation_recognition_ms": recognition_ms, "cancellation_to_stopped_report_ms": cancellation_ms,
+                                         "budgets_ms": {"control_p95": 1000, "control_max": 2000, "cancel_recognition": 1100, "cancel_to_stopped_report": 2000},
+                                         "scope": "local2bulk-admission fixture; not500-agent or graph capacity acceptance"}
+
+    def measure_control_inspections(self):
+        latencies = []
+        for _ in range(40):
+            started = time.monotonic()
+            self.test_control()
+            latencies.append((time.monotonic() - started) * 1000)
+        return latencies
+
+    def measure_cancellation(self, offer, boundary):
+        started = time.monotonic()
+        self.cancel(offer)
+        acknowledgements = self.poll("cancellation recognition under load", lambda: [
+            e for e in self.proxy_events()[boundary:] if e.get("path") == "/v2/worker/directive-ack" and e.get("status") == 200])
+        recognition_ms = (time.monotonic() - started) * 1000
+        result = self.stopped_result(offer)
+        cancellation_ms = (time.monotonic() - started) * 1000
+        assert acknowledgements, "worker never acknowledged cancellation under load"
+        worker_controls = [e for e in self.proxy_events()[boundary:]
+                           if e.get("path") in {"/v2/worker/poll", "/v2/worker/renew"} and e.get("event") == "upstream_response"]
+        assert worker_controls and all(e["status"] == 200 and e["upstream_latency_ms"] <= 1000 for e in worker_controls)
+        assert result["disposition"]["disposition"] == "retained_cancelled"
+        return recognition_ms, cancellation_ms, worker_controls
 
     def case_lock_expiry(self):
         self.start_case("renew-expires-while-db-locked")
@@ -679,7 +746,7 @@ class RecoveryFixture(product.Fixture):
             response = pool.submit(self.http, "/v2/worker/renew", request, machine=True, credential=self.credential, expected=409)
             def waiting():
                 result = self.compose("exec", "-T", "postgres", "psql", "-U", "agent_q", "-d", "agent_q", "-qAt", "-c",
-                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes%FOR UPDATE%'",
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes%FOR KEY SHARE%'",
                     name="observe-held-node-lock")
                 return int(result.strip()) >= 1
             self.poll("renew waiting for actual node row lock", waiting)
@@ -716,21 +783,57 @@ class RecoveryFixture(product.Fixture):
 
     def cleanup(self):
         try:
-            if self.case_data and self.case_data.get("status") == "failed" and hasattr(self, "keeper"):
-                # Preserve the failed runtime's public evidence before removing
-                # its disposable namespace. Never collect private control tokens.
-                self.read("/state/runtime/journal.json", optional=True)
-                for number in range(1, self.driver_number + 1):
-                    self.read(f"/state/driver-{number}.log", optional=True)
-                    self.read(f"/state/driver-{number}.exit", optional=True)
-            if self.control.exists():
-                for marker in self.control.glob("*.ready"):
-                    marker.with_suffix(".release").touch()
-                if (self.control / "events.jsonl").exists():
-                    shutil.copy2(self.control / "events.jsonl", self.logs / "proxy-events.jsonl")
+            self.collect_failure_evidence()
+            self.release_proxy_waiters()
         except OSError as error:
             self.record["recovery_evidence_error"] = str(error)
         return super().cleanup()
+
+    def collect_failure_evidence(self):
+        if not self.case_data or self.case_data.get("status") != "failed":
+            return
+        if not hasattr(self, "keeper"):
+            return
+        # Preserve the failed runtime's public evidence before removing
+        # its disposable namespace. Never collect private control tokens.
+        self.read("/state/runtime/journal.json", optional=True)
+        for number in range(1, self.driver_number + 1):
+            self.read(f"/state/driver-{number}.log", optional=True)
+            self.read(f"/state/driver-{number}.exit", optional=True)
+
+    def release_proxy_waiters(self):
+        if not self.control.exists():
+            return
+        for marker in self.control.glob("*.ready"):
+            marker.with_suffix(".release").touch()
+        if (self.control / "events.jsonl").exists():
+            shutil.copy2(self.control / "events.jsonl", self.logs / "proxy-events.jsonl")
+
+
+def run_case(fixture, name):
+    fixture.say("recovery case " + name)
+    if name in {"lost-acceptance", "late-grant", "cancel-first", "result-first"}:
+        fixture.case_transport(name)
+    elif name.startswith("crash-"):
+        fixture.case_spawn_crash(name.removeprefix("crash-"))
+    elif name == "worker-restart":
+        fixture.case_spawn_crash(None)
+    else:
+        {"guardian-loss": fixture.case_guardian_loss, "partition-expiry": fixture.case_partition,
+         "daemon-restart": fixture.case_daemon_restart, "old-result-after-replacement": fixture.case_old_result,
+         "control-under-bulk": fixture.case_bulk, "old-binary-current-journal-refusal": fixture.case_old_binary,
+         "renew-expires-while-db-locked": fixture.case_lock_expiry}[name]()
+
+
+def select_cases(parser, args, names):
+    selected = args.case or names
+    if any(name not in names for name in selected):
+        parser.error("unknown recovery case")
+    if bool(args.worker_prototype_revision) != bool(args.worker_prototype_repository):
+        parser.error("prototype override requires both repository and full commit")
+    if args.worker_prototype_revision and not re.fullmatch(r"[0-9a-f]{40}", args.worker_prototype_revision):
+        parser.error("prototype revision must be a full immutable commit")
+    return selected
 
 
 def main():
@@ -748,30 +851,13 @@ def main():
     if args.list:
         print("\n".join(names))
         return 0
-    selected = args.case or names
-    if any(name not in names for name in selected):
-        parser.error("unknown recovery case")
-    if bool(args.worker_prototype_revision) != bool(args.worker_prototype_repository):
-        parser.error("prototype override requires both repository and full commit")
-    if args.worker_prototype_revision and not re.fullmatch(r"[0-9a-f]{40}", args.worker_prototype_revision):
-        parser.error("prototype revision must be a full immutable commit")
+    selected = select_cases(parser, args, names)
     fixture = RecoveryFixture(args.worker_prototype_revision, args.worker_prototype_repository)
     result = 1
     try:
         fixture.setup()
         for name in selected:
-            fixture.say("recovery case " + name)
-            if name in {"lost-acceptance", "late-grant", "cancel-first", "result-first"}:
-                fixture.case_transport(name)
-            elif name.startswith("crash-"):
-                fixture.case_spawn_crash(name.removeprefix("crash-"))
-            elif name == "worker-restart":
-                fixture.case_spawn_crash(None)
-            else:
-                {"guardian-loss": fixture.case_guardian_loss, "partition-expiry": fixture.case_partition,
-                 "daemon-restart": fixture.case_daemon_restart, "old-result-after-replacement": fixture.case_old_result,
-                 "control-under-bulk": fixture.case_bulk, "old-binary-current-journal-refusal": fixture.case_old_binary,
-                 "renew-expires-while-db-locked": fixture.case_lock_expiry}[name]()
+            run_case(fixture, name)
         fixture.record.update(outcome="passed", gate_status="matrix passed; requires review and exact-artifact acceptance before closing GATE-03",
                               complete_matrix=selected == names)
         result = 0

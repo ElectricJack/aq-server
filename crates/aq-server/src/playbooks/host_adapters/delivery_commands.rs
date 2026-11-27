@@ -60,6 +60,61 @@ impl DeliveryOps for ServerDelivery {
         self.commands.get_or_init(init).await.clone()
     }
 
+    async fn replay_publication(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        origin: &aq_playbook_domain::host10::ResultReady,
+        command: &str,
+    ) -> Result<Option<delivery::Completion>> {
+        use crate::task_workspace_delivery as workspaces;
+        if !workspaces::has_scope(
+            &self.state,
+            tx,
+            origin.attempt_id,
+            origin.project_id,
+            origin.task_id,
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        {
+            return Ok(None);
+        }
+        let result =
+            crate::profiled_execution::results::load_locked(&self.state, tx, origin.result_id)
+                .await
+                .map_err(|_| Error::Unknown)?;
+        workspaces::replay_home_publication(&self.state, tx, &result, command)
+            .await
+            .map_err(|_| Error::Unknown)
+    }
+
+    async fn merge_readiness(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        origin: &aq_playbook_domain::host10::ResultReady,
+    ) -> Result<delivery_runs::MergeReadiness> {
+        use crate::task_workspace_delivery as workspaces;
+        if !workspaces::has_scope(
+            &self.state,
+            tx,
+            origin.attempt_id,
+            origin.project_id,
+            origin.task_id,
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        {
+            return Ok(delivery_runs::MergeReadiness::Proceed);
+        }
+        let result =
+            crate::profiled_execution::results::load_locked(&self.state, tx, origin.result_id)
+                .await
+                .map_err(|_| Error::Unknown)?;
+        workspaces::merge_readiness(&self.state, tx, &result)
+            .await
+            .map_err(|_| Error::Unknown)
+    }
+
     async fn pull_request_text(&self, workspace: Uuid, task: Uuid) -> Result<(String, String)> {
         let node = match &self.state.agent_access {
             Some(runtime) => crate::agent_access::settlement_node(runtime, workspace, task)
@@ -73,7 +128,7 @@ impl DeliveryOps for ServerDelivery {
 }
 
 impl Service {
-    fn delivery_runs(&self) -> Result<DeliveryRuns<'_>> {
+    pub(super) fn delivery_runs(&self) -> Result<DeliveryRuns<'_>> {
         Ok(DeliveryRuns {
             pool: &self.pool,
             namespace: &self.namespace,
@@ -103,11 +158,11 @@ impl Service {
     pub(super) async fn delivery_command(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let id = command.grant;
+        let intent = command.intent;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -121,15 +176,19 @@ impl Service {
             Ok(prepared) => prepared,
             Err(answer) => {
                 return self
-                    .settle_fresh(tx, id, revision, intent, &identity, answer)
+                    .settle_fresh(tx, command.retained(&identity), answer)
                     .await;
             }
         };
         let operation = self.operation(intent)?;
         let accepted = host_result("accepted", json!({"handle": operation.to_string()}));
         let (outcome, output) = (&accepted.outcome, &accepted.output);
-        self.record(&mut tx, id, revision, intent, &identity, outcome, output)
-            .await?;
+        self.record(
+            &mut tx,
+            command.retained(&identity),
+            EffectReceipt::new(outcome, output),
+        )
+        .await?;
         runs.enqueue(&mut tx, operation, intent, prepared, self.now()?)
             .await?;
         self.commit_fresh(tx, id, intent).await?;
@@ -156,13 +215,19 @@ impl Service {
         self.runtime(&ns, owner)?;
         let (namespace, generation) = (self.namespace.namespace_id, self.namespace.generation);
         let now = self.now()?;
+        #[allow(unused_mut)]
+        let mut commands = DELIVERY_COMMANDS.to_vec();
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        commands.extend(aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS);
         let due = delivery::due_operations(
             &mut tx,
-            namespace,
-            generation,
-            &DELIVERY_COMMANDS,
-            limit,
-            now,
+            delivery::DueOperations {
+                namespace,
+                generation,
+                commands: &commands,
+                limit,
+                now_ms: now,
+            },
         )
         .await?;
         tx.commit().await?;
@@ -182,11 +247,23 @@ impl Service {
         let Some(op) = self.load_operation(&self.pool, operation).await? else {
             return Ok(false);
         };
-        if !DELIVERY_COMMANDS.contains(&op.command.as_str()) {
-            return Err(Error::Invalid);
-        }
         if op.status != "running" {
             return Ok(true);
+        }
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        if aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&op.command.as_str()) {
+            let Some(result) = self
+                .environment_step(operation, &op.command, &op.request)
+                .await?
+            else {
+                return Ok(false);
+            };
+            let key = OperationKey::new(operation, &op.command, &op.intent_id);
+            self.complete_operation(key, result, None).await?;
+            return Ok(true);
+        }
+        if !DELIVERY_COMMANDS.contains(&op.command.as_str()) {
+            return Err(Error::Invalid);
         }
         let mut fence = self.tx().await?;
         let completion = self
@@ -201,9 +278,7 @@ impl Service {
         };
         let result = host_result(completion.outcome, completion.output);
         self.complete_operation(
-            operation,
-            &op.command,
-            &op.intent_id,
+            OperationKey::new(operation, &op.command, &op.intent_id),
             result,
             completion.diagnostic,
         )

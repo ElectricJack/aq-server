@@ -9,6 +9,67 @@ use common::profiled::{NOW, artifact, fixture};
 use std::sync::Arc;
 use uuid::Uuid;
 
+fn registration_request(
+    identity: &aq_worker_protocol::NodeIdentity,
+    runtime_bytes: &[u8],
+) -> Register {
+    Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: identity.node_id,
+            boot_id: identity.boot_id,
+        },
+        runtime: artifact("synthetic-native-runtime", runtime_bytes),
+        capabilities: vec![],
+        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
+    }
+}
+
+async fn authenticate(f: &common::profiled::Fixture) -> aq_server::worker_api::AuthenticatedNode {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {}", f.credential).parse().unwrap(),
+    );
+    aq_server::worker_api::authenticate_context(&f.state, &headers)
+        .await
+        .unwrap()
+}
+
+async fn execution_node_state(pool: &sqlx::PgPool, node: Uuid) -> serde_json::Value {
+    sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn install_allowlist(
+    state: &mut aq_server::AppState,
+    request: &Register,
+    qualification: aq_admission::ArtifactRef,
+) {
+    let mut config = (*state.config).clone();
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
+            runtime: request.runtime.clone(),
+            qualification,
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: None,
+        }],
+        projects: vec![],
+    }));
+    state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(state)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn startup_installs_policy_anchor_and_refuses_stale_configuration() {
     let mut f = fixture().await;
@@ -65,38 +126,12 @@ async fn startup_installs_policy_anchor_and_refuses_stale_configuration() {
 #[tokio::test]
 async fn configured_allowlist_does_not_synthesize_registration_and_admitted_identity_is_exact() {
     let mut f = fixture().await;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-native-runtime", b"synthetic-code"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
-    };
+    let request = registration_request(&f.node, b"synthetic-code");
     let qualification = artifact(
         "synthetic-runtime-qualification",
         b"synthetic-qualification",
     );
-    let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: qualification.clone(),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
+    install_allowlist(&mut f.state, &request, qualification.clone()).await;
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
@@ -134,12 +169,7 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
         .unwrap();
     // Old exact acknowledgments remain readable, but cannot reinstall a
     // fixture incarnation or make the native runtime eligible for fixture offers.
-    let before: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let before = execution_node_state(&pool, f.node.node_id).await;
     assert_eq!(
         serde_json::to_value(f.state.store.execution_register(&legacy).await.unwrap()).unwrap(),
         serde_json::to_value(historical).unwrap()
@@ -154,12 +184,7 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
             .await
             .is_err()
     );
-    let after: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let after = execution_node_state(&pool, f.node.node_id).await;
     assert_eq!(before, after);
     assert!(
         f.state
@@ -269,42 +294,14 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     use tower::ServiceExt;
     let mut f = fixture().await;
     let pool = f.db.pool().await;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-native-runtime", b"code"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
-    };
-    let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: artifact("synthetic-qualification", b"qualification"),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        axum::http::header::AUTHORIZATION,
-        format!("Bearer {}", f.credential).parse().unwrap(),
-    );
-    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
-        .await
-        .unwrap();
+    let request = registration_request(&f.node, b"code");
+    install_allowlist(
+        &mut f.state,
+        &request,
+        artifact("synthetic-qualification", b"qualification"),
+    )
+    .await;
+    let auth = authenticate(&f).await;
     let router = aq_server::build_worker_router(f.state.clone());
     let http_request = |token: &str, body: Vec<u8>| {
         HttpRequest::builder()
@@ -387,12 +384,7 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     registration::register(&f.state, &auth, &request)
         .await
         .unwrap();
-    let current: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let current = execution_node_state(&pool, f.node.node_id).await;
     assert_eq!(
         current["identity"]["boot_id"],
         changed.identity.boot_id.to_string()
@@ -448,42 +440,14 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
 async fn registration_receipt_cap_is_per_boot() {
     let mut f = fixture().await;
     let pool = f.db.pool().await;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-native-runtime", b"code"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
-    };
-    let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: artifact("synthetic-qualification", b"qualification"),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        axum::http::header::AUTHORIZATION,
-        format!("Bearer {}", f.credential).parse().unwrap(),
-    );
-    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
-        .await
-        .unwrap();
+    let request = registration_request(&f.node, b"code");
+    install_allowlist(
+        &mut f.state,
+        &request,
+        artifact("synthetic-qualification", b"qualification"),
+    )
+    .await;
+    let auth = authenticate(&f).await;
     // Receipts are append-only, so the filled history is inserted directly.
     sqlx::query("INSERT INTO native_registration_receipts(node_id,operation_id,request_digest,response) SELECT $1,gen_random_uuid(),repeat('a',64),jsonb_build_object('identity',jsonb_build_object('boot_id',$2::text)) FROM generate_series(1,1024)")
         .bind(f.node.node_id)
@@ -572,7 +536,9 @@ async fn queued_and_manual_allocation_share_one_count_and_unknown_holds_only_its
     let pool = f.db.pool().await;
     let attempt = common::profiled::insert(&f).await;
     let mut tx = pool.begin().await.unwrap();
-    aq_machine_control::management::lock(&mut tx).await.unwrap();
+    aq_machine_control::allocation::lock(&mut tx, node)
+        .await
+        .unwrap();
     aq_machine_control::slots::assign(&mut tx, attempt, node, 1)
         .await
         .unwrap();
@@ -581,7 +547,9 @@ async fn queued_and_manual_allocation_share_one_count_and_unknown_holds_only_its
     sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','pending','Waiting',1,1)")
         .bind(manual).bind(f.actor).bind(node).bind(f.selection.lineage.project_id).execute(&pool).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    aq_machine_control::management::lock(&mut tx).await.unwrap();
+    aq_machine_control::allocation::lock(&mut tx, node)
+        .await
+        .unwrap();
     assert_eq!(
         aq_machine_control::slots::assign_manual(&mut tx, manual, node)
             .await
@@ -657,7 +625,9 @@ async fn two_nodes_on_one_machine_each_reserve_three_slots_and_refuse_a_seventh(
             // No launch or grant: synthetic native-shaped attempt tests only SQL allocation.
             let id = Uuid::new_v4();
             let mut tx = pool.begin().await.unwrap();
-            aq_machine_control::management::lock(&mut tx).await.unwrap();
+            aq_machine_control::allocation::lock(&mut tx, node)
+                .await
+                .unwrap();
             sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
                 .bind(id).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(serde_json::json!(f.profiled)).execute(&mut *tx).await.unwrap();
             aq_machine_control::slots::assign(&mut tx, id, node, slot)
@@ -696,6 +666,103 @@ async fn two_nodes_on_one_machine_each_reserve_three_slots_and_refuse_a_seventh(
             .await
             .unwrap(),
         6
+    );
+}
+
+/// Allocation excludes allocation on the node's `node_allocation` row, and a
+/// machine maximum extends that to every node of the machine. The exclusion
+/// is shown with NOWAIT (55P03) while the first claim is open; after it
+/// commits, a second claim of the same slot or past the machine maximum fails.
+#[tokio::test]
+async fn no_double_slot_allocation_including_a_machine_maximum_across_two_nodes() {
+    let f = fixture().await;
+    let pool = f.db.pool().await;
+    let (a, b) = (f.node.node_id, Uuid::new_v4());
+    sqlx::query("UPDATE nodes SET machine_key='slot-test-desktop',slot=1 WHERE id=$1")
+        .bind(a)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,machine_key,slot) VALUES($1,'sibling','slot-test-sibling','test',2,now(),'slot-test-desktop',2)").bind(b).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE worker_settings SET max_agents=2 WHERE kind='node'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let attempt = |node: Uuid| {
+        let (pool, state) = (pool.clone(), serde_json::json!(f.profiled));
+        async move {
+            let id = Uuid::new_v4();
+            let mut tx = pool.begin().await.unwrap();
+            aq_machine_control::allocation::lock(&mut tx, node)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
+                .bind(id).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(state).execute(&mut *tx).await.unwrap();
+            (tx, id)
+        }
+    };
+    let probes = f.db.pool().await;
+    let held = |node: Uuid| {
+        let pool = probes.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let r = sqlx::query("SELECT 1 FROM node_allocation WHERE node_id=$1 FOR UPDATE NOWAIT")
+                .bind(node)
+                .execute(&mut *tx)
+                .await;
+            r.is_err_and(|e| aq_machine_control::is_lock_timeout(&e))
+        }
+    };
+    // One node: the first claim of slot 1 holds the row until it commits.
+    let (mut first, x) = attempt(a).await;
+    aq_machine_control::slots::assign(&mut first, x, a, 1)
+        .await
+        .unwrap();
+    assert!(
+        held(a).await,
+        "an open claim excludes other claims on its node"
+    );
+    assert!(
+        !held(b).await,
+        "without a machine maximum the sibling is free"
+    );
+    first.commit().await.unwrap();
+    let (mut second, y) = attempt(a).await;
+    assert!(
+        aq_machine_control::slots::assign(&mut second, y, a, 1)
+            .await
+            .is_err()
+    );
+    second.rollback().await.unwrap();
+    // A machine maximum of 2: a claim on B locks A's row too.
+    sqlx::query("INSERT INTO worker_settings(kind,id,max_agents,revision) VALUES('machine','slot-test-desktop',2,1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let before = aq_machine_control::management::capacity(&mut conn, b)
+        .await
+        .unwrap();
+    assert_eq!(before.machine_used, 1);
+    assert!(!before.full());
+    drop(conn);
+    let (mut third, z) = attempt(b).await;
+    assert!(
+        held(a).await,
+        "a machine maximum excludes claims on the sibling"
+    );
+    aq_machine_control::slots::assign(&mut third, z, b, 1)
+        .await
+        .unwrap();
+    third.commit().await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let full = aq_machine_control::management::capacity(&mut conn, a)
+        .await
+        .unwrap();
+    assert_eq!(full.machine_used, 2);
+    assert!(
+        full.full(),
+        "the machine maximum is reached across the two nodes"
     );
 }
 

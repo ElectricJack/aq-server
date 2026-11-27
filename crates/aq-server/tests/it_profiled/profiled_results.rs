@@ -279,11 +279,12 @@ async fn prepare_on(
         let mut tx = pool.begin().await.unwrap();
         artifacts::link_locked(
             &mut tx,
-            start.binding.attempt_id,
-            outcome.project_id,
+            artifacts::LinkScope::new(
+                start.binding.attempt_id,
+                outcome.project_id,
+                NOW..NOW + 30000,
+            ),
             &[id],
-            NOW,
-            NOW + 30000,
         )
         .await
         .unwrap();
@@ -308,11 +309,12 @@ async fn prepare_on(
         let mut tx = pool.begin().await.unwrap();
         artifacts::link_locked(
             &mut tx,
-            start.binding.attempt_id,
-            spec.lifecycle.project_id,
+            artifacts::LinkScope::new(
+                start.binding.attempt_id,
+                spec.lifecycle.project_id,
+                NOW..NOW + 30000,
+            ),
             &[id],
-            NOW,
-            NOW + 30000,
         )
         .await
         .unwrap();

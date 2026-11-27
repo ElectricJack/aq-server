@@ -1,9 +1,7 @@
 //! Explicit local owner configuration. No default activation or TCP fallback.
-use super::{domain::GrantScope, review_domain::CatalogProfile, service::Namespace};
+use super::{review_domain::CatalogProfile, service::Namespace};
 use crate::protected_storage::{Keyring, ProtectionConfig};
-use aq_playbook_host::model::schedules::BindingSchedule;
 use aq_playbook_host::{
-    model::Artifact,
     postgres_client::{
         self as pg,
         config::{Host, SslMode},
@@ -23,7 +21,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 type Result<T> = std::result::Result<T, &'static str>;
 #[derive(Deserialize)]
@@ -59,6 +56,7 @@ struct Configuration {
     #[serde(default)]
     integration: Option<IntegrationInput>,
 }
+<<<<<<< HEAD
 /// Commit identity for central candidates and the publication evidence policy.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,15 +146,21 @@ pub(crate) struct Deployment {
     pub scope: GrantScope,
     pub expires_at_ms: i64,
 }
+=======
+mod local_socket;
+use aq_playbook_domain::config_policy::integration::IntegrationInput;
+pub(crate) use aq_playbook_domain::config_policy::integration::IntegrationSettings;
+use aq_playbook_domain::config_policy::{
+    Deployment, DeploymentInput, Profile, load_deployments, valid_binding,
+};
+use local_socket::{LocalSocket, private};
+>>>>>>> refs/remotes/central/main
 pub struct Loaded {
     pub(crate) namespace: Namespace,
     pub(crate) keys: Arc<Keyring>,
     pub(crate) engine_keys: ProtectionKeyring,
     pub(crate) connection: pg::Config,
-    directory: File,
-    directory_path: PathBuf,
-    socket_owner_uid: u32,
-    port: u16,
+    socket: LocalSocket,
     pub(crate) interval: Duration,
     pub(crate) timeouts: aq_playbook_host::protected::Timeouts,
     pub(crate) retention: aq_playbook_host::retention::Retention,
@@ -175,36 +179,6 @@ impl std::fmt::Debug for Loaded {
             .finish_non_exhaustive()
     }
 }
-fn private(path: &Path, max: u64) -> Result<Zeroizing<Vec<u8>>> {
-    if !path.is_absolute() {
-        return Err("playbook private file must be absolute");
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| "playbook private file unavailable")?;
-    let m = file
-        .metadata()
-        .map_err(|_| "playbook private file unavailable")?;
-    if !m.is_file()
-        || m.mode() & 0o077 != 0
-        || m.uid() != nix::unistd::geteuid().as_raw()
-        || m.nlink() != 1
-        || m.len() == 0
-        || m.len() > max
-    {
-        return Err("unsafe playbook private file");
-    }
-    let mut bytes = Zeroizing::new(Vec::new());
-    file.take(max + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "playbook private file read failed")?;
-    if bytes.len() as u64 > max {
-        return Err("playbook private file bound");
-    }
-    Ok(bytes)
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EngineKeys {
@@ -218,6 +192,7 @@ impl Drop for EngineKeys {
         }
     }
 }
+<<<<<<< HEAD
 impl Configuration {
     fn load(self) -> Result<Loaded> {
         if !self.enabled {
@@ -316,12 +291,15 @@ impl Configuration {
             connection.password(password);
         }
         let raw = private(&self.engine_keyring_file, 4096)?;
+=======
+impl EngineKeys {
+    fn load(file: &Path) -> Result<ProtectionKeyring> {
+        let raw = private(file, 4096)?;
+>>>>>>> refs/remotes/central/main
         let mut input: EngineKeys =
             serde_json::from_slice(&raw).map_err(|_| "invalid playbook engine keys")?;
-        if input.keys.is_empty()
-            || input.keys.len() > 8
-            || input.keys.keys().any(|k| k.is_empty() || k.len() > 64)
-        {
+        let bounded_names = input.keys.keys().all(|key| (1..=64).contains(&key.len()));
+        if !(1..=8).contains(&input.keys.len()) || !bounded_names {
             return Err("invalid playbook engine keys");
         }
         let mut keys = BTreeMap::new();
@@ -337,50 +315,60 @@ impl Configuration {
                     .map_err(|_| "invalid playbook engine keys")?,
             );
         }
-        let engine_keys = ProtectionKeyring::new(input.active_key_id.clone(), keys)
-            .map_err(|_| "invalid playbook engine keys")?;
+        ProtectionKeyring::new(input.active_key_id.clone(), keys)
+            .map_err(|_| "invalid playbook engine keys")
+    }
+}
+impl Configuration {
+    fn validate_bounds(&self) -> Result<()> {
+        let n = &self.namespace;
+        let ids = [
+            n.namespace_id,
+            n.project_id,
+            n.workspace_id,
+            n.owner_user_id,
+        ]
+        .iter()
+        .all(|id| !id.is_nil());
+        let identity = ids && n.generation > 0 && valid_binding(&n.name);
+        let retention = self.retention.valid() && self.engine_retention.valid();
+        let bounds = self.engine_timeouts.valid()
+            && self.deployments.len() <= 4
+            && (250..=60000).contains(&self.drive_interval_ms);
+        if [identity, retention, bounds].contains(&false) {
+            return Err("invalid playbook owner identity or bounds");
+        }
+        Ok(())
+    }
+
+    fn load(mut self) -> Result<Loaded> {
+        if !self.enabled {
+            return Err("omit playbooks section to disable owner");
+        }
+        let profile = CatalogProfile::from(self.profile);
+        if self.installation_routing && !profile.has_routing() {
+            return Err(
+                "playbook installation_routing requires the host_v9 profile or a later routing profile",
+            );
+        }
+        if self.integration.is_some() && !profile.is_host2() {
+            return Err("playbook integration requires the host_v7 or host_v8 profile");
+        }
+        let integration = self
+            .integration
+            .take()
+            .map(IntegrationInput::load)
+            .transpose()?;
+        self.validate_bounds()?;
+        let (connection, socket) =
+            LocalSocket::connect(&self.engine_connection_file, self.socket_owner_uid)?;
+        let engine_keys = EngineKeys::load(&self.engine_keyring_file)?;
         let keys = Arc::new(
             Keyring::load(&self.protection).map_err(|_| "invalid playbook bridge protection")?,
         );
-        let mut deployments = vec![];
-        let mut bindings = std::collections::BTreeSet::new();
-        let mut total = 0;
-        for d in self.deployments {
-            if d.binding.is_empty()
-                || d.binding.len() > 128
-                || d.binding.contains('\0')
-                || !bindings.insert(d.binding.clone())
-                || d.grant_id.is_nil()
-                || d.expires_at_ms <= 0
-                || d.scope.project_id != n.project_id
-                || d.scope.workspace_id != n.workspace_id
-            {
-                return Err("invalid playbook deployment binding");
-            }
-            BindingSchedule::validate_all(&d.schedules)
-                .map_err(|_| "invalid playbook deployment schedules")?;
-            profile
-                .validate_scope_with_extensions(&d.scope, |_| true)
-                .map_err(|_| "invalid playbook deployment scope")?;
-            let raw = private(&d.artifact_file, 245760)?;
-            total += raw.len();
-            if total > 1048576 {
-                return Err("playbook deployment byte bound");
-            }
-            let artifact: Artifact =
-                serde_json::from_slice(&raw).map_err(|_| "invalid compiled playbook artifact")?;
-            artifact
-                .verify()
-                .map_err(|_| "invalid compiled playbook artifact")?;
-            deployments.push(Deployment {
-                artifact,
-                binding: d.binding,
-                schedules: d.schedules,
-                grant_id: d.grant_id,
-                scope: d.scope,
-                expires_at_ms: d.expires_at_ms,
-            });
-        }
+        let deployments = load_deployments(self.deployments, &self.namespace, profile, |path| {
+            private(path, 245760)
+        })?;
         // Poll faster than configured intervals so a slow general-purpose
         // drive setting does not turn every interval into catch-up.
         let drive_interval_ms = deployments
@@ -393,10 +381,7 @@ impl Configuration {
             keys,
             engine_keys,
             connection,
-            directory,
-            directory_path,
-            socket_owner_uid: self.socket_owner_uid,
-            port,
+            socket,
             interval: Duration::from_millis(drive_interval_ms),
             timeouts: self.engine_timeouts,
             retention: self.retention,
@@ -413,29 +398,7 @@ impl Configuration {
 }
 impl Loaded {
     pub(crate) fn check_socket(&self) -> Result<()> {
-        let held = self
-            .directory
-            .metadata()
-            .map_err(|_| "playbook socket directory unavailable")?;
-        let current = std::fs::symlink_metadata(&self.directory_path)
-            .map_err(|_| "playbook socket directory unavailable")?;
-        if !current.is_dir()
-            || current.dev() != held.dev()
-            || current.ino() != held.ino()
-            || current.mode() & 0o022 != 0
-        {
-            return Err("playbook socket directory changed");
-        }
-        let socket = std::fs::symlink_metadata(format!(
-            "/proc/self/fd/{}/.s.PGSQL.{}",
-            self.directory.as_raw_fd(),
-            self.port
-        ))
-        .map_err(|_| "playbook socket unavailable")?;
-        if !socket.file_type().is_socket() || socket.uid() != self.socket_owner_uid {
-            return Err("untrusted playbook socket");
-        }
-        Ok(())
+        self.socket.check()
     }
 }
 pub fn deserialize<'de, D: serde::Deserializer<'de>>(

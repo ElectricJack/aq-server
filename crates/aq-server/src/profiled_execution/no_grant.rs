@@ -37,6 +37,40 @@ pub struct ClosureProof {
     pub source_checkpoint: SourceCheckpoint,
     pub effect_checkpoint: EffectCheckpoint,
 }
+impl ClosureProof {
+    fn require_absence(&self, attempt: Uuid) -> Result<(), AppError> {
+        if self.binding.attempt_id != attempt
+            || self.schema_version != 1
+            || self.closure_id.is_nil()
+            || self.operation_id.is_nil()
+            || self.observed_record_revision == 0
+            || self.applicable_deadline_ms == 0
+            || self.closed_at_ms < self.applicable_deadline_ms
+            || !["offer_expired", "preparation_expired", "cancelled"]
+                .contains(&self.reason.as_str())
+            || self.material_leases_revoked.len() > 64
+            || self.material_leases_revoked.iter().any(Uuid::is_nil)
+            || self.pending_deliveries_staled.len() > 256
+            || self.pending_deliveries_staled.iter().any(Uuid::is_nil)
+            || self.pending_deliveries_staled_count as usize != self.pending_deliveries_staled.len()
+            || self.source_checkpoint.task_checkpoint_transfers != 0
+            || [
+                self.effect_checkpoint.graph_operations,
+                self.effect_checkpoint.created_records,
+                self.effect_checkpoint.observation_sources,
+                self.effect_checkpoint.observation_events,
+                self.effect_checkpoint.mailbox_receipts,
+                self.effect_checkpoint.uncertain_deliveries,
+                self.effect_checkpoint.session_messages,
+            ]
+            .iter()
+            .any(|count| *count != 0)
+        {
+            return Err(AppError::Internal);
+        }
+        Ok(())
+    }
+}
 pub struct Closure {
     pub proof: ClosureProof,
     pub artifact: ArtifactRef,
@@ -68,7 +102,7 @@ pub async fn close_expired(
             .await
             .map_err(|_| AppError::Internal)?;
     }
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_optional(&mut *tx)
         .await
@@ -179,88 +213,54 @@ pub(crate) async fn close_locked(
         .bind(cancellation.is_some())
         .fetch_optional(&mut **tx)
         .await
-        .map_err(|error| {
-            #[cfg(feature = "test-support")]
-            if let Some(database) = error.as_database_error() {
-                let stage = match database.message() {
-                    "actual sealed/common assignment binding mismatch" => "sealed_binding",
-                    "typed phase absence owner required" => "typed_owner_marker",
-                    "actual phase acceptance absence join refused" => "phase_acceptance_join",
-                    "accepted preparation authority unavailable/unsupported" => {
-                        "legacy_acceptance_join"
-                    }
-                    "actual grant/source/effect records contradict no-execution proof" => {
-                        "effect_absence"
-                    }
-                    "central no-grant proof contradicts current owners" => "proof_guard",
-                    "actual owner-verified release record required" => "claim_release_guard",
-                    "claim remains held until actual Graph completion receipt" => {
-                        "settlement_claim_guard"
-                    }
-                    _ => "unclassified_sql_refusal",
-                };
-                return AppError::Conflict(format!(
-                    "ungranted closure refused by current owners [{}:{stage}]",
-                    database.code().as_deref().unwrap_or("unknown")
-                ));
-            }
-            let _ = error;
-            AppError::Conflict("ungranted closure refused by current owners".into())
-        })?;
-    let result = row
-        .map(|row| {
-            let bytes: Vec<u8> = row.get("body_bytes");
-            let digest: String = row.get("body_digest");
-            let proof: ClosureProof =
-                serde_json::from_slice(&bytes).map_err(|_| AppError::Internal)?;
-            aq_session_protocol::Validate::validate(&proof.binding)
-                .map_err(|_| AppError::Internal)?;
-            let actual = Digest::of(&bytes);
-            if actual.as_str() != digest
-                || proof.binding.attempt_id != attempt
-                || proof.schema_version != 1
-                || proof.closure_id.is_nil()
-                || proof.operation_id.is_nil()
-                || proof.observed_record_revision == 0
-                || proof.applicable_deadline_ms == 0
-                || proof.closed_at_ms < proof.applicable_deadline_ms
-                || !["offer_expired", "preparation_expired", "cancelled"]
-                    .contains(&proof.reason.as_str())
-                || proof.material_leases_revoked.len() > 64
-                || proof.material_leases_revoked.iter().any(Uuid::is_nil)
-                || proof.pending_deliveries_staled.len() > 256
-                || proof.pending_deliveries_staled.iter().any(Uuid::is_nil)
-                || proof.pending_deliveries_staled_count as usize
-                    != proof.pending_deliveries_staled.len()
-                || proof.source_checkpoint.task_checkpoint_transfers != 0
-                || [
-                    proof.effect_checkpoint.graph_operations,
-                    proof.effect_checkpoint.created_records,
-                    proof.effect_checkpoint.observation_sources,
-                    proof.effect_checkpoint.observation_events,
-                    proof.effect_checkpoint.mailbox_receipts,
-                    proof.effect_checkpoint.uncertain_deliveries,
-                    proof.effect_checkpoint.session_messages,
-                ]
-                .iter()
-                .any(|count| *count != 0)
-            {
-                return Err(AppError::Internal);
-            }
-            Ok(Closure {
-                artifact: ArtifactRef {
-                    id: Text::new(format!("aq.never-granted/{}", proof.closure_id))
-                        .map_err(|_| AppError::Internal)?,
-                    version: Text::new("1").map_err(|_| AppError::Internal)?,
-                    digest: actual,
-                },
-                proof,
-                bytes,
-                changed: row.get("changed"),
-            })
-        })
-        .transpose()?;
-    Ok(result)
+        .map_err(closure_error)?;
+    row.map(|row| decode_closure(&row, attempt)).transpose()
+}
+
+fn decode_closure(row: &sqlx::postgres::PgRow, attempt: Uuid) -> Result<Closure, AppError> {
+    let bytes: Vec<u8> = row.get("body_bytes");
+    let digest: String = row.get("body_digest");
+    let proof: ClosureProof = serde_json::from_slice(&bytes).map_err(|_| AppError::Internal)?;
+    aq_session_protocol::Validate::validate(&proof.binding).map_err(|_| AppError::Internal)?;
+    let actual = Digest::of(&bytes);
+    if actual.as_str() != digest {
+        return Err(AppError::Internal);
+    }
+    proof.require_absence(attempt)?;
+    Ok(Closure {
+        artifact: ArtifactRef {
+            id: Text::new(format!("aq.never-granted/{}", proof.closure_id))
+                .map_err(|_| AppError::Internal)?,
+            version: Text::new("1").map_err(|_| AppError::Internal)?,
+            digest: actual,
+        },
+        proof,
+        bytes,
+        changed: row.get("changed"),
+    })
+}
+
+fn closure_error(error: sqlx::Error) -> AppError {
+    #[cfg(feature = "test-support")]
+    if let Some(database) = error.as_database_error() {
+        let stage = match database.message() {
+            "actual sealed/common assignment binding mismatch" => "sealed_binding",
+            "typed phase absence owner required" => "typed_owner_marker",
+            "actual phase acceptance absence join refused" => "phase_acceptance_join",
+            "accepted preparation authority unavailable/unsupported" => "legacy_acceptance_join",
+            "actual grant/source/effect records contradict no-execution proof" => "effect_absence",
+            "central no-grant proof contradicts current owners" => "proof_guard",
+            "actual owner-verified release record required" => "claim_release_guard",
+            "claim remains held until actual Graph completion receipt" => "settlement_claim_guard",
+            _ => "unclassified_sql_refusal",
+        };
+        return AppError::Conflict(format!(
+            "ungranted closure refused by current owners [{}:{stage}]",
+            database.code().as_deref().unwrap_or("unknown")
+        ));
+    }
+    let _ = error;
+    AppError::Conflict("ungranted closure refused by current owners".into())
 }
 
 pub use aq_machine_control::attempts::AttemptCounts;

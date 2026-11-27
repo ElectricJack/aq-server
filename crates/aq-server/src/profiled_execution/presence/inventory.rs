@@ -6,8 +6,8 @@ use crate::{
     AppState, error::AppError, profiled_execution::registration, worker_api::AuthenticatedNode,
 };
 use aq_admission::scoped_presence::{InventoryIdentity, InventoryReceipt, InventoryV2};
-use aq_selection::{CapabilitySnapshot, ExecutionTarget};
-use sqlx::Row;
+use aq_intelligence_config::LoadedRegistry;
+use aq_selection::{CapabilitySnapshot, DeliveryCapability, ExecutionTarget, InstalledHarness};
 fn exact_request(a: &InventoryV2, b: &InventoryV2) -> Result<(), AppError> {
     if a.digest().map_err(|_| changed())? != b.digest().map_err(|_| changed())? {
         return Err(changed());
@@ -42,6 +42,15 @@ pub async fn record(
     auth: &AuthenticatedNode,
     request: &InventoryV2,
 ) -> Result<InventoryReceipt, AppError> {
+    record_with_stage(state, auth, request, &mut "validate").await
+}
+
+pub(super) async fn record_with_stage(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &InventoryV2,
+    stage: &mut &'static str,
+) -> Result<InventoryReceipt, AppError> {
     let reserved = state.presence_view();
     let state = &reserved;
     request
@@ -50,15 +59,18 @@ pub async fn record(
     if auth.id() != request.identity.node_id {
         return Err(changed());
     }
+    *stage = "acquire_inventory_transaction";
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
         tx.commit().await.map_err(|_| unavailable())?;
         return Ok(old);
     }
+    *stage = "verify_registered_runtime";
     let runtime =
         registration::current_runtime_locked(state, &mut tx, auth.id(), request.identity.boot_id)
             .await?;
+    *stage = "verify_presence_qualification";
     let q = Loaded::load(state, &request.negotiation.qualification)?;
     q.matches_runtime(&runtime)?;
     if request.runtime != runtime.runtime
@@ -69,48 +81,21 @@ pub async fn record(
     }
     let admitted =
         registration::admitted_runtime_locked(&mut tx, auth.id(), request.identity.boot_id).await?;
-    let delivery = state
-        .config
-        .profiled_execution
-        .as_ref()
-        .ok_or_else(changed)?
-        .qualified(&admitted.request)
-        .map_err(|_| changed())?
-        .material_delivery
-        .clone()
-        .ok_or_else(changed)?;
+    let delivery = material_delivery(state, &admitted.request)?;
     let registry = state.config.intelligence.clone().ok_or_else(changed)?;
-    let mut harnesses = Vec::new();
-    for reference in &request.qualifications {
-        harnesses.push(
-            registry
-                .config
-                .qualified_harnesses
-                .iter()
-                .find(|h| h.qualification == *reference)
-                .cloned()
-                .ok_or_else(changed)?,
-        );
-    }
+    *stage = "verify_harness_qualifications";
+    let harnesses = qualified_harnesses(&registry, request)?;
+    *stage = "verify_credential_profiles";
     let enrolled = aq_machine_control::enrolled(&mut tx, auth.id()).await;
     let enrolled = enrolled.map_err(|_| unavailable())?;
-    for profile in &request.provisionable_only {
-        if !registry.config.credentials.iter().any(|c| {
-            c.credential.profile == profile.profile
-                && c.credential.revision == profile.revision
-                && c.credential.enabled
-                && c.delivery_mode.is_some()
-                && c.admits(auth.id(), enrolled)
-        }) {
-            return Err(changed());
-        }
-    }
+    require_admitted_profiles(&registry, auth.id(), enrolled, request)?;
     tx.commit().await.map_err(|_| unavailable())?;
     let observed = now(state)?;
     let expires = observed
         .checked_add(request.ttl_ms)
         .filter(|t| *t <= i64::MAX as u64)
         .ok_or_else(unavailable)?;
+    *stage = "observe_provisioning";
     let mut bindings = private_inventory::observe(
         registry,
         auth.id(),
@@ -118,25 +103,11 @@ pub async fn record(
         delivery,
         observed,
         expires,
+        runtime.backend_kind,
     )
     .await?;
-    if !request.provisionable_only.is_empty() {
-        bindings.retain(|b| {
-            request
-                .provisionable_only
-                .iter()
-                .any(|p| p.profile == b.credential_profile && p.revision == b.credential_revision)
-        });
-        if bindings.len() != request.provisionable_only.len() {
-            return Err(changed());
-        }
-    }
-    if bindings
-        .iter()
-        .any(|b| b.available || b.preparation.is_none())
-    {
-        return Err(changed());
-    }
+    validate_bindings(&mut bindings, request)?;
+    *stage = "commit_inventory";
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
@@ -152,21 +123,11 @@ pub async fn record(
         return Err(changed());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
-    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(storage::db)?;
-    let revision = if let Some(old) = old {
-        if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
-            && old.get::<i64, _>("sequence") as u64 >= request.sequence
-        {
-            return Err(changed());
-        }
-        old.get::<i64, _>("revision")
-            .checked_add(1)
-            .ok_or_else(unavailable)? as u64
-    } else {
-        1
-    };
+    let revision = next_revision(&mut tx, request).await?;
+    #[cfg(feature = "project_environments")]
+    let harnesses = super::super::definitions::listed(state, &mut tx, auth.id(), harnesses).await?;
     let snapshot = CapabilitySnapshot {
-        backend_kind: None,
+        backend_kind: runtime.backend_kind,
         target: ExecutionTarget::Worker {
             node_id: auth.id(),
             boot_id: request.identity.boot_id,
@@ -176,36 +137,12 @@ pub async fn record(
         expires_at_ms: expires,
         harnesses,
         credential_bindings: bindings,
-        material_delivery: Some(
-            state
-                .config
-                .profiled_execution
-                .as_ref()
-                .ok_or_else(changed)?
-                .qualified(&admitted.request)
-                .map_err(|_| changed())?
-                .material_delivery
-                .clone()
-                .ok_or_else(changed)?,
-        ),
+        material_delivery: Some(material_delivery(state, &admitted.request)?),
     };
     let epoch = storage::expected_epoch(&mut tx, request, &snapshot).await?;
-    let bytes = canonical(&snapshot)?;
-    if bytes.len() > 131072 {
-        return Err(AppError::PayloadTooLarge(
-            "normalized inventory bound".into(),
-        ));
-    }
-    let digest = aq_admission::Digest::of(&bytes);
-    let value = serde_json::to_value(&snapshot).map_err(|_| AppError::Internal)?;
-    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(auth.id()).bind(request.identity.boot_id).bind(request.sequence as i64).bind(revision as i64).bind(&value).execute(&mut *tx).await.map_err(storage::db)?;
+    let digest = store_snapshot(&mut tx, auth.id(), request, &snapshot).await?;
     let recorded = now(state)?;
-    if recorded < observed
-        || recorded >= observed.checked_add(2000).ok_or_else(unavailable)?
-        || recorded >= expires
-    {
-        return Err(unavailable());
-    }
+    require_fresh(recorded, observed, observed, expires)?;
     let receipt = InventoryReceipt {
         schema_version: 1,
         identity: request.identity.clone(),
@@ -223,12 +160,144 @@ pub async fn record(
     storage::retain_inventory(&mut tx, request, &receipt, epoch).await?;
     sqlx::query("INSERT INTO execution_receipts(node_id,operation_id,kind,payload_digest,response) VALUES($1,$2,'scoped_inventory_v2',$3,$4)").bind(auth.id()).bind(request.operation_id).bind(request.digest().map_err(|_|changed())?.as_str()).bind(serde_json::to_value(&receipt).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(storage::db)?;
     let final_time = now(state)?;
-    if final_time < recorded
-        || final_time >= observed.checked_add(2000).ok_or_else(unavailable)?
-        || final_time >= expires
+    require_fresh(final_time, recorded, observed, expires)?;
+    tx.commit().await.map_err(|_| unavailable())?;
+    Ok(receipt)
+}
+
+/// The daemon-qualified material delivery for the admitted runtime registration.
+fn material_delivery(
+    state: &AppState,
+    admitted: &aq_admission::transport::Register,
+) -> Result<DeliveryCapability, AppError> {
+    state
+        .config
+        .profiled_execution
+        .as_ref()
+        .ok_or_else(changed)?
+        .qualified(admitted)
+        .map_err(|_| changed())?
+        .material_delivery
+        .clone()
+        .ok_or_else(changed)
+}
+
+/// Every reported harness qualification must name a registry-qualified harness.
+fn qualified_harnesses(
+    registry: &LoadedRegistry,
+    request: &InventoryV2,
+) -> Result<Vec<InstalledHarness>, AppError> {
+    request
+        .qualifications
+        .iter()
+        .map(|reference| {
+            registry
+                .config
+                .qualified_harnesses
+                .iter()
+                .find(|h| h.qualification == *reference)
+                .cloned()
+                .ok_or_else(changed)
+        })
+        .collect()
+}
+
+/// Every provisionable-only profile must be an enabled, deliverable credential
+/// this node is admitted to.
+fn require_admitted_profiles(
+    registry: &LoadedRegistry,
+    node: uuid::Uuid,
+    enrolled: bool,
+    request: &InventoryV2,
+) -> Result<(), AppError> {
+    let admitted = |profile: &aq_admission::scoped_presence::CredentialReference| {
+        registry.config.credentials.iter().any(|c| {
+            c.credential.profile == profile.profile
+                && c.credential.revision == profile.revision
+                && c.credential.enabled
+                && c.delivery_mode.is_some()
+                && c.admits(node, enrolled)
+        })
+    };
+    if !request.provisionable_only.iter().all(admitted) {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+/// Bounds and writes the normalized placement snapshot; returns its digest.
+async fn store_snapshot(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: uuid::Uuid,
+    request: &InventoryV2,
+    snapshot: &CapabilitySnapshot,
+) -> Result<aq_admission::Digest, AppError> {
+    let bytes = canonical(snapshot)?;
+    if bytes.len() > 131072 {
+        return Err(AppError::PayloadTooLarge(
+            "normalized inventory bound".into(),
+        ));
+    }
+    let digest = aq_admission::Digest::of(&bytes);
+    let value = serde_json::to_value(snapshot).map_err(|_| AppError::Internal)?;
+    // The sequence fence: no lock excludes another inventory of the node, so
+    // the write itself refuses a stale sequence or a revision already taken.
+    let written = sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot WHERE intelligence_node_snapshots.revision<excluded.revision AND (intelligence_node_snapshots.boot_id<>excluded.boot_id OR intelligence_node_snapshots.sequence<excluded.sequence)").bind(node).bind(request.identity.boot_id).bind(request.sequence as i64).bind(snapshot.revision as i64).bind(&value).execute(&mut **tx).await.map_err(storage::db)?;
+    if written.rows_affected() == 0 {
+        return Err(changed());
+    }
+    Ok(digest)
+}
+
+fn validate_bindings(
+    bindings: &mut Vec<aq_selection::CredentialBinding>,
+    request: &InventoryV2,
+) -> Result<(), AppError> {
+    if !request.provisionable_only.is_empty() {
+        bindings.retain(|b| {
+            request
+                .provisionable_only
+                .iter()
+                .any(|p| p.profile == b.credential_profile && p.revision == b.credential_revision)
+        });
+        if bindings.len() != request.provisionable_only.len() {
+            return Err(changed());
+        }
+    }
+    if bindings
+        .iter()
+        .any(|b| b.available || b.preparation.is_none())
+    {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+/// The revision this inventory would write; `store_snapshot` fences it.
+async fn next_revision(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    request: &InventoryV2,
+) -> Result<u64, AppError> {
+    let old: Option<i64> =
+        sqlx::query_scalar("SELECT revision FROM intelligence_node_snapshots WHERE node_id=$1")
+            .bind(request.identity.node_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(storage::db)?;
+    Ok(old
+        .map_or(Some(1), |r| r.checked_add(1))
+        .ok_or_else(unavailable)? as u64)
+}
+
+fn require_fresh(time: u64, not_before: u64, observed: u64, expires: u64) -> Result<(), AppError> {
+    if time < not_before
+        || time
+            >= observed
+                .checked_add(aq_machine_control::limits::current().inventory_freshness_ms)
+                .ok_or_else(unavailable)?
+        || time >= expires
     {
         return Err(unavailable());
     }
-    tx.commit().await.map_err(|_| unavailable())?;
-    Ok(receipt)
+    Ok(())
 }

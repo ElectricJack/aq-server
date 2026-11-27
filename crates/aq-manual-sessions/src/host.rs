@@ -65,7 +65,11 @@ async fn open(
     valid_id(op.operation_id)?;
     let mut tx = s.pool.begin().await?;
     logins::live(&mut tx, node).await?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    // The node's allocation row orders find-or-insert of its one active shell.
+    aq_machine_control::allocation::lock(&mut tx, node)
+        .await
+        .map_err(management::storage)?;
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .execute(&mut *tx)
         .await?;

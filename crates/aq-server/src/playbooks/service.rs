@@ -12,13 +12,45 @@ use aq_playbook_host::{
     plugins::{Plugins, command_plugin, extension_capability, extension_command},
     runner::{CancellationResult, Intent},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 const SOURCE: &str = "bd1246e8e972ee1627e94598945f398812c89044106b463151a696511412ca39";
 pub use super::domain::Namespace;
+#[derive(Clone, Copy)]
+pub(super) struct GrantRevision {
+    id: Uuid,
+    revision: i64,
+}
+impl GrantRevision {
+    pub(super) fn new(id: Uuid, revision: i64) -> Self {
+        Self { id, revision }
+    }
+}
+pub(super) struct ContractAuthorization<'a> {
+    pub grant: GrantRevision,
+    pub contract: &'a CommandContract,
+    pub authority: &'a aq_playbook_host::runner::Authority,
+    pub live: bool,
+}
+struct GrantCheck {
+    owner: bool,
+    live: bool,
+}
+impl GrantCheck {
+    fn owner(live: bool) -> Self {
+        Self { owner: true, live }
+    }
+    fn review(live: bool) -> Self {
+        Self { owner: false, live }
+    }
+}
+pub(super) enum HeldItem {
+    Admission(Uuid),
+    Event(Uuid),
+}
 /// Process-local current-owner context, not a deserializable fresh HTTP permit.
 #[derive(Clone, Debug)]
 pub struct RuntimeOwner {
@@ -46,6 +78,7 @@ pub struct Service {
     /// Epic 0: the server's settlement, for `work.complete` and `work.return`.
     pub(super) settlement: Arc<dyn super::host_adapters::DeliverySettlement>,
 }
+<<<<<<< HEAD
 #[derive(Clone, Debug)]
 pub enum MessageResult {
     Queued(Value),
@@ -844,25 +877,11 @@ impl Service {
         })
     }
 }
+=======
+pub use aq_playbook_domain::intent_store::MessageResult;
+>>>>>>> refs/remotes/central/main
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrepareRequest {
-    pub request_id: Uuid,
-    pub grant_id: Uuid,
-    pub grant_revision: i64,
-    pub binding: String,
-    pub expected_activation_revision: u64,
-    pub entry: String,
-    pub input: Value,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AdmissionStatus {
-    pub request_id: Uuid,
-    pub engine_key: String,
-    pub status: String,
-    pub receipt: Option<aq_playbook_host::runner::KeyedAdmissionReceipt>,
-}
+pub use aq_playbook_domain::manual_admission::{AdmissionStatus, PrepareRequest};
 /// Durable recovery data, not fresh write authorization. Only the driver can
 /// inspect the retained exact request, and it must separately check current grant.
 pub struct RetainedAdmission {
@@ -871,6 +890,7 @@ pub struct RetainedAdmission {
     pub(super) grant_id: Uuid,
     pub(super) grant_revision: i64,
 }
+<<<<<<< HEAD
 impl Service {
     pub(super) fn aad(&self, domain: &str, id: Uuid, digest: &str) -> Result<Vec<u8>> {
         canonical_bytes(&(
@@ -1207,60 +1227,10 @@ impl Service {
         Ok(())
     }
 }
+=======
+>>>>>>> refs/remotes/central/main
 
-impl Service {
-    /// Hold pending work with its reason (an outbox event, else an
-    /// admission): it is kept, listed with the reason, no longer delivered,
-    /// and can be retried. An admission whose reason is `uncertain` (its
-    /// outcome is unknown) stays pending, delivered after the others.
-    pub(super) async fn hold(
-        &self,
-        owner: &RuntimeOwner,
-        event: bool,
-        id: Uuid,
-        reason: &str,
-    ) -> Result<()> {
-        let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let sql = if event {
-            "UPDATE playbook_outbox SET status='unknown',held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='pending'"
-        } else {
-            "UPDATE playbook_admissions SET status=CASE WHEN $4='uncertain' THEN 'pending' ELSE 'unknown' END,held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'"
-        };
-        sqlx::query(sql)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(id)
-            .bind(reason)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-    /// The engine has started or forgotten every destination of an accepted event.
-    pub(super) async fn complete_event(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
-        let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        sqlx::query("UPDATE playbook_outbox SET fanout_complete=true WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='engine_accepted'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-}
-
-impl Service {
-    pub(super) fn current_time(&self) -> i64 {
-        (self.clock)().timestamp_millis()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum DecisionResult {
-    Accepted { handle: String },
-    Completed { outcome: String, output: Value },
-    Cancelled,
-}
+pub(super) use aq_playbook_domain::driver_outcomes::DecisionResult;
 fn review_error(error: crate::error::AppError) -> Error {
     use crate::error::AppError;
     match error {
@@ -1271,233 +1241,6 @@ fn review_error(error: crate::error::AppError) -> Error {
         _ => Error::Unknown,
     }
 }
-impl Service {
-    pub fn human_owner(&self) -> Option<Arc<crate::reviews::Service>> {
-        self.reviews.clone()
-    }
-    fn decision_input(&self, intent: &Intent) -> Result<super::review_domain::DecisionInput> {
-        if !self.profile.has_reviews()
-            || intent.command != super::review_domain::decision_contract()
-        {
-            return Err(Error::Forbidden);
-        }
-        if intent.input_digest != digest(&intent.input)?
-            || intent.id.is_empty()
-            || intent.id.len() > 512
-            || intent.run.is_empty()
-            || intent.run.len() > 512
-            || intent.deadline_at_ms <= 0
-        {
-            return Err(Error::Invalid);
-        }
-        let input: super::review_domain::DecisionInput =
-            serde_json::from_value(intent.input.clone())?;
-        input.validate()?;
-        Ok(input)
-    }
-    fn decision_id(&self, intent: &Intent) -> Result<Uuid> {
-        stable_id(
-            "aq.playbook.human-decision",
-            self.namespace.namespace_id,
-            self.namespace.generation,
-            &intent.id,
-        )
-    }
-    fn exact_review_recipient(
-        recipient: &Recipient,
-        subject: &aq_review_protocol::ReviewSubject,
-    ) -> bool {
-        if recipient.scope()
-            != (
-                subject.task.workspace_id,
-                subject.project_id,
-                subject.task.task_id,
-            )
-        {
-            return false;
-        }
-        match (recipient, &subject.binding.session) {
-            (Recipient::Task { .. }, _) => true,
-            (
-                Recipient::Session {
-                    session_id,
-                    attempt_id,
-                    generation,
-                    ..
-                },
-                aq_session_protocol::SessionIdentity::Remote {
-                    session_id: actual_session,
-                    attempt_id: actual_attempt,
-                    assignment_generation,
-                    ..
-                },
-            ) => {
-                session_id == actual_session
-                    && attempt_id == actual_attempt
-                    && generation == assignment_generation
-            }
-            _ => false,
-        }
-    }
-    pub(super) async fn request_decision(
-        &self,
-        owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
-    ) -> Result<DecisionResult> {
-        let input = self.decision_input(intent)?;
-        // Exact historical lookup precedes fresh Git I/O and cannot admit a new
-        // question. Unknown reads remain unknown, never a second operation ID.
-        if let Some(old) = self.reconcile_decision(id, revision, intent).await? {
-            return Ok(old);
-        }
-        let reviews = self.reviews.as_ref().ok_or(Error::Forbidden)?;
-        let prepared = reviews
-            .prepare(input.report_id, input.source_operation_id)
-            .await
-            .map_err(review_error)?;
-        if prepared.subject().artifact().map_err(|_| Error::Invalid)? != input.expected_subject
-            || !Self::exact_review_recipient(&input.recipient, prepared.subject())
-        {
-            return Err(Error::Forbidden);
-        }
-        let request = aq_review_protocol::DecisionRequest {
-            schema_version: 1,
-            operation_id: stable_id(
-                "aq.playbook.human-operation",
-                self.namespace.namespace_id,
-                self.namespace.generation,
-                &intent.id,
-            )?,
-            decision_id: self.decision_id(intent)?,
-            subject: input.expected_subject.clone(),
-            eligible_owners: input.eligible_owners,
-            eligibility_project_revision: input.eligibility_project_revision,
-            review_policy: prepared.subject().validation_policy.clone(),
-            expires_at_ms: input.expires_at_ms,
-        };
-        let identity = self.identity(intent)?;
-        let mut tx = self.tx().await?;
-        crate::reviews::Service::lock_budget(&mut tx)
-            .await
-            .map_err(review_error)?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let scope = self
-            .grant_record_locked(&mut tx, id, revision, true, false)
-            .await?;
-        self.intent_authority(intent, id, revision, &scope)?;
-        if !scope.permits(&input.recipient) || intent.deadline_at_ms <= self.now()? {
-            return Err(Error::Forbidden);
-        }
-        if let Some(cancel)=sqlx::query_scalar::<_,String>("SELECT request_digest FROM playbook_cancellations WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).fetch_optional(&mut *tx).await? {
-            if cancel!=identity {return Err(Error::Conflict);}
-            Self::owner(&mut tx,self.namespace.owner_user_id).await?;
-            tx.commit().await?;
-            return Ok(DecisionResult::Cancelled);
-        }
-        if let Some(row)=sqlx::query("SELECT request_digest,operation_id,receipt FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).fetch_optional(&mut *tx).await? {
-            if row.get::<String,_>("request_digest")!=identity || row.get::<Uuid,_>("operation_id")!=request.operation_id || row.get::<Value,_>("receipt")!=json!({"handle":request.decision_id.to_string(),"subject":request.subject}) {return Err(Error::Conflict);}
-            Self::owner(&mut tx,self.namespace.owner_user_id).await?;
-            tx.commit().await?;
-            return Ok(DecisionResult::Accepted {handle:request.decision_id.to_string()});
-        }
-        // SAME transaction: current namespace/grant, human owner question and
-        // bridge effect receipt. No grant revocation/expiry admission window.
-        reviews
-            .admit_in_tx(&mut tx, self.namespace.owner_user_id, &prepared, &request)
-            .await
-            .map_err(review_error)?;
-        self.check_expiry(&mut tx, id).await?;
-        let receipt = json!({"handle":request.decision_id.to_string(),"subject":request.subject});
-        sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,'decision.request',$5,$6,$7,$8,$9,$10,'accepted',$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).bind(&intent.run).bind(identity).bind(intent.command.fingerprint().map_err(|_|Error::Invalid)?).bind(&intent.input_digest).bind(id).bind(revision).bind(request.operation_id).bind(receipt).bind(self.now()?).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(DecisionResult::Accepted {
-            handle: request.decision_id.to_string(),
-        })
-    }
-    pub(super) async fn reconcile_decision(
-        &self,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
-    ) -> Result<Option<DecisionResult>> {
-        let input = self.decision_input(intent)?;
-        let identity = self.identity(intent)?;
-        let mut tx = self.tx().await?;
-        self.namespace_locked(&mut tx).await?;
-        let scope = self.grant_locked(&mut tx, id, revision, false).await?;
-        self.intent_authority(intent, id, revision, &scope)?;
-        if !scope.permits(&input.recipient) {
-            return Err(Error::Forbidden);
-        }
-        let row=sqlx::query("SELECT command_name,request_digest,status,receipt FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).fetch_optional(&mut *tx).await?;
-        let decision = self.decision_id(intent)?;
-        if let Some(row) = row {
-            if row.get::<String, _>("command_name") != "decision.request"
-                || row.get::<String, _>("request_digest") != identity
-                || row.get::<Value, _>("receipt")
-                    != json!({"handle":decision.to_string(),"subject":input.expected_subject})
-            {
-                return Err(Error::Conflict);
-            }
-            tx.commit().await?;
-            return self
-                .decision_status(decision, &input.expected_subject)
-                .await
-                .map(Some);
-        }
-        if let Some(row)=sqlx::query("SELECT request_digest,disposition FROM playbook_cancellations WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).fetch_optional(&mut *tx).await? {
-            if row.get::<String,_>("request_digest")!=identity {return Err(Error::Conflict);}
-            if row.get::<String,_>("disposition")!="confirmed" {return Err(Error::Unknown);}
-            tx.commit().await?;return Ok(Some(DecisionResult::Cancelled));
-        }
-        tx.commit().await?;
-        Ok(None)
-    }
-    async fn decision_status(
-        &self,
-        decision: Uuid,
-        expected: &aq_session_protocol::ArtifactRef,
-    ) -> Result<DecisionResult> {
-        let reviews = self.reviews.as_ref().ok_or(Error::Forbidden)?;
-        let view = reviews
-            .inspect(self.namespace.owner_user_id, decision)
-            .await
-            .map_err(review_error)?;
-        let request: aq_review_protocol::DecisionRequest =
-            serde_json::from_value(view["request"].clone())?;
-        if request.decision_id != decision || &request.subject != expected {
-            return Err(Error::Conflict);
-        }
-        let Some(value) = view.get("receipt").filter(|v| !v.is_null()) else {
-            return Ok(DecisionResult::Accepted {
-                handle: decision.to_string(),
-            });
-        };
-        let receipt: aq_review_protocol::DecisionReceipt = serde_json::from_value(value.clone())?;
-        receipt
-            .validate_for(&request)
-            .map_err(|_| Error::Conflict)?;
-        let outcome = match receipt.finality {
-            aq_review_protocol::DecisionFinality::HumanAnswer {
-                choice: aq_review_protocol::Choice::Approve,
-                ..
-            } => "approved",
-            aq_review_protocol::DecisionFinality::HumanAnswer {
-                choice: aq_review_protocol::Choice::Reject,
-                ..
-            } => "rejected",
-            aq_review_protocol::DecisionFinality::Expired {} => "expired",
-            aq_review_protocol::DecisionFinality::Cancelled { .. } => "cancelled",
-        };
-        Ok(DecisionResult::Completed {
-            outcome: outcome.into(),
-            output: json!({"receipt":receipt.artifact().map_err(|_|Error::Invalid)?,"subject":request.subject}),
-        })
-    }
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1506,314 +1249,15 @@ struct DecisionLookup {
     handle: Uuid,
     recipient: Recipient,
 }
-impl Service {
-    pub(super) async fn operation_get(
-        &self,
-        owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
-    ) -> Result<DecisionResult> {
-        if !self.profile.has_reviews()
-            || intent.command != super::review_domain::operation_contract()
-            || intent.input_digest != digest(&intent.input)?
-        {
-            return Err(Error::Forbidden);
-        }
-        let input: DecisionLookup = serde_json::from_value(intent.input.clone())?;
-        input.recipient.validate()?;
-        if input.kind != "human_decision" || input.handle.is_nil() {
-            return Err(Error::Invalid);
-        }
-        let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let scope = self.grant_locked(&mut tx, id, revision, true).await?;
-        self.intent_authority(intent, id, revision, &scope)?;
-        if !scope.permits(&input.recipient) {
-            return Err(Error::Forbidden);
-        }
-        let reference:Value=sqlx::query_scalar("SELECT receipt->'subject' FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND command_name='decision.request' AND receipt->>'handle'=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(input.handle.to_string()).fetch_optional(&mut *tx).await?.ok_or(Error::Forbidden)?;
-        let expected: aq_session_protocol::ArtifactRef = serde_json::from_value(reference)?;
-        self.check_expiry(&mut tx, id).await?;
-        tx.commit().await?;
-        let reviews = self.reviews.as_ref().ok_or(Error::Forbidden)?;
-        let view = reviews
-            .inspect(self.namespace.owner_user_id, input.handle)
-            .await
-            .map_err(review_error)?;
-        let subject: aq_review_protocol::ReviewSubject =
-            serde_json::from_value(view["subject"].clone())?;
-        if subject.artifact().map_err(|_| Error::Invalid)? != expected
-            || !Self::exact_review_recipient(&input.recipient, &subject)
-        {
-            return Err(Error::Forbidden);
-        }
-        match self.decision_status(input.handle, &expected).await? {
-            DecisionResult::Accepted { handle } => Ok(DecisionResult::Completed {
-                outcome: "pending".into(),
-                output: json!({"handle":handle,"subject":expected}),
-            }),
-            result => Ok(result),
-        }
-    }
-}
 
-impl Service {
-    pub(super) async fn cancel_decision(
-        &self,
-        owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
-    ) -> Result<CancellationResult> {
-        let input = self.decision_input(intent)?;
-        let identity = self.identity(intent)?;
-        let key = aq_playbook_host::runner::cancellation_key(intent).map_err(|_| Error::Invalid)?;
-        let operation = stable_id(
-            "aq.playbook.human-cancellation",
-            self.namespace.namespace_id,
-            self.namespace.generation,
-            &key,
-        )?;
-        let decision = self.decision_id(intent)?;
-        let mut tx = self.tx().await?;
-        crate::reviews::Service::lock_budget(&mut tx)
-            .await
-            .map_err(review_error)?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let scope = self
-            .grant_record_locked(&mut tx, id, revision, false, false)
-            .await?;
-        self.intent_authority(intent, id, revision, &scope)?;
-        if !scope.permits(&input.recipient) {
-            return Err(Error::Forbidden);
-        }
-        if let Some(row)=sqlx::query("SELECT request_digest,disposition FROM playbook_cancellations WHERE namespace_id=$1 AND generation=$2 AND cancellation_key=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&key).fetch_optional(&mut *tx).await? {
-            if row.get::<String,_>("request_digest")!=identity {return Err(Error::Conflict);}
-            Self::owner(&mut tx,self.namespace.owner_user_id).await?;
-            return Ok(if row.get::<String,_>("disposition")=="confirmed" {CancellationResult::Confirmed}else{CancellationResult::TooLate});
-        }
-        let existing=sqlx::query("SELECT request_digest,receipt FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).fetch_optional(&mut *tx).await?;
-        let mut disposition = "confirmed";
-        if let Some(row) = existing {
-            if row.get::<String, _>("request_digest") != identity
-                || row.get::<Value, _>("receipt")
-                    != json!({"handle":decision.to_string(),"subject":input.expected_subject})
-            {
-                return Err(Error::Conflict);
-            }
-            // Finality cannot be retracted. A known final receipt is TooLate;
-            // missing/corrupt owner records remain Unknown and retain the key.
-            let finality: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM human_decision_finality WHERE decision_id=$1)",
-            )
-            .bind(decision)
-            .fetch_one(&mut *tx)
-            .await?;
-            if finality {
-                disposition = "too_late";
-                Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-            } else {
-                self.reviews
-                    .as_ref()
-                    .ok_or(Error::Forbidden)?
-                    .cancel_in_tx(&mut tx, self.namespace.owner_user_id, operation, decision)
-                    .await
-                    .map_err(review_error)?;
-            }
-        } else {
-            Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        }
-        sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(key).bind(&intent.id).bind(identity).bind(disposition).bind(self.now()?).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(if disposition == "confirmed" {
-            CancellationResult::Confirmed
-        } else {
-            CancellationResult::TooLate
-        })
-    }
-    /// Only this namespace's retained accepted questions; expiry admits no new
-    /// vote. Release namespace locks before taking the review budget lock.
-    pub(super) async fn expire_decisions(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
-        if !self.profile.has_reviews() {
-            return Ok(0);
-        }
-        if !(1..=2).contains(&limit) {
-            return Err(Error::Invalid);
-        }
-        let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let ids: Vec<Uuid> = sqlx::query_scalar("SELECT d.decision_id FROM human_decision_requests d JOIN playbook_effects e ON e.receipt->>'handle'=d.decision_id::text WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='decision.request' AND e.status='accepted' AND d.state='pending' AND d.expires_at_ms<=$3 ORDER BY d.expires_at_ms,d.decision_id LIMIT $4")
-            .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(self.now()?).bind(limit as i64).fetch_all(&mut *tx).await?;
-        tx.commit().await?;
-        let reviews = self.reviews.as_ref().ok_or(Error::Forbidden)?;
-        let mut expired = 0;
-        for id in ids {
-            match reviews.expire(id).await {
-                Ok(_) => expired += 1,
-                Err(crate::error::AppError::Conflict(_)) => {}
-                Err(e) => return Err(review_error(e)),
-            }
-        }
-        Ok(expired)
-    }
-    /// Bounded copy to the existing engine outbox; owner-copy ACK and insert
-    /// share SQL, engine acceptance/fanout ACK is a later independent boundary.
-    pub(super) async fn collect_decision_events(
-        &self,
-        owner: &RuntimeOwner,
-        limit: u32,
-    ) -> Result<usize> {
-        if !self.profile.has_reviews() {
-            return Ok(0);
-        }
-        if !(1..=2).contains(&limit) {
-            return Err(Error::Invalid);
-        }
-        let reviews = self.reviews.as_ref().ok_or(Error::Forbidden)?;
-        let mut tx = self.tx().await?;
-        crate::reviews::Service::lock_budget(&mut tx)
-            .await
-            .map_err(review_error)?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let rows=sqlx::query("SELECT e.intent_id,e.receipt FROM playbook_effects e JOIN review_owner_outbox o ON o.decision_id=(e.receipt->>'handle')::uuid WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='decision.request' AND NOT o.acknowledged ORDER BY o.event_id LIMIT $3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(limit as i64).fetch_all(&mut *tx).await?;
-        for row in &rows {
-            let accepted: Value = row.get("receipt");
-            let decision: Uuid = serde_json::from_value(accepted["handle"].clone())?;
-            let (subject, payload) = reviews
-                .completion_in_tx(&mut tx, decision)
-                .await
-                .map_err(review_error)?;
-            if accepted["subject"] != json!(subject.artifact().map_err(|_| Error::Invalid)?)
-                || subject.project_id != self.namespace.project_id
-                || subject.task.workspace_id != self.namespace.workspace_id
-            {
-                return Err(Error::Conflict);
-            }
-            let c = super::review_domain::decision_event();
-            let at = self.now()?;
-            let event = EventEnvelope {
-                producer: "aq.human.decisions@1".into(),
-                event_id: decision.to_string(),
-                contract: ContractRef {
-                    name: c.name.clone(),
-                    fingerprint: c.fingerprint().map_err(|_| Error::Invalid)?,
-                },
-                scope: "project".into(),
-                correlation: BTreeMap::from([("decision".into(), decision.to_string())]),
-                subject: None,
-                revision: None,
-                causation: Some(row.get("intent_id")),
-                occurred_at_ms: None,
-                observed_at_ms: Some(at),
-                payload: json!({"outcome":payload["outcome"],"output":payload["output"]}),
-            };
-            aq_playbook_host::model::validate_event(&event, self.registry())
-                .map_err(|_| Error::Invalid)?;
-            let digest = digest(&event)?;
-            let old:Option<String>=sqlx::query_scalar("SELECT event_digest FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND producer='aq.human.decisions@1' AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).fetch_optional(&mut *tx).await?;
-            if let Some(old) = old {
-                if old != digest {
-                    return Err(Error::Conflict);
-                }
-            } else {
-                let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
-                let sealed = self
-                    .keys
-                    .seal(&self.aad("aq.playbooks.outbox", decision, &digest)?, &bytes)
-                    .map_err(|_| Error::Unknown)?;
-                sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.human.decisions@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
-            }
-            sqlx::query("UPDATE review_owner_outbox SET acknowledged=true WHERE decision_id=$1")
-                .bind(decision)
-                .execute(&mut *tx)
-                .await?;
-        }
-        Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        tx.commit().await?;
-        Ok(rows.len())
-    }
-    /// Bounded seal of undelivered confirmed graph operations bound to this
-    /// namespace's project into the engine outbox. `delivered` is set only by
-    /// `acknowledge_event`, after durable engine acceptance; a crash between
-    /// seal and ACK replays the same sealed event and the engine dedups on
-    /// (producer, epoch 0, event_id).
-    pub(super) async fn collect_graph_events(
-        &self,
-        owner: &RuntimeOwner,
-        limit: u32,
-    ) -> Result<usize> {
-        if !matches!(
-            self.profile,
-            CatalogProfile::GraphEvents3
-                | CatalogProfile::SettlementEvents4
-                | CatalogProfile::Monitoring6
-        ) {
-            return Ok(0);
-        }
-        if !(1..=2).contains(&limit) {
-            return Err(Error::Invalid);
-        }
-        let producer = super::review_domain::GRAPH_PRODUCER;
-        let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        let rows = sqlx::query("SELECT o.event_id,g.operation_id,g.attempt_id,b.binding->>'task_id' AS task_id FROM agent_graph_outbox o JOIN agent_graph_operations g ON g.operation_id=o.operation_id JOIN agent_launch_bindings b ON b.attempt_id=g.attempt_id WHERE NOT o.delivered AND g.phase='confirmed' AND b.binding->>'project_id'=$1 AND b.binding->>'workspace_id'=$2 AND NOT EXISTS(SELECT 1 FROM playbook_outbox p WHERE p.namespace_id=$3 AND p.generation=$4 AND p.producer='aq.graph.operations@1' AND p.event_id=o.event_id) ORDER BY g.operation_seq LIMIT $5")
-            .bind(self.namespace.project_id.to_string())
-            .bind(self.namespace.workspace_id.to_string())
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(limit as i64)
-            .fetch_all(&mut *tx)
-            .await?;
-        let c = super::review_domain::graph_operation_event();
-        let fingerprint = c.fingerprint().map_err(|_| Error::Invalid)?;
-        for row in &rows {
-            let id: Uuid = row.get("event_id");
-            let operation: Uuid = row.get("operation_id");
-            let attempt: Uuid = row.get("attempt_id");
-            let task = row.get::<Option<String>, _>("task_id");
-            let task: Option<Uuid> = task.and_then(|t| t.parse().ok());
-            let at = self.now()?;
-            let event = EventEnvelope {
-                producer: producer.into(),
-                event_id: id.to_string(),
-                contract: ContractRef {
-                    name: c.name.clone(),
-                    fingerprint: fingerprint.clone(),
-                },
-                scope: "project".into(),
-                correlation: BTreeMap::from([("operation".into(), operation.to_string())]),
-                subject: None,
-                revision: None,
-                causation: None,
-                occurred_at_ms: None,
-                observed_at_ms: Some(at),
-                payload: json!({"operation_id":operation,"task_id":task,"attempt_id":attempt}),
-            };
-            // A bad source item (no task id, or not this contract) is queued
-            // held `invalid`, so it is listed and later items are collected.
-            let registry = self.registry();
-            let valid = aq_playbook_host::model::validate_event(&event, registry).is_ok();
-            let held = (task.is_none() || !valid).then_some("invalid");
-            let status = if held.is_some() { "unknown" } else { "pending" };
-            let digest = digest(&event)?;
-            let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
-            let sealed = self
-                .keys
-                .seal(&self.aad("aq.playbooks.outbox", id, &digest)?, &bytes)
-                .map_err(|_| Error::Unknown)?;
-            sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,held_reason) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).bind(status).bind(held).execute(&mut *tx).await?;
-        }
-        Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        tx.commit().await?;
-        Ok(rows.len())
-    }
-}
+mod admissions;
+mod construction;
+mod event_collection;
+mod grants;
+mod messages;
+mod namespace;
+mod outbox;
+mod review_decisions;
 
 #[path = "inspection/admissions.rs"]
 mod inspection_admissions;

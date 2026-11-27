@@ -1,14 +1,11 @@
 //! Typed admission-observation bytes, retained under their actual Source role.
 //! Context proposal receipts are never relabeled. This grants no execution.
-use super::{Observation, hex40, refused, resolve_ref, verify_retention};
+use super::{Observation, refused};
 use crate::{AppState, error::AppError};
-use aq_admission::{
-    ArtifactKind, ArtifactRef, Digest, ObjectFormat, RetainedArtifact, SourceAdmission,
-    SourceSelection, Text,
-};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use aq_admission::{ArtifactKind, RetainedArtifact, SourceAdmission};
+use aq_delivery::source_checks::observation;
 use uuid::Uuid;
+<<<<<<< HEAD
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Body {
@@ -135,18 +132,19 @@ pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmi
         &a.resolved_object,
     )?;
     Ok(body.admission)
+=======
+/// Structural owner check over the original actual public Git observations.
+/// Fresh live authorization/retention remains a separate owner fence.
+pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmission, AppError> {
+    observation::verify(bytes, project, now)
+        .map(|v| v.admission)
+        .ok_or_else(refused)
+>>>>>>> refs/remotes/central/main
 }
 pub fn validate_stored_body(bytes: &[u8], project: Uuid) -> Result<SourceAdmission, AppError> {
-    if bytes.len() > 1_048_576 {
-        return Err(refused());
-    }
-    let body: Body = serde_json::from_slice(bytes).map_err(|_| refused())?;
-    let as_of = body
-        .admission
-        .expires_at_ms
-        .checked_sub(1)
-        .ok_or_else(|| refused())?;
-    validate_body(bytes, project, as_of)
+    observation::verify_stored(bytes, project)
+        .map(|v| v.admission)
+        .ok_or_else(refused)
 }
 pub async fn retain_admission(
     state: &AppState,
@@ -154,36 +152,39 @@ pub async fn retain_admission(
     observation: &Observation,
     retain_until_ms: u64,
 ) -> Result<RetainedArtifact, AppError> {
-    let verified = validate_stored_body(&observation.bytes, observation.admission.project_id)?;
-    let artifact = ArtifactRef {
-        id: Text::new(format!(
-            "aq.source-admission-observation/{}",
-            Digest::of(&observation.bytes).as_str()
-        ))
-        .map_err(|_| refused())?,
-        version: Text::new("1").map_err(|_| refused())?,
-        digest: Digest::of(&observation.bytes),
-    };
-    let value: Body = serde_json::from_slice(&observation.bytes).map_err(|_| refused())?;
-    if operation.is_nil()
-        || artifact != observation.artifact
-        || value.retention_handle != observation.retention_handle
-        || serde_json::to_value(&verified).map_err(|_| refused())?
+    retain_for(state, operation, observation, retain_until_ms, None).await
+}
+pub(in crate::profiled_execution) async fn retain_for(
+    state: &AppState,
+    operation: Uuid,
+    observation: &Observation,
+    retain_until_ms: u64,
+    stage: Option<Uuid>,
+) -> Result<RetainedArtifact, AppError> {
+    let verified = observation::verify_stored(&observation.bytes, observation.admission.project_id)
+        .ok_or_else(refused)?;
+    let artifact = observation::artifact(&observation.bytes).ok_or_else(refused)?;
+    let identity = !operation.is_nil()
+        && artifact == observation.artifact
+        && verified.retention_handle == observation.retention_handle;
+    if !identity
+        || serde_json::to_value(&verified.admission).map_err(|_| refused())?
             != serde_json::to_value(&observation.admission).map_err(|_| refused())?
     {
         return Err(refused());
     }
-    super::super::artifacts::retain(
+    super::super::artifacts::retain_for(
         state,
         super::super::artifacts::Retain {
             artifact_id: operation,
-            project_id: verified.project_id,
+            project_id: verified.admission.project_id,
             owner: super::super::artifacts::OwnerKind::SourceRetention,
             artifact,
             kind: ArtifactKind::Source,
             bytes: &observation.bytes,
             retain_until_ms,
         },
+        stage,
     )
     .await
 }

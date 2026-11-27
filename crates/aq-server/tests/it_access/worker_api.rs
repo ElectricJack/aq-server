@@ -741,10 +741,12 @@ async fn control_reports_desired_state_and_pending_handoffs() {
         &mut c,
         "desk",
         aq_machine_control::DesiredState::Stopped,
-        1,
-        who,
-        uuid::Uuid::new_v4(),
-        t0(),
+        aq_machine_control::OwnerChange {
+            expected_generation: 1,
+            actor: who,
+            operation_id: uuid::Uuid::new_v4(),
+            now: t0(),
+        },
     )
     .await
     .unwrap();
@@ -808,10 +810,12 @@ async fn machine_control_generation_conflicts_and_idempotent_handoffs() {
                 &mut pool.acquire().await.unwrap(),
                 "desk",
                 aq_machine_control::DesiredState::Stopped,
-                expected,
-                who,
-                uuid::Uuid::new_v4(),
-                t0(),
+                aq_machine_control::OwnerChange {
+                    expected_generation: expected,
+                    actor: who,
+                    operation_id: uuid::Uuid::new_v4(),
+                    now: t0(),
+                },
             )
             .await
         }
@@ -856,6 +860,12 @@ async fn control_sends_node_count_only_to_schema_two_and_counts_are_per_node() {
     assert_eq!(status, StatusCode::OK, "{legacy}");
     assert_eq!(legacy["schema_version"], 1);
     assert!(legacy.get("slots").is_none());
+    assert!(legacy.get("limits").is_none());
+    // The node limits Setting rides along with the slot count.
+    sqlx::query("UPDATE role_settings SET node_limits='{\"sandbox_headroom_bytes\":1024,\"build_cache_keys_kept\":3,\"admission_deferral_attention_ms\":60000}'")
+        .execute(&h._db.pool().await)
+        .await
+        .unwrap();
     sqlx::query("UPDATE worker_settings SET max_agents=3 WHERE kind='node' AND id=$1")
         .bind(r.node_id.to_string())
         .execute(&h._db.pool().await)
@@ -876,5 +886,9 @@ async fn control_sends_node_count_only_to_schema_two_and_counts_are_per_node() {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["schema_version"], 2);
         assert_eq!(body["slots"], count);
+        assert_eq!(
+            body["limits"],
+            json!({"sandbox_headroom_bytes": 1024, "build_cache_keys_kept": 3})
+        );
     }
 }

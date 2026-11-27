@@ -71,8 +71,8 @@ def main():
     parser.add_argument("older_revision")
     parser.add_argument("newer_revision")
     args = parser.parse_args()
-    client = args.merge_client or shutil.which("psql")
-    if args.automatic and not client:
+    args.merge_client = args.merge_client or shutil.which("psql")
+    if args.automatic and not args.merge_client:
         parser.error("automatic canary requires psql")
     revisions = (args.older_revision, args.newer_revision)
     merged = history(args.graph_repo)
@@ -95,6 +95,7 @@ def main():
         for revision in revisions[1:] if args.automatic else revisions:
             build(directory, args.graph_repo, revision, instance, cleanup)
         database_url = provision(directory, instance, cleanup)
+<<<<<<< HEAD
         env = {
             **os.environ, "DATABASE_URL": database_url,
             "AQ_GRAPH_DEPLOY_CANARY": str(directory), "AQ_GRAPH_DEPLOY_REVISIONS": ",".join(revisions),
@@ -111,6 +112,30 @@ def main():
              "--test", "it_playbook", "--", f"{TEST_PREFIX}::{test}", "--exact", "--ignored", "--nocapture"],
             env=env, cwd=ROOT, check=True,
         )
+=======
+        run_canary(args, directory, revisions, database_url)
+
+
+def run_canary(args, directory, revisions, database_url):
+    env = {
+        **os.environ, "DATABASE_URL": database_url,
+        "AQ_GRAPH_DEPLOY_CANARY": str(directory), "AQ_GRAPH_DEPLOY_REVISIONS": ",".join(revisions),
+        "CARGO_PROFILE_TEST_DEBUG": os.environ.get("CARGO_PROFILE_TEST_DEBUG", "0"),
+        "CARGO_TARGET_DIR": str(ROOT / "target"),
+    }
+    features = []
+    test = "merged_graph_rolls_out_by_verified_digest"
+    if args.automatic:
+        features = ["--features", "delivery_playbook"]
+        test = "automatic::host10_evidence_drives_host11"
+        env["AQ_GRAPH_DEPLOY_PSQL"] = str(Path(args.merge_client).absolute())
+        env["AQ_GRAPH_DEPLOY_GRAPH_REPO"] = str(args.graph_repo.resolve())
+    subprocess.run(
+        ["timeout", "900", "cargo", "test", "--locked", "-p", "aq-server", *features,
+         "--test", "it_playbook", "--", f"{TEST_PREFIX}::{test}", "--exact", "--ignored", "--nocapture"],
+        env=env, cwd=ROOT, check=True,
+    )
+>>>>>>> refs/remotes/central/main
 
 
 if __name__ == "__main__":

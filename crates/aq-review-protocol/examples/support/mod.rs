@@ -10,6 +10,12 @@ fn reference(id: &str, bytes: &[u8]) -> ArtifactRef {
     }
 }
 pub fn fixtures() -> Value {
+    let subject = subject();
+    let (request, resolve, receipt) = decision(&subject);
+    let check = check_receipt(&subject);
+    json!({"subject":subject,"subject_artifact":subject.artifact().unwrap(),"decision_request":request,"resolve_request":resolve,"decision_receipt":receipt,"decision_artifact":receipt.artifact().unwrap(),"check_receipt":check,"check_artifact":check.artifact().unwrap(),"qualification":"synthetic wire claims only; no source/human/check authority"})
+}
+fn subject() -> ReviewSubject {
     let upstream: Value = serde_json::from_str(include_str!(
         "../../artifacts/upstream-result-record-v1.fixture.json"
     ))
@@ -49,26 +55,7 @@ pub fn fixtures() -> Value {
             stopped_receipt: serde_json::from_value(upstream["receipt"]["stopped_receipt"].clone())
                 .unwrap(),
         },
-        source: SourcePin {
-            repository_id: serde_json::from_value(outcome["source"]["repository_id"].clone())
-                .unwrap(),
-            binding_generation: outcome["source"]["binding_generation"].as_u64().unwrap(),
-            base: serde_json::from_value(outcome["source"]["base"].clone()).unwrap(),
-            resulting_object: ObjectId {
-                format: ObjectFormat::Sha1,
-                hex: "2".repeat(40),
-            },
-            input_artifact: serde_json::from_value(outcome["source"]["artifact"].clone()).unwrap(),
-            resulting_artifact: reference(
-                "aq.synthetic-resulting-source",
-                b"synthetic resulting source; not retained",
-            ),
-            source_receipt_id: Uuid::from_u128(900),
-            retention_receipt: reference(
-                "aq.synthetic-source-owner-receipt",
-                b"synthetic receipt; not source confirmation",
-            ),
-        },
+        source: source_pin(&outcome["source"]),
         criteria: outcome["acceptance_criteria"]
             .as_array()
             .unwrap()
@@ -77,6 +64,31 @@ pub fn fixtures() -> Value {
             .collect(),
     };
     subject.validate().unwrap();
+    subject
+}
+fn source_pin(source: &Value) -> SourcePin {
+    SourcePin {
+        repository_id: serde_json::from_value(source["repository_id"].clone()).unwrap(),
+        binding_generation: source["binding_generation"].as_u64().unwrap(),
+        base: serde_json::from_value(source["base"].clone()).unwrap(),
+        resulting_object: ObjectId {
+            format: ObjectFormat::Sha1,
+            hex: "2".repeat(40),
+        },
+        input_artifact: serde_json::from_value(source["artifact"].clone()).unwrap(),
+        resulting_artifact: reference(
+            "aq.synthetic-resulting-source",
+            b"synthetic resulting source; not retained",
+        ),
+        source_receipt_id: Uuid::from_u128(900),
+        retention_receipt: reference(
+            "aq.synthetic-source-owner-receipt",
+            b"synthetic receipt; not source confirmation",
+        ),
+    }
+}
+
+fn decision(subject: &ReviewSubject) -> (DecisionRequest, ResolveRequest, DecisionReceipt) {
     let request = DecisionRequest {
         schema_version: 1,
         operation_id: Uuid::from_u128(901),
@@ -114,6 +126,9 @@ pub fn fixtures() -> Value {
         },
     };
     receipt.validate_for(&request).unwrap();
+    (request, resolve, receipt)
+}
+fn check_receipt(subject: &ReviewSubject) -> CheckReceipt {
     let validator = reference(
         "aq.check.source-artifact-integrity",
         b"synthetic validator pin; no executor registration",
@@ -131,6 +146,6 @@ pub fn fixtures() -> Value {
             evidence: vec![],
         },
     };
-    check.validate_for_subject(&subject).unwrap();
-    json!({"subject":subject,"subject_artifact":subject.artifact().unwrap(),"decision_request":request,"resolve_request":resolve,"decision_receipt":receipt,"decision_artifact":receipt.artifact().unwrap(),"check_receipt":check,"check_artifact":check.artifact().unwrap(),"qualification":"synthetic wire claims only; no source/human/check authority"})
+    check.validate_for_subject(subject).unwrap();
+    check
 }

@@ -2,9 +2,17 @@
 //! transactions. Durable owner rows are observations, never execution permits.
 use super::{
     Error, Result,
-    policy::{Event, Kind, MILESTONE_GATE_LABEL, Policy, Transition, derived_id},
+    policy::{Event, Kind, MILESTONE_GATE_LABEL, Policy},
 };
 use aq_lifecycle_api::Scope;
+pub use aq_notifications::policy::Origin;
+pub struct Preservation {
+    pub node: Uuid,
+    pub attempt: Uuid,
+    pub bytes: u64,
+    pub expires_at_ms: u64,
+}
+
 use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
@@ -14,18 +22,17 @@ impl Policy {
     /// the episode. Producers must supply the retained failure event identity.
     pub async fn observe_failure_reason(
         &self,
-        source: Uuid,
-        scope: Scope,
+        origin: Origin,
         profile: &str,
         reason: &str,
     ) -> Result<Option<Value>> {
-        if source.is_nil() {
+        if origin.id.is_nil() {
             return Err(Error::Invalid);
         }
         let Some(kind) = Kind::from_failure_reason(reason) else {
             return Ok(None);
         };
-        self.observe(event(source, kind, scope, profile.to_string(), true))
+        self.observe(origin.event(kind, profile.to_string(), true))
             .await
             .map(Some)
     }
@@ -33,30 +40,25 @@ impl Policy {
     /// F5 integration port; never copy question text into a notification.
     pub async fn observe_question(
         &self,
-        source: Uuid,
-        scope: Scope,
+        origin: Origin,
         decision: Uuid,
         pending: bool,
     ) -> Result<Value> {
-        if source.is_nil() || decision.is_nil() {
-            return Err(Error::Invalid);
-        }
-        self.observe(event(
-            source,
-            Kind::QuestionAsked,
-            scope,
-            decision.to_string(),
-            pending,
-        ))
-        .await
+        self.observe(origin.identified(Kind::QuestionAsked, decision, pending)?)
+            .await
     }
 
-    async fn changed(&self, kind: Kind, scope: Scope, subject: String, open: bool) -> Result<()> {
+    async fn changed(
+        &self,
+        kind: Kind,
+        (scope, subject): (Scope, String),
+        open: bool,
+    ) -> Result<()> {
         let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notification_episodes WHERE kind=$1 AND project_id=$2 AND workspace_id=$3 AND subject=$4 AND open)")
             .bind(kind.as_str()).bind(scope.project_id).bind(scope.workspace_id).bind(&subject)
             .fetch_one(&self.service().pool).await?;
         if current != open {
-            self.observe(event(Uuid::new_v4(), kind, scope, subject, open))
+            self.observe(Origin::new(Uuid::new_v4(), scope).event(kind, subject, open))
                 .await?;
         }
         Ok(())
@@ -70,8 +72,7 @@ impl Policy {
         for row in &rows {
             self.changed(
                 Kind::DecisionNeeded,
-                scope(row),
-                row.get::<Uuid, _>("decision_id").to_string(),
+                (scope(row), row.get::<Uuid, _>("decision_id").to_string()),
                 row.get("pending"),
             )
             .await?;
@@ -91,8 +92,7 @@ impl Policy {
         for row in &rows {
             self.changed(
                 Kind::WorkerOffline,
-                scope(row),
-                row.get::<Uuid, _>("id").to_string(),
+                (scope(row), row.get::<Uuid, _>("id").to_string()),
                 row.get("offline"),
             )
             .await?;
@@ -113,13 +113,8 @@ impl Policy {
             let subject: String = row.get("subject");
             let used: i32 = row.get("used_bps");
             let open: bool = row.get("pressure");
-            let mut e = event(
-                Uuid::new_v4(),
-                Kind::StoragePressure,
-                scope(row),
-                subject,
-                open,
-            );
+            let mut e =
+                Origin::new(Uuid::new_v4(), scope(row)).event(Kind::StoragePressure, subject, open);
             e.title = format!("Disk {}.{:02}% used", used / 100, used % 100);
             self.observe(e).await?;
         }
@@ -133,60 +128,43 @@ impl Policy {
     pub async fn observe_preserved(
         &self,
         source: Uuid,
-        node: Uuid,
-        attempt: Uuid,
-        preserved_bytes: u64,
-        expires_at_ms: u64,
+        retained: Preservation,
     ) -> Result<Option<Value>> {
-        if source.is_nil() || attempt.is_nil() {
+        if source.is_nil() || retained.attempt.is_nil() {
             return Err(Error::Invalid);
         }
         let ran: Option<Uuid> =
             sqlx::query_scalar("SELECT node_id FROM execution_attempts WHERE attempt_id=$1")
-                .bind(attempt)
+                .bind(retained.attempt)
                 .fetch_optional(&self.service().pool)
                 .await?;
-        if ran != Some(node) {
+        if ran != Some(retained.node) {
             return Err(Error::NotFound);
         }
         let Some(row) = sqlx::query("SELECT (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id FROM profiled_launches l JOIN project_execution_bindings b ON b.project_id=(l.execution_spec#>>'{lifecycle,project_id}')::uuid AND b.binding->>'enabled'='true' AND b.binding->>'graph_workspace_id'=l.execution_spec#>>'{task,workspace_id}' WHERE l.attempt_id=$1")
-            .bind(attempt).fetch_optional(&self.service().pool).await?
+            .bind(retained.attempt).fetch_optional(&self.service().pool).await?
         else {
             return Ok(None);
         };
-        self.observe_preservation(
-            source,
-            scope(&row),
-            node,
-            attempt,
-            preserved_bytes,
-            expires_at_ms,
-        )
-        .await
-        .map(Some)
+        self.observe_preservation(Origin::new(source, scope(&row)), retained)
+            .await
+            .map(Some)
     }
 
     /// The scoped half of [`Self::observe_preserved`]: one opened episode per
     /// attempt; the title carries the node, bytes held and the expiry.
     pub async fn observe_preservation(
         &self,
-        source: Uuid,
-        scope: Scope,
-        node: Uuid,
-        attempt: Uuid,
-        preserved_bytes: u64,
-        expires_at_ms: u64,
+        origin: Origin,
+        retained: Preservation,
     ) -> Result<Value> {
-        if source.is_nil() || attempt.is_nil() {
-            return Err(Error::Invalid);
-        }
-        let mut e = event(
-            source,
-            Kind::SandboxPreserved,
-            scope,
-            attempt.to_string(),
-            true,
-        );
+        let Preservation {
+            node,
+            attempt,
+            bytes: preserved_bytes,
+            expires_at_ms,
+        } = retained;
+        let mut e = origin.identified(Kind::SandboxPreserved, attempt, true)?;
         let expiry = i64::try_from(expires_at_ms)
             .ok()
             .and_then(chrono::DateTime::from_timestamp_millis)
@@ -203,21 +181,11 @@ impl Policy {
     /// source is the ladder action ID, so a retried notify is idempotent.
     pub async fn observe_stall(
         &self,
-        source: Uuid,
-        scope: Scope,
+        origin: Origin,
         attempt: Uuid,
         title: String,
     ) -> Result<Value> {
-        if source.is_nil() || attempt.is_nil() {
-            return Err(Error::Invalid);
-        }
-        let mut e = event(
-            source,
-            Kind::SessionStalled,
-            scope,
-            attempt.to_string(),
-            true,
-        );
+        let mut e = origin.identified(Kind::SessionStalled, attempt, true)?;
         e.title = title;
         self.observe(e).await
     }
@@ -231,89 +199,9 @@ impl Policy {
         for row in &rows {
             self.changed(
                 Kind::TaskFailedOrBlocked,
-                scope(row),
-                row.get("subject"),
+                (scope(row), row.get("subject")),
                 row.get("attention"),
             )
-            .await?;
-        }
-        Ok(rows.len())
-    }
-
-    /// Consume the D3 outbox independently of engine delivery. Freeze the
-    /// notification projection before observing it; a crash retries exact IDs.
-    pub async fn reconcile_graph(&self, state: &crate::AppState) -> Result<usize> {
-        let rows = sqlx::query("SELECT o.event_id,o.notification_events,b.binding FROM agent_graph_outbox o JOIN agent_graph_operations g USING(operation_id) JOIN agent_launch_bindings a ON a.attempt_id=g.attempt_id JOIN project_execution_bindings b ON b.project_id=(a.binding->>'project_id')::uuid AND b.binding->>'graph_workspace_id'=a.binding->>'workspace_id' WHERE NOT o.notification_observed AND g.phase='confirmed' AND b.binding->>'enabled'='true' ORDER BY g.operation_seq LIMIT 1")
-            .fetch_all(&self.service().pool).await?;
-        for row in &rows {
-            let id: Uuid = row.get("event_id");
-            let frozen: Option<Value> = row.get("notification_events");
-            let events: Vec<Event> = if let Some(frozen) = frozen {
-                serde_json::from_value(frozen)?
-            } else {
-                let binding: Value = row.get("binding");
-                let scope = Scope {
-                    project_id: uuid(&binding["project_id"])?,
-                    workspace_id: uuid(&binding["graph_workspace_id"])?,
-                };
-                let graph = state.agent_access.as_ref().ok_or(Error::Unavailable)?;
-                let mut ready = Vec::new();
-                let mut cursor = None;
-                // Bound work to the episode capacity. A partial projection is
-                // retried without acknowledging the source or resolving gates.
-                for _ in 0..64 {
-                    let page = graph
-                        .scheduling_ready_current(
-                            scope.workspace_id,
-                            64,
-                            cursor.as_deref(),
-                            state.clock.as_ref(),
-                        )
-                        .await
-                        .map_err(|_| Error::Unavailable)?;
-                    ready.extend(page.items.into_iter().map(|r| r.node));
-                    cursor = page.next_cursor;
-                    if cursor.is_none() {
-                        break;
-                    }
-                }
-                if cursor.is_some() {
-                    return Err(Error::Overloaded);
-                }
-                let mut events = milestone_events(id, scope.clone(), &ready)?;
-                let open: Vec<String> = sqlx::query_scalar("SELECT subject FROM notification_episodes WHERE kind='milestone.gate_ready' AND project_id=$1 AND workspace_id=$2 AND open ORDER BY subject LIMIT 4096")
-                        .bind(scope.project_id).bind(scope.workspace_id).fetch_all(&self.service().pool).await?;
-                let ready_subjects: std::collections::HashSet<_> =
-                    events.iter().map(|e| e.subject.clone()).collect();
-                // Unchanged ready gates need no new policy receipt on every
-                // Graph operation. Only transitions consume retention capacity.
-                events.retain(|e| !open.contains(&e.subject));
-                for subject in open {
-                    if !ready_subjects.contains(&subject) {
-                        events.push(event(
-                            id,
-                            Kind::MilestoneGateReady,
-                            scope.clone(),
-                            subject,
-                            false,
-                        ));
-                    }
-                }
-                let frozen: Value = sqlx::query_scalar("UPDATE agent_graph_outbox SET notification_events=COALESCE(notification_events,$2) WHERE event_id=$1 RETURNING notification_events")
-                    .bind(id).bind(serde_json::to_value(&events)?).fetch_one(&self.service().pool).await?;
-                serde_json::from_value(frozen)?
-            };
-            for event in events {
-                self.observe(event).await?;
-            }
-            // Result attention is reconciled too: graph delivery never claims
-            // that a failed process completed, or that a held task was released.
-            self.reconcile_tasks().await?;
-            sqlx::query(
-                "UPDATE agent_graph_outbox SET notification_observed=TRUE WHERE event_id=$1",
-            )
-            .bind(id)
-            .execute(&self.service().pool)
             .await?;
         }
         Ok(rows.len())
@@ -342,29 +230,6 @@ fn uuid(value: &Value) -> Result<Uuid> {
         .filter(|v: &Uuid| !v.is_nil())
         .ok_or(Error::Invalid)
 }
-fn event(source: Uuid, kind: Kind, scope: Scope, subject: String, open: bool) -> Event {
-    Event {
-        source_event_id: derived_id(&[
-            "aq-source/1",
-            &source.to_string(),
-            kind.as_str(),
-            &scope.project_id.to_string(),
-            &scope.workspace_id.to_string(),
-            &subject,
-            if open { "opened" } else { "resolved" },
-        ]),
-        kind,
-        subject,
-        scope,
-        transition: if open {
-            Transition::Opened
-        } else {
-            Transition::Resolved
-        },
-        title: "Open AQ to review".into(),
-    }
-}
-
 /// Nodes come from Graph's validated ready projection, not caller-supplied
 /// labels alone. Keep this pure adapter available for fixture qualification.
 pub fn milestone_events(source: Uuid, scope: Scope, ready_nodes: &[Value]) -> Result<Vec<Event>> {
@@ -379,13 +244,13 @@ pub fn milestone_events(source: Uuid, scope: Scope, ready_nodes: &[Value]) -> Re
                 .is_some_and(|labels| labels.contains(&json!(MILESTONE_GATE_LABEL)))
         })
         .map(|n| {
-            Ok(event(
-                source,
+            Ok(Origin::new(source, scope.clone()).event(
                 Kind::MilestoneGateReady,
-                scope.clone(),
                 uuid(&n["id"])?.to_string(),
                 true,
             ))
         })
         .collect()
 }
+
+mod graph;

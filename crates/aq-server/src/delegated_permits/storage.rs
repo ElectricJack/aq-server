@@ -33,7 +33,7 @@ pub async fn insert_locked(
     }
     let record = PermitRecord::from_issued(permit)?;
     let node: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
+        sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR KEY SHARE")
             .bind(permit.binding.node.node_id)
             .fetch_optional(&mut **tx)
             .await?;

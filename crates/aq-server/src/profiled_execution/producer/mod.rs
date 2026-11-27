@@ -17,28 +17,34 @@ use crate::{AppState, error::AppError};
 pub use workflow::poll;
 
 async fn task_git_author<'e>(
-    _state: &AppState,
+    state: &AppState,
     executor: impl sqlx::PgExecutor<'e>,
     project: uuid::Uuid,
     workspace: uuid::Uuid,
     task: uuid::Uuid,
 ) -> Result<Option<aq_human_work::task_git_author::TaskGitAuthor>, AppError> {
-    // Historical test fixtures explicitly pin a schema prior to this store.
-    // Current stores must propagate lookup errors, including a missing table.
-    #[cfg(feature = "test-support")]
-    {
-        const TASK_GIT_AUTHOR_FORMAT: u32 = 162;
-        if _state
-            .store
-            .fixture_profile
-            .is_some_and(|v| v < TASK_GIT_AUTHOR_FORMAT)
-        {
-            return Ok(None);
-        }
+    if predates_task_git_author(state) {
+        return Ok(None);
     }
     aq_human_work::task_git_author::lookup(executor, project, workspace, task)
         .await
         .map_err(crate::error::db)
+}
+
+/// Historical test fixtures explicitly pin a schema prior to the task git
+/// author store. Current stores must propagate lookup errors, including a
+/// missing table.
+#[cfg(feature = "test-support")]
+fn predates_task_git_author(state: &AppState) -> bool {
+    const TASK_GIT_AUTHOR_FORMAT: u32 = 162;
+    state
+        .store
+        .fixture_profile
+        .is_some_and(|v| v < TASK_GIT_AUTHOR_FORMAT)
+}
+#[cfg(not(feature = "test-support"))]
+fn predates_task_git_author(_state: &AppState) -> bool {
+    false
 }
 
 fn now(state: &AppState) -> Result<u64, AppError> {
@@ -50,7 +56,7 @@ fn now(state: &AppState) -> Result<u64, AppError> {
 use super::on_heap;
 #[track_caller]
 pub(super) fn refused() -> AppError {
-    tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
+    tracing::warn!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("native offer admission requirements unavailable".into())
 }
 

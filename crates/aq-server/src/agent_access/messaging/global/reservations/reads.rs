@@ -1,4 +1,12 @@
 use super::*;
+fn mail_ref(row: &sqlx::postgres::PgRow) -> Result<MailRef> {
+    Ok(MailRef {
+        message_id: row.get("message_id"),
+        cursor: u64::try_from(row.get::<i64, _>("cursor")).map_err(|_| unavailable())?,
+        payload_digest: serde_json::from_value(json!(row.get::<String, _>("payload_digest")))
+            .map_err(|_| unavailable())?,
+    })
+}
 pub(super) async fn reservation(
     tx: &mut Transaction<'_, Postgres>,
     a: &Actor,
@@ -36,12 +44,7 @@ pub(super) async fn reservation(
             return Err(unavailable());
         }
         body_bytes += u64::try_from(m.get::<i32, _>("body_bytes")).map_err(|_| unavailable())?;
-        messages.push(MailRef {
-            message_id: m.get("message_id"),
-            cursor: u64::try_from(m.get::<i64, _>("cursor")).map_err(|_| unavailable())?,
-            payload_digest: serde_json::from_value(json!(m.get::<String, _>("payload_digest")))
-                .map_err(|_| unavailable())?,
-        });
+        messages.push(mail_ref(&m)?);
     }
     let batch = MailBatch {
         conversation_id: a.conversation,
@@ -59,22 +62,18 @@ pub(super) async fn reservation(
     {
         return Err(unavailable());
     }
-    let state = match row.get::<String, _>("state").as_str() {
-        "awaiting_prepared_plan" => ReservationState::AwaitingPreparedPlan,
-        "cancelled_before_plan" => ReservationState::CancelledBeforePlan,
-        "consumed" => ReservationState::Consumed,
-        _ => return Err(unavailable()),
-    };
     let revision = row.get::<i64, _>("revision") as u64;
     let cancel_operation_id = row.get::<Option<Uuid>, _>("cancel_operation_id");
-    if (state == ReservationState::Consumed && (revision != 2 || cancel_operation_id.is_some()))
-        || (state == ReservationState::AwaitingPreparedPlan
-            && (revision != 1 || cancel_operation_id.is_some()))
-        || (state == ReservationState::CancelledBeforePlan
-            && (revision != 2 || cancel_operation_id.is_none()))
-    {
-        return Err(unavailable());
-    }
+    let state = match (
+        row.get::<String, _>("state").as_str(),
+        revision,
+        cancel_operation_id,
+    ) {
+        ("awaiting_prepared_plan", 1, None) => ReservationState::AwaitingPreparedPlan,
+        ("consumed", 2, None) => ReservationState::Consumed,
+        ("cancelled_before_plan", 2, Some(_)) => ReservationState::CancelledBeforePlan,
+        _ => return Err(unavailable()),
+    };
     Ok(Some(ReservationView {
         id,
         actor_id: a.id,
@@ -169,55 +168,7 @@ pub(super) async fn selection(
         }
         result.status = PreviewStatus::ReservationOutstanding;
     } else {
-        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_reservations WHERE actor_id=$1 AND state='awaiting_prepared_plan')").bind(a.id).fetch_one(&mut **tx).await.map_err(db)?;
-        if active {
-            return Err(unavailable());
-        }
-        let rows=sqlx::query("SELECT m.message_id,m.cursor,m.payload_digest,octet_length(m.body) AS body_bytes,central_global_mail_source_valid(m.message_id) AS valid,EXISTS(SELECT 1 FROM central_supervisor_mail_members b JOIN central_supervisor_reservations r ON r.reservation_id=b.reservation_id WHERE b.actor_id=$4 AND b.message_id=m.message_id AND r.state='consumed') AS consumed FROM mailbox_messages m WHERE m.mailbox_key=$1 AND m.cursor>$2 AND m.cursor<=$3 ORDER BY m.cursor LIMIT 129 FOR SHARE OF m").bind(&mailbox).bind(cursor(request.scan_after)?).bind(through).bind(a.id).fetch_all(&mut **tx).await.map_err(db)?;
-        let mut messages = Vec::new();
-        for (index, row) in rows.into_iter().enumerate() {
-            if index >= MAX_SCAN {
-                break;
-            }
-            if row.get::<bool, _>("consumed") {
-                result.scanned_through_cursor =
-                    u64::try_from(row.get::<i64, _>("cursor")).map_err(|_| unavailable())?;
-                continue;
-            }
-            let bytes =
-                u64::try_from(row.get::<i32, _>("body_bytes")).map_err(|_| unavailable())?;
-            if messages.len() >= 16 || result.body_bytes + bytes > 65536 {
-                break;
-            }
-            if bytes == 0 || bytes > 16384 || !row.get::<bool, _>("valid") {
-                return Err(unavailable());
-            }
-            let message = MailRef {
-                message_id: row.get("message_id"),
-                cursor: u64::try_from(row.get::<i64, _>("cursor")).map_err(|_| unavailable())?,
-                payload_digest: serde_json::from_value(json!(
-                    row.get::<String, _>("payload_digest")
-                ))
-                .map_err(|_| unavailable())?,
-            };
-            let aliases:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_mail_members WHERE actor_id=$1 AND (message_id=$2 OR (mailbox_key=$3 AND cursor=$4)) AND (message_id<>$2 OR mailbox_key<>$3 OR cursor<>$4 OR payload_digest<>$5))").bind(a.id).bind(message.message_id).bind(&mailbox).bind(positive(message.cursor)?).bind(message.payload_digest.as_str()).fetch_one(&mut **tx).await.map_err(db)?;
-            if aliases {
-                return Err(unavailable());
-            }
-            result.scanned_through_cursor = message.cursor;
-            result.body_bytes += bytes;
-            messages.push(message);
-        }
-        if !messages.is_empty() {
-            let batch = MailBatch {
-                conversation_id: a.conversation,
-                through_cursor: through as u64,
-                messages,
-            };
-            batch.validate().map_err(|_| unavailable())?;
-            result.batch = Some(batch);
-            result.status = PreviewStatus::Ready;
-        }
+        select_mail(tx, a, &mailbox, &mut result).await?;
     }
     result.has_more = result.scanned_through_cursor < result.through_cursor;
     if result.has_more {
@@ -233,6 +184,56 @@ pub(super) async fn selection(
         .remove("selection_digest");
     result.selection_digest = hash(&value)?;
     Ok(result)
+}
+/// Scan only while the policy is enabled and no reservation is outstanding.
+async fn select_mail(
+    tx: &mut Transaction<'_, Postgres>,
+    a: &Actor,
+    mailbox: &str,
+    result: &mut Preview,
+) -> Result<()> {
+    let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_reservations WHERE actor_id=$1 AND state='awaiting_prepared_plan')").bind(a.id).fetch_one(&mut **tx).await.map_err(db)?;
+    if active {
+        return Err(unavailable());
+    }
+    let rows=sqlx::query("SELECT m.message_id,m.cursor,m.payload_digest,octet_length(m.body) AS body_bytes,central_global_mail_source_valid(m.message_id) AS valid,EXISTS(SELECT 1 FROM central_supervisor_mail_members b JOIN central_supervisor_reservations r ON r.reservation_id=b.reservation_id WHERE b.actor_id=$4 AND b.message_id=m.message_id AND r.state='consumed') AS consumed FROM mailbox_messages m WHERE m.mailbox_key=$1 AND m.cursor>$2 AND m.cursor<=$3 ORDER BY m.cursor LIMIT 129 FOR SHARE OF m").bind(mailbox).bind(cursor(result.scan_after)?).bind(cursor(result.through_cursor)?).bind(a.id).fetch_all(&mut **tx).await.map_err(db)?;
+    let mut messages = Vec::new();
+    for (index, row) in rows.into_iter().enumerate() {
+        if index >= MAX_SCAN {
+            break;
+        }
+        if row.get::<bool, _>("consumed") {
+            result.scanned_through_cursor =
+                u64::try_from(row.get::<i64, _>("cursor")).map_err(|_| unavailable())?;
+            continue;
+        }
+        let bytes = u64::try_from(row.get::<i32, _>("body_bytes")).map_err(|_| unavailable())?;
+        if messages.len() >= 16 || result.body_bytes + bytes > 65536 {
+            break;
+        }
+        if bytes == 0 || bytes > 16384 || !row.get::<bool, _>("valid") {
+            return Err(unavailable());
+        }
+        let message = mail_ref(&row)?;
+        let aliases:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_mail_members WHERE actor_id=$1 AND (message_id=$2 OR (mailbox_key=$3 AND cursor=$4)) AND (message_id<>$2 OR mailbox_key<>$3 OR cursor<>$4 OR payload_digest<>$5))").bind(a.id).bind(message.message_id).bind(mailbox).bind(positive(message.cursor)?).bind(message.payload_digest.as_str()).fetch_one(&mut **tx).await.map_err(db)?;
+        if aliases {
+            return Err(unavailable());
+        }
+        result.scanned_through_cursor = message.cursor;
+        result.body_bytes += bytes;
+        messages.push(message);
+    }
+    if !messages.is_empty() {
+        let batch = MailBatch {
+            conversation_id: a.conversation,
+            through_cursor: result.through_cursor,
+            messages,
+        };
+        batch.validate().map_err(|_| unavailable())?;
+        result.batch = Some(batch);
+        result.status = PreviewStatus::Ready;
+    }
+    Ok(())
 }
 impl ReservationOwner {
     pub(super) async fn preview(&self, user: &User, request: PreviewRequest) -> Result<Preview> {

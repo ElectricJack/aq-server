@@ -6,10 +6,7 @@ use crate::{
 };
 use aq_playbook_host::model::{ArtifactContent, Expr, Operation};
 use serde::Serialize;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::OnceLock,
-};
+use std::{collections::BTreeMap, sync::OnceLock};
 
 const MAX_INSPECTION_BYTES: usize = 24 * 1024;
 const READ: &str = "work.read";
@@ -98,229 +95,8 @@ fn reviewed_command<'a>(artifact: &ArtifactContent, op: &'a Operation) -> Option
     (known.get(name) == Some(&command.fingerprint) && pinned == command.fingerprint).then_some(name)
 }
 
-struct Source<'a> {
-    id: &'a str,
-    observed: BTreeSet<&'a str>,
-    bypassed: BTreeSet<&'a str>,
-}
-
-fn reachable<'a>(
-    graph: &'a Graph,
-    starts: impl IntoIterator<Item = &'a str>,
-    without_observed: &'a str,
-) -> BTreeSet<&'a str> {
-    let mut seen = BTreeSet::new();
-    let mut pending: Vec<_> = starts.into_iter().collect();
-    while let Some(id) = pending.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        let Some(step) = graph.steps.get(id) else {
-            continue;
-        };
-        pending.extend(step.edges.iter().filter_map(|edge| {
-            (id != without_observed || edge.label != "observed").then_some(edge.to.as_str())
-        }));
-        pending.extend(step.on_error.as_deref());
-    }
-    seen
-}
-
-fn sources<'a>(artifact: &'a ArtifactContent, graph: &'a Graph) -> BTreeMap<&'a str, Source<'a>> {
-    // Iteration control has implicit edges and can restore a binding. Leave it
-    // to the execution model before attributing reads in those graphs.
-    if artifact
-        .playbook
-        .steps
-        .values()
-        .any(|step| matches!(step.op, Operation::ForEach { .. }))
-    {
-        return BTreeMap::new();
-    }
-    let mut bindings = BTreeMap::<&str, usize>::new();
-    for step in artifact.playbook.steps.values() {
-        match &step.op {
-            Operation::Invoke { bind, .. }
-            | Operation::Wait { bind, .. }
-            | Operation::Call { bind, .. }
-            | Operation::Join { bind, .. } => *bindings.entry(bind).or_default() += 1,
-            _ => {}
-        }
-    }
-    artifact
-        .playbook
-        .steps
-        .iter()
-        .filter_map(|(id, step)| {
-            let Operation::Invoke { bind, .. } = &step.op else {
-                return None;
-            };
-            if bindings[bind.as_str()] != 1 || reviewed_command(artifact, &step.op) != Some(READ) {
-                return None;
-            }
-            let node = &graph.steps[id];
-            let observed = node.edges.iter().find(|edge| edge.label == "observed")?;
-            // A Refused result can replace a previous output on a repeated
-            // visit. Count alternate successors as bypasses too.
-            let entry_or_alternate = graph.entries.values().map(String::as_str).chain(
-                node.edges
-                    .iter()
-                    .filter(|edge| edge.label != "observed")
-                    .map(|edge| edge.to.as_str())
-                    .chain(node.on_error.as_deref()),
-            );
-            Some((
-                bind.as_str(),
-                Source {
-                    id,
-                    observed: reachable(graph, [observed.to.as_str()], id),
-                    bypassed: reachable(graph, entry_or_alternate, id),
-                },
-            ))
-        })
-        .collect()
-}
-
-struct Field<'a> {
-    producer: &'a str,
-    name: &'static str,
-    path: String,
-}
-
-fn public_field<'a>(
-    sources: &BTreeMap<&str, Source<'a>>,
-    consumer: &str,
-    expr: &Expr,
-) -> Option<Field<'a>> {
-    let Expr::Ref { root, path } = expr else {
-        return None;
-    };
-    let [facts, name] = path.as_slice() else {
-        return None;
-    };
-    if facts != "facts" {
-        return None;
-    }
-    // These are static names from the pinned work.read contract. Runtime
-    // task facts and other properties are never read or included here.
-    let name = ["route", "title", "description", "kind"]
-        .into_iter()
-        .find(|public| name == public)?;
-    let source = sources.get(root.as_str())?;
-    (consumer != source.id
-        && source.observed.contains(consumer)
-        && !source.bypassed.contains(consumer))
-    .then(|| Field {
-        producer: source.id,
-        name,
-        path: format!("{root}.facts.{name}"),
-    })
-}
-
-fn decision_field<'a>(
-    sources: &BTreeMap<&str, Source<'a>>,
-    id: &str,
-    predicate: &Expr,
-    skips_on_match: bool,
-) -> Option<(Field<'a>, String, &'static str, &'static str)> {
-    let Expr::Eq { left, right } = predicate else {
-        return None;
-    };
-    let (field, value) = match (&**left, &**right) {
-        (Expr::Literal { value }, reference) | (reference, Expr::Literal { value }) => {
-            (public_field(sources, id, reference)?, value)
-        }
-        _ => return None,
-    };
-    let path = &field.path;
-    let (summary, yes, no) = match (field.name, value.as_str()) {
-        ("route", Some("owner")) => {
-            let mut description = format!(
-                "Checks whether an owner has already chosen the route for this task. It compares {path}, which came from the task lookup, with owner."
-            );
-            if skips_on_match {
-                description.push_str(" This keeps a manually chosen route in place.");
-            }
-            (
-                description,
-                "An owner already chose a route for this task.",
-                "The route is unset or was chosen by the automatic router.",
-            )
-        }
-        ("route", Some("router")) => (
-            format!(
-                "Checks whether the automatic router chose the current route by comparing {path} with router."
-            ),
-            "The automatic router chose the current route.",
-            "The route is unset or was chosen by an owner.",
-        ),
-        ("route", Some("none")) => (
-            format!("Checks whether the task has no route by comparing {path} with none."),
-            "The task has no route.",
-            "An owner or the automatic router already chose a route.",
-        ),
-        _ => (
-            format!("Checks whether {path} matches the configured value."),
-            "The values match.",
-            "The values differ.",
-        ),
-    };
-    Some((field, summary, yes, no))
-}
-
-fn field<'a>(expr: &'a Expr, key: &str) -> Option<&'a Expr> {
-    let Expr::Object { fields } = expr else {
-        return None;
-    };
-    fields.get(key)
-}
-
-fn assessment_fields<'a>(
-    sources: &BTreeMap<&str, Source<'a>>,
-    id: &str,
-    input: &Expr,
-) -> Vec<Field<'a>> {
-    let Some(Expr::Array { items }) =
-        field(input, "context").and_then(|context| field(context, "items"))
-    else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|item| public_field(sources, id, field(item, "text")?))
-        .collect()
-}
-
-fn assessment_summary(input: &Expr, uses: &[Field<'_>]) -> String {
-    let task_details = uses.first().is_some_and(|first| {
-        uses.iter().all(|field| field.producer == first.producer)
-            && uses.iter().map(|field| field.name).collect::<BTreeSet<_>>()
-                == BTreeSet::from(["title", "description", "kind"])
-    });
-    let question = match field(input, "fields") {
-        Some(Expr::Literal { value }) => {
-            let labels: BTreeSet<_> = value
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item["id"].as_str())
-                .collect();
-            if labels.contains("kind") && labels.contains("risk") {
-                "Asks an agent to classify the kind of work and assess its risk."
-            } else {
-                "Asks an agent to make the assessment configured for this step."
-            }
-        }
-        _ => "Asks an agent to evaluate the supplied context.",
-    };
-    if task_details {
-        format!(
-            "{question} The agent uses the task's title, description, and declared kind from the earlier task lookup."
-        )
-    } else {
-        question.into()
-    }
-}
+mod fields;
+use fields::{Field, assessment_fields, assessment_summary, decision_field, sources};
 
 fn record_uses<'a>(
     inspection: &mut BTreeMap<String, StepInspection>,
@@ -355,6 +131,38 @@ fn record_uses<'a>(
     }
 }
 
+impl FieldUse {
+    fn supplies_assessment(&self, id: &str) -> bool {
+        self.producer == id
+            && self.purpose == "Assessment context"
+            && ["title", "description", "kind"].into_iter().all(|field| {
+                self.paths.iter().any(|path| {
+                    path.rsplit_once(".facts.")
+                        .is_some_and(|(_, name)| name == field)
+                })
+            })
+    }
+}
+impl StepInspection {
+    fn explain_assessment(&mut self, id: &str) {
+        if self.uses.iter().any(|usage| usage.supplies_assessment(id))
+            && let Some(summary) = &mut self.summary
+        {
+            summary.push_str("\n\nIf the workflow requests an assessment, the agent uses those details to understand the work.");
+        }
+    }
+}
+
+fn skips_when_true(artifact: &ArtifactContent, step: &aq_playbook_host::model::Step) -> bool {
+    let target = step
+        .edges
+        .get("true")
+        .and_then(|next| artifact.playbook.steps.get(next));
+    target.is_some_and(
+        |step| matches!(&step.op, Operation::Return { outcome, .. } if outcome == "skipped"),
+    )
+}
+
 pub(super) fn project(
     artifact: &ArtifactContent,
     graph: &Graph,
@@ -383,9 +191,7 @@ pub(super) fn project(
                 ], Some(COMMAND_ERROR)))
             }
             (_, Operation::Decide { predicate }) => {
-                let skips_on_match = step.edges.get("true")
-                    .and_then(|target| artifact.playbook.steps.get(target))
-                    .is_some_and(|target| matches!(&target.op, Operation::Return { outcome, .. } if outcome == "skipped"));
+                let skips_on_match = skips_when_true(artifact, step);
                 let Some((field, summary, yes, no)) = decision_field(&sources, id, predicate, skips_on_match) else { continue };
                 let purpose = if field.name == "route" { "Route check" } else { "Decision input" };
                 record_uses(&mut inspection, id, [field], purpose);
@@ -400,19 +206,7 @@ pub(super) fn project(
         detail.branches = described;
     }
     for (id, detail) in &mut inspection {
-        let used_by_assessment = detail.uses.iter().any(|usage| {
-            usage.producer == *id
-                && usage.purpose == "Assessment context"
-                && ["title", "description", "kind"].into_iter().all(|field| {
-                    usage.paths.iter().any(|path| {
-                        path.rsplit_once(".facts.")
-                            .is_some_and(|(_, name)| name == field)
-                    })
-                })
-        });
-        if used_by_assessment && let Some(summary) = &mut detail.summary {
-            summary.push_str("\n\nIf the workflow requests an assessment, the agent uses those details to understand the work.");
-        }
+        detail.explain_assessment(id);
     }
     if serde_json::to_vec(&inspection).is_ok_and(|encoded| encoded.len() <= MAX_INSPECTION_BYTES) {
         inspection

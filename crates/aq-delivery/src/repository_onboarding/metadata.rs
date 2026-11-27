@@ -76,10 +76,8 @@ impl Client {
             }
             Self::App { client, token } => client
                 .send(
-                    reqwest::Method::GET,
-                    path,
+                    crate::github::ApiRequest::new(reqwest::Method::GET, path),
                     crate::github::Auth::Installation(token),
-                    None,
                 )
                 .await
                 .map_err(|e| e.code().into()),

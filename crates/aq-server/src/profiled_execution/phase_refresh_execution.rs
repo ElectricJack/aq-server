@@ -21,6 +21,7 @@ mod pinned;
 pub(super) mod policy;
 use super::accepted_refresh as accepted_owner;
 use aq_admission::preparation_refresh_v1 as phase;
+use aq_profiled_state::phase_execution::refresh as stored;
 pub use policy::ExecutionQualification;
 const EXECUTION_PREFIX: &str = "aq.phase-refresh-execution-qualification/";
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -231,17 +232,4 @@ async fn replay_preflight(
     let pinned = Box::pin(pinned::load_replay_locked(state, tx, auth, q, original)).await?;
     validate_replay_floor(registry, &pinned.registry_at_load)?;
     Ok(Some(pinned))
-}
-
-async fn observe_ready(
-    state: &AppState,
-    graph: &crate::agent_access::Runtime,
-    workspace: uuid::Uuid,
-) -> Result<
-    crate::agent_access::scheduling::ReadyPage,
-    crate::agent_access::scheduling::SchedulingReadError,
-> {
-    graph
-        .scheduling_ready_current(workspace, 8, None, state.clock.as_ref())
-        .await
 }

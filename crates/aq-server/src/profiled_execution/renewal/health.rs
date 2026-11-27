@@ -1,7 +1,7 @@
 //! Continuing health is not candidate selection. Unknown never means available,
 //! and this helper cannot create a grant or choose another account/model.
 use crate::error::AppError;
-use aq_selection::{ArtifactRef, Availability, AvailabilityObservation, Digest};
+use aq_selection::{ArtifactRef, Availability, AvailabilityObservation, Digest, ObservationScope};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -44,50 +44,15 @@ pub fn evaluate(
     let mut latest: BTreeMap<Digest, &AvailabilityObservation> = BTreeMap::new();
     for observation in observations {
         observation.validate().map_err(|_| invalid())?;
-        let scope = &observation.scope;
-        if scope.credential_profile != *subject.profile
-            || scope.credential_revision != subject.revision
-            || scope.provider != subject.provider
-            || scope.account_reference != subject.account
-            || scope.endpoint_reference != subject.endpoint
-            || scope.model.as_ref().is_some_and(|m| m != subject.model)
-            || scope.node_id.is_some_and(|id| id != subject.node)
-        {
+        if !subject.matches(&observation.scope) {
             continue;
         }
         if observation.received_at_ms > now {
             return Err(invalid());
         }
-        let key = aq_selection::digest(&(&observation.scope, &observation.source))
-            .map_err(|_| invalid())?;
-        if let Some(old) = latest.get(&key) {
-            if observation.sequence < old.sequence {
-                continue;
-            }
-            if observation.sequence == old.sequence {
-                if aq_selection::digest(observation).map_err(|_| invalid())?
-                    != aq_selection::digest(old).map_err(|_| invalid())?
-                {
-                    return Err(invalid());
-                }
-                continue;
-            }
-        }
-        latest.insert(key, observation);
+        retain_latest(&mut latest, observation)?;
     }
-    let mut state = State::Unknown;
-    for observation in latest.values() {
-        let live = now < observation.expires_at_ms;
-        let fresh = live && now - observation.received_at_ms <= maximum_age_ms;
-        let cooling = live && now < observation.cooldown_until_ms;
-        if cooling || (fresh && observation.state != Availability::Available) {
-            state = State::Denied;
-            break;
-        }
-        if fresh {
-            state = State::ObservedAvailable;
-        }
-    }
+    let state = classify(latest.values().copied(), maximum_age_ms, now);
     let matching_sources = latest.len() as u32;
     let observations_digest =
         aq_selection::digest(&latest.values().collect::<Vec<_>>()).map_err(|_| invalid())?;
@@ -97,6 +62,57 @@ pub fn evaluate(
         matching_sources,
         evaluated_at_ms: now,
     })
+}
+/// Any fresh negative or active cooldown denies; otherwise a fresh positive is
+/// available, and no fresh evidence stays unknown.
+fn classify<'a>(
+    latest: impl Iterator<Item = &'a AvailabilityObservation>,
+    maximum_age_ms: u64,
+    now: u64,
+) -> State {
+    let mut state = State::Unknown;
+    for observation in latest {
+        let live = now < observation.expires_at_ms;
+        let fresh = live && now - observation.received_at_ms <= maximum_age_ms;
+        let cooling = live && now < observation.cooldown_until_ms;
+        if cooling || (fresh && observation.state != Availability::Available) {
+            return State::Denied;
+        }
+        if fresh {
+            state = State::ObservedAvailable;
+        }
+    }
+    state
+}
+impl Subject<'_> {
+    fn matches(&self, scope: &ObservationScope) -> bool {
+        scope.credential_profile == *self.profile
+            && scope.credential_revision == self.revision
+            && scope.provider == self.provider
+            && scope.account_reference == self.account
+            && scope.endpoint_reference == self.endpoint
+            && scope.model.as_ref().is_none_or(|model| model == self.model)
+            && scope.node_id.is_none_or(|node| node == self.node)
+    }
+}
+fn retain_latest<'a>(
+    latest: &mut BTreeMap<Digest, &'a AvailabilityObservation>,
+    observation: &'a AvailabilityObservation,
+) -> Result<(), AppError> {
+    let key =
+        aq_selection::digest(&(&observation.scope, &observation.source)).map_err(|_| invalid())?;
+    if let Some(old) = latest.get(&key)
+        && observation.sequence <= old.sequence
+    {
+        // An older sequence never wins; a repeated one must be the same report.
+        let digest = |value| aq_selection::digest(value).map_err(|_| invalid());
+        if observation.sequence == old.sequence && digest(observation)? != digest(*old)? {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+    latest.insert(key, observation);
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -129,23 +145,20 @@ mod tests {
             cooldown_until_ms: 100,
         }
     }
+    fn subject(scope: &ObservationScope) -> Subject<'_> {
+        Subject {
+            profile: &scope.credential_profile,
+            revision: 1,
+            provider: "provider",
+            account: "account",
+            endpoint: "endpoint",
+            model: "model",
+            node: Uuid::from_u128(1),
+        }
+    }
     fn run(obs: &[AvailabilityObservation], now: u64) -> Evidence {
         let scope = observation().scope;
-        evaluate(
-            Subject {
-                profile: &scope.credential_profile,
-                revision: 1,
-                provider: "provider",
-                account: "account",
-                endpoint: "endpoint",
-                model: "model",
-                node: Uuid::from_u128(1),
-            },
-            obs,
-            100,
-            now,
-        )
-        .unwrap()
+        evaluate(subject(&scope), obs, 100, now).unwrap()
     }
     #[test]
     fn unknown_never_becomes_available_or_missing_credentials() {
@@ -179,6 +192,24 @@ mod tests {
         assert_eq!(run(&[negative], 901).state, State::Unknown);
     }
     #[test]
+    fn latest_evidence_digest_is_independent_of_input_order_and_duplicates() {
+        let old = observation();
+        let mut newer = old.clone();
+        newer.sequence += 1;
+        newer.revision += 1;
+        newer.received_at_ms = 90;
+        let mut independent = observation();
+        independent.scope.model = None;
+        independent.scope.node_id = None;
+        independent.state = Availability::QuotaUnavailable;
+        let expected = run(&[newer.clone(), independent.clone()], 150);
+        let reordered = run(&[independent, newer.clone(), old, newer], 150);
+        assert_eq!(reordered.matching_sources, 2);
+        assert_eq!(reordered.state, State::Denied);
+        assert_eq!(reordered.observations_digest, expected.observations_digest);
+        assert_eq!(reordered.evaluated_at_ms, expected.evaluated_at_ms);
+    }
+    #[test]
     fn source_sequence_wins_clock_correction_and_conflicting_same_sequence_refuses() {
         let old = observation();
         let mut newer = old.clone();
@@ -191,22 +222,6 @@ mod tests {
         let mut conflict = old.clone();
         conflict.state = Availability::ModelUnsupported;
         let scope = old.scope.clone();
-        assert!(
-            evaluate(
-                Subject {
-                    profile: &scope.credential_profile,
-                    revision: 1,
-                    provider: "provider",
-                    account: "account",
-                    endpoint: "endpoint",
-                    model: "model",
-                    node: Uuid::from_u128(1)
-                },
-                &[old, conflict],
-                100,
-                150
-            )
-            .is_err()
-        );
+        assert!(evaluate(subject(&scope), &[old, conflict], 100, 150).is_err());
     }
 }

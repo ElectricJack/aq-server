@@ -20,6 +20,10 @@ const URL_BYTES: usize = 2048;
 const CHECK_NAME_BYTES: usize = 256;
 const CHECK_NAMES: usize = 64;
 const RETURNS_MAX: u32 = 1000;
+/// Catalog 2.6.0's bounds: the graph's on acceptance criteria and the result
+/// report's on its conclusion.
+const ACCEPTANCE_CRITERIA_BYTES: usize = 8192;
+const CONCLUSION_BYTES: usize = 512;
 const PULL_REQUEST_MAX: u64 = 1_000_000_000;
 
 /// The branch of a task's result in the central git (`aq/<task-id>`).
@@ -126,6 +130,16 @@ pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultF
     output
 }
 
+/// The `observed` output of `work.read` under catalog 2.6.0: the 2.3.0
+/// `output` with the acceptance criteria of the graph node `node` and the
+/// `conclusion` of the latest result (`""` when there is none).
+pub fn with_judgment_facts(mut output: Value, node: &Value, conclusion: &str) -> Value {
+    let criteria = node["acceptance_criteria"].as_str().unwrap_or("");
+    output["facts"]["acceptance_criteria"] = truncate(criteria, ACCEPTANCE_CRITERIA_BYTES).into();
+    output["facts"]["conclusion"] = truncate(conclusion, CONCLUSION_BYTES).into();
+    output
+}
+
 /// What a playbook can read that moves without the result changing: the
 /// commit main points at and the pull request's state. A different value
 /// than the one the last `aq.work.result_ready` was sent under is a reason to
@@ -149,7 +163,7 @@ pub struct ResultEmission {
     pub emitted_at_ms: i64,
     /// [`facts_digest`] when it was last sent.
     pub emitted_facts: Option<String>,
-    /// A run that read this task since the last send has not finished.
+    /// The previous event is queued or its delivery run has not finished.
     pub run_unfinished: bool,
 }
 
@@ -191,6 +205,85 @@ impl ResultReady {
         input["task"] == self.task_id.to_string()
             && input["result_id"] == self.result_id.to_string()
     }
+}
+
+/// A project's environments as a routing document chooses among them (spec
+/// 0017 §5.4): the binding's default (`""` for none) and each allowed
+/// environment with what it provides.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Environments {
+    pub default: String,
+    pub allowed: Vec<(String, Vec<String>)>,
+}
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+impl Environments {
+    /// Why a route may not choose `environment` (it is refused
+    /// `not_offered`), if it may not: `{environment, allowed: false}` when the
+    /// project does not allow it, else `{environment, allowed: true, missing}`
+    /// with the needs it lacks. [`host9::routing_failure`] words it.
+    pub fn refusal(&self, environment: &str, needs: &[String]) -> Option<Value> {
+        let Some((_, provides)) = self.allowed.iter().find(|(id, _)| id == environment) else {
+            return Some(json!({"environment": environment, "allowed": false}));
+        };
+        let missing: Vec<&String> = needs.iter().filter(|n| !provides.contains(n)).collect();
+        (!missing.is_empty())
+            .then(|| json!({"environment": environment, "allowed": true, "missing": missing}))
+    }
+    /// What a `not_offered` task is asked about again on: the Settings
+    /// offers and these environments.
+    pub fn offers_digest(&self, options: &aq_routing::classify::Options) -> String {
+        let offers = (host9::options_digest(options), &self.default, &self.allowed);
+        aq_playbook_host::model::digest(&offers).unwrap_or_default()
+    }
+    /// Catalog 2.5.0 `work.read`: the 2.3.0 `output` with the task's needs
+    /// and these environments.
+    pub fn read_output(&self, mut output: Value, metadata: &Value) -> Value {
+        let environments: Vec<Value> = (self.allowed.iter())
+            .map(|(id, provides)| json!({"id": id, "provides": provides}))
+            .collect();
+        // The contract's bounds: at most 64 labels of at most 128 bytes.
+        let needs = needs(metadata).into_iter().filter(|n| n.len() <= 128);
+        output["facts"]["needs"] = json!(needs.take(64).collect::<Vec<_>>());
+        output["facts"]["default_environment"] = json!(self.default);
+        output["facts"]["environments"] = json!(environments);
+        output
+    }
+}
+
+/// What a task needs: its `aq:needs` labels, sorted and distinct (as
+/// `aq_project_policy::environments::needs` reads them for placement).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn needs(metadata: &Value) -> Vec<String> {
+    let needs = metadata["aq:needs"].as_array().into_iter().flatten();
+    let needs: std::collections::BTreeSet<&str> = needs.filter_map(Value::as_str).collect();
+    needs.into_iter().map(str::to_owned).collect()
+}
+
+/// Catalog 2.5.0 (spec 0017 §6.4): `aq.environment.base_changed {project}`.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn base_changed_event(
+    event_id: Uuid,
+    project: Uuid,
+    now_ms: i64,
+    contract: &aq_playbook_host::model::EventContract,
+) -> Result<aq_playbook_host::model::EventEnvelope, aq_playbook_host::model::ModelError> {
+    Ok(aq_playbook_host::model::EventEnvelope {
+        producer: "aq.host.bridge@1".into(),
+        event_id: event_id.to_string(),
+        contract: aq_playbook_host::model::ContractRef {
+            name: contract.name.clone(),
+            fingerprint: contract.fingerprint()?,
+        },
+        scope: "project".into(),
+        correlation: Default::default(),
+        subject: None,
+        revision: None,
+        causation: None,
+        occurred_at_ms: Some(now_ms),
+        observed_at_ms: Some(now_ms),
+        payload: json!({"project": project.to_string()}),
+    })
 }
 
 /// The trusted `aq.work.result_ready` event.
@@ -365,5 +458,38 @@ mod tests {
         assert_eq!(some["facts"]["branch"], format!("aq/{task}"));
         // The 2.2.0 facts are unchanged.
         assert_eq!(some["facts"]["title"], "t");
+    }
+
+    #[test]
+    fn work_read_2_6_0_adds_the_acceptance_criteria_and_the_conclusion_within_bounds() {
+        let registry: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.6.0/registry.json"
+        ))
+        .unwrap();
+        let observed = &registry.commands["work.read"].outcomes["observed"];
+        let task = Uuid::from_u128(1);
+        let node =
+            json!({"title": "t", "body": "b", "acceptance_criteria": "It runs.", "metadata": {}});
+        let work = WorkFacts::of(&node, false, 0, 0);
+        let base = read_output(task, 3, &work, &ResultFacts::default());
+        // Without the two facts the 2.3.0 answer does not fit 2.6.0.
+        assert!(observed.validate(&base).is_err());
+        let read = with_judgment_facts(base.clone(), &node, "Outcome: done; Changes: none");
+        observed.validate(&read).unwrap();
+        assert_eq!(read["facts"]["acceptance_criteria"], "It runs.");
+        assert_eq!(read["facts"]["conclusion"], "Outcome: done; Changes: none");
+        // A node without criteria and no result: both empty.
+        let empty = with_judgment_facts(base.clone(), &json!({}), "");
+        observed.validate(&empty).unwrap();
+        assert_eq!(empty["facts"]["acceptance_criteria"], "");
+        // Longer values are cut to the catalog's byte bounds at a character boundary.
+        let long = json!({"acceptance_criteria": "é".repeat(5000)});
+        let cut = with_judgment_facts(base, &long, &"é".repeat(300));
+        observed.validate(&cut).unwrap();
+        assert_eq!(
+            cut["facts"]["acceptance_criteria"].as_str().unwrap().len(),
+            8192
+        );
+        assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 512);
     }
 }

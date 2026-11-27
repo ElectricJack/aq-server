@@ -1,4 +1,6 @@
-use super::{Git, GithubRepository, OnboardingConfig, Row, aq_git, load, response, slug};
+use super::{
+    Git, GithubRepository, OnboardingConfig, RequestOwner, Row, aq_git, load, response, slug,
+};
 use crate::source_checks::{observed_ref, repository_identity};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -37,6 +39,9 @@ pub enum AdoptionError {
     Database(#[from] sqlx::Error),
 }
 use AdoptionError::{Conflict, Invalid, MissingProject, Unavailable};
+mod recording;
+use recording::{Attempt, VerifiedAdoption};
+
 type Result<T> = std::result::Result<T, AdoptionError>;
 
 pub struct Adoption<'a> {
@@ -61,12 +66,36 @@ impl Binding {
         if !self.enabled {
             return Err(Conflict("project binding is disabled"));
         }
-        if self.project_id != request.project_id
-            || self.repository_id != request.repository_id
-            || self.repository_adapter_reference != "aq.git.configured"
-            || self.repository_binding_generation != request.expected_binding_generation
-        {
+        let expected = (
+            request.project_id,
+            request.repository_id,
+            request.expected_binding_generation,
+            "aq.git.configured",
+        );
+        let configured = (
+            self.project_id,
+            self.repository_id,
+            self.repository_binding_generation,
+            self.repository_adapter_reference.as_str(),
+        );
+        if configured != expected {
             return Err(Conflict("project repository binding or generation differs"));
+        }
+        Ok(())
+    }
+
+    fn check_permissions(&self, show: &Value, target: &str) -> Result<()> {
+        let permits = |field: &str, name: &str| {
+            show[field]
+                .as_array()
+                .is_some_and(|refs| refs.iter().any(|r| r == name))
+        };
+        let can_publish = permits("allowed_targets", target)
+            || (self.publication.is_none() && permits("allowed_target_prefixes", "refs/heads/aq/"));
+        if !permits("allowed_refs", target) || !can_publish {
+            return Err(Conflict(
+                "aq-git must permit the default source ref and the project's publication path",
+            ));
         }
         Ok(())
     }
@@ -97,13 +126,14 @@ async fn binding(conn: &mut PgConnection, project: Uuid) -> Result<Option<(i64, 
 
 impl AdoptRequest {
     fn validate(&self) -> Result<()> {
-        if self.operation_id.is_nil()
-            || self.project_id.is_nil()
-            || self.repository_id.is_nil()
-            || self.expected_binding_generation == 0
-            || self.expected_binding_generation > i64::MAX as u64
-            || !slug(&self.github.owner)
-            || !slug(&self.github.name)
+        let valid_ids = [self.operation_id, self.project_id, self.repository_id]
+            .iter()
+            .all(|id| !id.is_nil());
+        let valid_generation = (1..=i64::MAX as u64).contains(&self.expected_binding_generation);
+        let valid_repository = slug(&self.github.owner) && slug(&self.github.name);
+        if ![valid_ids, valid_generation, valid_repository]
+            .into_iter()
+            .all(|valid| valid)
         {
             return Err(Invalid("invalid adoption identity"));
         }
@@ -132,13 +162,12 @@ impl AdoptRequest {
     async fn existing(
         &self,
         conn: &mut PgConnection,
-        actor: Uuid,
-        digest: &str,
+        owner: RequestOwner<'_>,
     ) -> Result<Option<Row>> {
         let row = load(conn, self.operation_id).await?;
         if row.as_ref().is_some_and(|r| {
-            r.actor != actor
-                || r.digest != digest
+            r.actor != owner.actor
+                || r.digest != owner.digest
                 || r.step != "bound"
                 || r.state["adopted"] != true
         }) {
@@ -179,27 +208,30 @@ impl AdoptRequest {
 impl Adoption<'_> {
     pub async fn record(
         &self,
-        actor: Uuid,
-        digest: String,
+        owner: RequestOwner<'_>,
         request: AdoptRequest,
         now_ms: impl FnOnce() -> i64 + Send,
     ) -> Result<Value> {
         request.validate()?;
-        let (revision, project) = {
-            let mut tx = self.pool.begin().await?;
-            let current = binding(&mut tx, request.project_id).await?;
-            let old = request.existing(&mut tx, actor, &digest).await?;
-            let current = current.ok_or(MissingProject)?;
-            current.1.check(&request)?;
-            if let Some(old) = old {
-                return replay(&current.1, &old);
-            }
-            request.check_history(&mut tx).await?;
-            tx.commit().await?;
-            current
+        let attempt = Attempt {
+            request: &request,
+            owner,
         };
+        let (revision, project) = match attempt.inspect(self.pool).await? {
+            std::ops::ControlFlow::Continue(binding) => binding,
+            std::ops::ControlFlow::Break(replay) => return Ok(replay),
+        };
+        let proof = self.observe(&request, &project, revision).await?;
+        attempt.commit(self.pool, proof, now_ms).await
+    }
 
-        let show = self.git_read(&request, "repo.show", json!({})).await?;
+    async fn observe(
+        &self,
+        request: &AdoptRequest,
+        project: &Binding,
+        revision: i64,
+    ) -> Result<VerifiedAdoption> {
+        let show = self.git_read(request, "repo.show", json!({})).await?;
         let identity = repository_identity(
             &show,
             request.repository_id,
@@ -211,25 +243,13 @@ impl Adoption<'_> {
         if show["remote_url"] != request.remote_url.as_str() {
             return Err(Conflict("aq-git origin differs from remote_url"));
         }
-        let branch = self.default_branch(&request).await?;
+        let branch = self.default_branch(request).await?;
         let target =
             super::branch_ref(&branch).ok_or(Conflict("GitHub reported an invalid default ref"))?;
         project.check_target(&target)?;
-        let permits = |field: &str, name: &str| {
-            show[field]
-                .as_array()
-                .is_some_and(|refs| refs.iter().any(|r| r == name))
-        };
-        let can_publish = permits("allowed_targets", &target)
-            || (project.publication.is_none()
-                && permits("allowed_target_prefixes", "refs/heads/aq/"));
-        if !permits("allowed_refs", &target) || !can_publish {
-            return Err(Conflict(
-                "aq-git must permit the default source ref and the project's publication path",
-            ));
-        }
+        project.check_permissions(&show, &target)?;
         let observation = self
-            .git_read(&request, "repo.observation", json!({"refs":[target]}))
+            .git_read(request, "repo.observation", json!({"refs":[target]}))
             .await?;
         if observed_ref(&observation, &target, request.expected_binding_generation).is_none()
             || observation["availability"] != "available"
@@ -239,52 +259,16 @@ impl Adoption<'_> {
             ));
         }
 
-        let mut tx = self.pool.begin().await?;
-        let (current_revision, current) = binding(&mut tx, request.project_id)
-            .await?
-            .ok_or(MissingProject)?;
-        current.check(&request)?;
-        if let Some(old) = request.existing(&mut tx, actor, &digest).await? {
-            return replay(&current, &old);
-        }
-        if current_revision != revision {
-            return Err(Conflict("project binding changed during adoption"));
-        }
-        request.check_history(&mut tx).await?;
         let value = json!({
             "request": request, "adopted": true, "remote_url": request.remote_url,
             "default_branch": branch, "default_ref": target, "repository_identity": identity,
             "repository_observation_id": observation["observation_id"],
             "binding_generation": request.expected_binding_generation,
         });
-        let inserted = sqlx::query(
-            "INSERT INTO repository_onboardings
-             (operation_id,actor_id,request_digest,project_id,repository_id,step,state,created_at_ms,updated_at_ms)
-             VALUES ($1,$2,$3,$4,$5,'bound',$6,$7,$7) ON CONFLICT(operation_id) DO NOTHING",
-        )
-        .bind(request.operation_id)
-        .bind(actor)
-        .bind(&digest)
-        .bind(request.project_id)
-        .bind(request.repository_id)
-        .bind(&value)
-        .bind(now_ms())
-        .execute(&mut *tx)
-        .await?;
-        if inserted.rows_affected() == 0 {
-            let old = request
-                .existing(&mut tx, actor, &digest)
-                .await?
-                .ok_or(Conflict("operation_id was already used"))?;
-            return replay(&current, &old);
-        }
-        tx.commit().await?;
-        Ok(response(&Row {
-            actor,
-            digest,
-            step: "bound".into(),
+        Ok(VerifiedAdoption {
+            binding_revision: revision,
             state: value,
-        }))
+        })
     }
 
     async fn git_read(
@@ -295,10 +279,12 @@ impl Adoption<'_> {
     ) -> Result<Value> {
         match aq_git(
             self.socket,
-            Uuid::new_v4(),
+            crate::OperationContext {
+                operation_id: Uuid::new_v4(),
+                repository_id: request.repository_id,
+                binding_generation: request.expected_binding_generation,
+            },
             operation,
-            request.repository_id,
-            request.expected_binding_generation,
             params,
         )
         .await

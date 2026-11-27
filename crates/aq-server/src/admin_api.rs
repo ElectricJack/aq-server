@@ -217,13 +217,19 @@ async fn revoke_worker(
         .await
         .map_err(|_| AppError::Internal)?;
     let node = format!("node:{id}");
-    let n = match aq_machine_control::revoke_machine(&mut tx, &node, (state.clock)()).await {
+    let now = (state.clock)();
+    let n = match aq_machine_control::revoke_machine(&mut tx, &node, now).await {
         Err(e @ aq_machine_control::Error::MachineNode(_)) => {
             Err(AppError::Conflict(e.to_string()))
         }
         r => r.map_err(|_| AppError::Internal),
-    }?;
+    }?
+    .len();
     tx.commit().await.map_err(|_| AppError::Internal)?;
+    // Also on a repeat, so a retry after a drain that did not finish drains again.
+    aq_machine_control::drain_revoked(&state.store.pool, &[id], now)
+        .await
+        .map_err(crate::machine_api::mapped)?;
     if n == 1 {
         return Ok(StatusCode::NO_CONTENT);
     }

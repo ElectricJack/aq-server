@@ -43,14 +43,44 @@ pub struct MachineReport {
     pub disk_total_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk_free_bytes: Option<u64>,
+    /// Present while the machine cannot admit a sandbox and rechecks automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_admission: Option<AdmissionDeferral>,
 }
 
-impl MachineReport {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.schema_version != 1 {
-            return Err("schema_version");
+/// Why a machine defers sandbox admission (`sandbox_disk_headroom_unavailable`, ...), since
+/// when on the worker's clock, and for a disk shortfall the bytes available and required.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionDeferral {
+    #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-z0-9_]+$"))]
+    pub code: String,
+    pub since_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_bytes: Option<u64>,
+}
+impl AdmissionDeferral {
+    fn validate(&self, observed_at_ms: u64) -> Result<(), &'static str> {
+        let code = (1..=64).contains(&self.code.len())
+            && (self.code.bytes())
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        let bytes = self.available_bytes.is_some() == self.required_bytes.is_some();
+        match code && bytes && self.since_ms <= observed_at_ms {
+            true => Ok(()),
+            false => Err("sandbox_admission"),
         }
-        if let Some(key) = &self.machine.key {
+    }
+    /// How long the machine has deferred, on its own clock, at `observed_at_ms`.
+    pub fn deferred_ms(&self, observed_at_ms: u64) -> u64 {
+        observed_at_ms.saturating_sub(self.since_ms)
+    }
+}
+
+impl MachineIdentity {
+    fn validate(&self) -> Result<(), &'static str> {
+        if let Some(key) = &self.key {
             let ok = (1..=63).contains(&key.len())
                 && key
                     .bytes()
@@ -60,11 +90,21 @@ impl MachineReport {
                 return Err("key");
             }
         }
-        if let Some(label) = &self.machine.label
-            && (!(1..=64).contains(&label.chars().count()) || label.chars().any(char::is_control))
-        {
+        if self.label.as_ref().is_some_and(|label| !valid_label(label)) {
             return Err("label");
         }
+        Ok(())
+    }
+}
+fn valid_label(label: &str) -> bool {
+    (1..=64).contains(&label.chars().count()) && !label.chars().any(char::is_control)
+}
+impl MachineReport {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1 {
+            return Err("schema_version");
+        }
+        self.machine.validate()?;
         if !(1..=4096).contains(&self.logical_cpus) {
             return Err("logical_cpus");
         }
@@ -79,7 +119,7 @@ impl MachineReport {
             (Some(total), Some(free)) if free <= total => {}
             _ => return Err("disk"),
         }
-        Ok(())
+        (self.sandbox_admission.as_ref()).map_or(Ok(()), |d| d.validate(self.observed_at_ms))
     }
 
     pub fn memory_used_bps(&self) -> u16 {
@@ -172,4 +212,33 @@ pub async fn latest(
             ))
         })
         .collect())
+}
+
+/// Each node's sandbox admission deferral, from the fresh report of any node of its machine
+/// (one node reports for the machine's slots, which share its disk and daemon).
+pub async fn deferrals(
+    conn: &mut sqlx::PgConnection,
+    nodes: &[Uuid],
+    now_ms: u64,
+) -> sqlx::Result<BTreeMap<Uuid, (AdmissionDeferral, u64)>> {
+    let rows: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT n.id, r.report FROM nodes n \
+         JOIN nodes m ON m.id=n.id OR (m.machine_key IS NOT NULL AND m.machine_key=n.machine_key) \
+         JOIN node_machine_reports r ON r.node_id=m.id \
+         WHERE n.id = ANY($1) AND r.received_at_ms >= $2 AND r.report ? 'sandbox_admission'",
+    )
+    .bind(nodes)
+    .bind(now_ms.saturating_sub(FRESH_MS) as i64)
+    .fetch_all(conn)
+    .await?;
+    let mut out = BTreeMap::new();
+    for (node, report) in rows {
+        let Ok(report) = serde_json::from_value::<MachineReport>(report) else {
+            continue;
+        };
+        if let Some(deferral) = report.sandbox_admission {
+            out.insert(node, (deferral, report.observed_at_ms));
+        }
+    }
+    Ok(out)
 }

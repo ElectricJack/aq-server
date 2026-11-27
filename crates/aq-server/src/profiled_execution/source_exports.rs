@@ -1,65 +1,9 @@
 //! Pre-offer source export ownership. A token is minted only after durable quota
 //! reservation; the I/O owner cannot turn an arbitrary request into a token.
-use aq_admission::{ArtifactRef, Digest};
-use aq_session_protocol::Validate;
-use aq_worker_protocol::{ObjectAlgorithm, ObjectId};
-use serde::{Deserialize, Serialize};
+use aq_admission::Digest;
+pub use aq_profiled_state::source_export::Request;
+use serde::Serialize;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Request {
-    pub schema_version: u32,
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    pub project_revision: u64,
-    pub repository_id: Uuid,
-    pub logical_identity: String,
-    pub binding_generation: u64,
-    pub base: ObjectId,
-    pub source_retention_handle: Uuid,
-    pub source_observation: ArtifactRef,
-}
-impl Request {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.schema_version != 1
-            || [
-                self.operation_id,
-                self.project_id,
-                self.repository_id,
-                self.source_retention_handle,
-            ]
-            .iter()
-            .any(Uuid::is_nil)
-            || self.project_revision == 0
-            || self.project_revision > i64::MAX as u64
-            || self.binding_generation == 0
-            || self.binding_generation > i64::MAX as u64
-            || self.logical_identity.trim().is_empty()
-            || self.logical_identity.len() > 512
-            || self.logical_identity.chars().any(char::is_control)
-            || self.base.algorithm != ObjectAlgorithm::Sha1
-            || self.base.hex.len() != 40
-            || !self.base.hex.bytes().any(|b| b != b'0')
-            || !self
-                .base
-                .hex
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || self.source_observation.id.as_str().len() > 512
-            || self.source_observation.version.as_str().len() > 512
-            || self.source_observation.id.validate().is_err()
-            || self.source_observation.version.validate().is_err()
-        {
-            return Err("invalid pre-offer source export request");
-        }
-        Ok(())
-    }
-    pub fn digest(&self) -> Result<Digest, &'static str> {
-        self.validate()?;
-        aq_selection::digest(self).map_err(|_| "source export request encoding")
-    }
-}
 /// No constructor or deserializer is exposed to production callers. The future
 /// reserve service owns construction after its quota transaction commits.
 pub struct ReservedExport {
@@ -68,6 +12,16 @@ pub struct ReservedExport {
     reserved_bytes: u64,
 }
 impl ReservedExport {
+    fn from_encoded(
+        encoded: aq_profiled_state::source_export::EncodedRequest,
+        reserved_bytes: u64,
+    ) -> Self {
+        Self {
+            request: encoded.request,
+            request_digest: encoded.digest,
+            reserved_bytes,
+        }
+    }
     pub fn request(&self) -> &Request {
         &self.request
     }
@@ -135,24 +89,17 @@ pub(crate) async fn recover_existing(
     if operation.is_nil() || project.is_nil() {
         return Err(unavailable());
     }
-    let raw: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT request_bytes FROM profiled_source_exports WHERE operation_id=$1 AND project_id=$2",
-    )
-    .bind(operation)
-    .bind(project)
-    .fetch_optional(&state.store.pool)
-    .await
-    .map_err(database)?;
+    use aq_profiled_state::source_export::stored::OriginalRequest;
+    let raw = OriginalRequest::load(&state.store.pool, operation, project)
+        .await
+        .map_err(database)?;
     let Some(raw) = raw else { return Ok(None) };
-    if raw.len() > 8192 {
-        return Err(unavailable());
-    }
-    let request: Request = serde_json::from_slice(&raw).map_err(|_| unavailable())?;
-    if request.operation_id != operation || request.project_id != project {
-        return Err(unavailable());
-    }
+    let request = raw
+        .into_request(operation, project)
+        .ok_or_else(unavailable)?;
     reserve(state, request).await.map(Some)
 }
+<<<<<<< HEAD
 pub async fn reserve(
     state: &crate::AppState,
     request: Request,
@@ -392,6 +339,14 @@ pub async fn reserve(
         reserved_bytes: reserved,
     }))
 }
+=======
+mod admission;
+mod observation;
+mod reservation;
+pub use reservation::reserve;
+>>>>>>> refs/remotes/central/main
 
 mod completion;
-pub use completion::{LinkedExport, finalize, link_locked, load_linked_locked};
+pub use completion::{LinkedExport, finalize, load_linked_locked};
+mod link;
+pub use link::{LinkEvidence, link_locked};

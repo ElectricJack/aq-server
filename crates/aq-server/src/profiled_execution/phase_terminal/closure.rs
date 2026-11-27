@@ -49,53 +49,7 @@ async fn record_inner(
         if prior.len() != 1 {
             return Err(conflict());
         }
-        let old = &prior[0];
-        if old.get::<uuid::Uuid, _>("attempt_id") != r.binding.attempt_id
-            || old.get::<uuid::Uuid, _>("operation_id") != r.operation_id
-            || old.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
-            || old
-                .get::<Option<String>, _>("initial_authority_receipt_digest")
-                .as_deref()
-                != Some(loaded.history.receipt_digest.as_str())
-            || old
-                .get::<Option<String>, _>("phase_request_digest")
-                .as_deref()
-                != Some(digest.as_str())
-            || old
-                .get::<Option<Vec<u8>>, _>("phase_envelope_bytes")
-                .as_deref()
-                != Some(outer.as_slice())
-        {
-            return Err(conflict());
-        }
-        let bytes = old
-            .get::<Option<Vec<u8>>, _>("phase_ack_bytes")
-            .ok_or_else(conflict)?;
-        let ack = wire::decode_closure_receipt(&bytes, q).map_err(|_| conflict())?;
-        let qualification: aq_admission::ArtifactRef = serde_json::from_value(
-            old.get::<Option<serde_json::Value>, _>("phase_terminal_qualification")
-                .ok_or_else(conflict)?,
-        )
-        .map_err(|_| conflict())?;
-        let (expected_context, verifier) = retained_context(&loaded, q, &qualification)?;
-        let context_bytes = old.get::<Vec<u8>, _>("context_bytes");
-        if canonical(&ack)? != bytes
-            || old.get::<Vec<u8>, _>("request_bytes") != canonical(r)?
-            || old.get::<String, _>("request_digest") != ack.original.request_digest.as_str()
-            || old.get::<Vec<u8>, _>("receipt_bytes") != canonical(&ack.original)?
-            || context_bytes != expected_context
-            || old.get::<String, _>("context_digest")
-                != aq_admission::Digest::of(&context_bytes).as_str()
-            || old.get::<serde_json::Value, _>("verifier") != verifier
-            || old.get::<uuid::Uuid, _>("initial_prepare_operation_id")
-                != loaded.history.request.original.operation_id
-            || old.get::<uuid::Uuid, _>("registration_id") != loaded.registration.id
-            || old.get::<serde_json::Value, _>("binding")
-                != serde_json::to_value(&r.binding).map_err(|_| AppError::Internal)?
-        {
-            return Err(conflict());
-        }
-
+        let ack = replay(&prior[0], q, &loaded, &digest, &outer)?;
         tx.commit().await.map_err(database)?;
         return Ok(ack);
     }
@@ -108,42 +62,7 @@ async fn record_inner(
     {
         return Err(conflict());
     }
-    let started: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1)",
-    )
-    .bind(r.binding.attempt_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(database)?;
-    if started {
-        return Err(conflict());
-    }
-    let head = sqlx::query(
-        "SELECT phase,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR UPDATE",
-    )
-    .bind(r.binding.attempt_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(database)?
-    .ok_or_else(conflict)?;
-    if head.get::<String, _>("phase") != "prepared"
-        || head.get::<i64, _>("revision") != loaded.prepared.revision as i64
-        || head.get::<String, _>("digest") != loaded.prepared.digest.as_str()
-    {
-        return Err(conflict());
-    }
-    // No phase renewal adapter is qualified. Any unexpected renewal is corruption,
-    // never a source from which to fabricate a later Prepared checkpoint.
-    if crate::profiled_execution::renewal::latest_renewal_revision_locked(
-        &mut tx,
-        node.id(),
-        &r.binding,
-    )
-    .await?
-    .is_some()
-    {
-        return Err(conflict());
-    }
+    require_prepared_journal_locked(&mut tx, node, &r.binding, &loaded).await?;
     let evidence = match &r.evidence {
         Evidence::Suppressed { .. } => "suppressed",
         Evidence::HostStopped { .. } => "host_stopped",
@@ -190,6 +109,104 @@ async fn record_inner(
         return Err(conflict());
     }
     tx.commit().await.map_err(database)?;
+    Ok(ack)
+}
+
+async fn require_prepared_journal_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: &AuthenticatedNode,
+    binding: &aq_admission::LaunchBinding,
+    loaded: &common::Loaded,
+) -> Result<(), AppError> {
+    let started: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1)",
+    )
+    .bind(binding.attempt_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    if started {
+        return Err(conflict());
+    }
+    let head = sqlx::query(
+        "SELECT phase,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(binding.attempt_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(database)?
+    .ok_or_else(conflict)?;
+    if head.get::<String, _>("phase") != "prepared"
+        || head.get::<i64, _>("revision") != loaded.prepared.revision as i64
+        || head.get::<String, _>("digest") != loaded.prepared.digest.as_str()
+    {
+        return Err(conflict());
+    }
+    // No phase renewal adapter is qualified. Any unexpected renewal is corruption,
+    // never a source from which to fabricate a later Prepared checkpoint.
+    if crate::profiled_execution::renewal::latest_renewal_revision_locked(tx, node.id(), binding)
+        .await?
+        .is_some()
+    {
+        return Err(conflict());
+    }
+    Ok(())
+}
+
+fn replay(
+    old: &sqlx::postgres::PgRow,
+    q: &wire::ClosureRequest,
+    loaded: &common::Loaded,
+    digest: &aq_admission::Digest,
+    outer: &[u8],
+) -> Result<wire::ClosureReceipt, AppError> {
+    let r = &q.original;
+    if old.get::<uuid::Uuid, _>("attempt_id") != r.binding.attempt_id
+        || old.get::<uuid::Uuid, _>("operation_id") != r.operation_id
+        || old.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
+        || old
+            .get::<Option<String>, _>("initial_authority_receipt_digest")
+            .as_deref()
+            != Some(loaded.history.receipt_digest.as_str())
+        || old
+            .get::<Option<String>, _>("phase_request_digest")
+            .as_deref()
+            != Some(digest.as_str())
+        || old
+            .get::<Option<Vec<u8>>, _>("phase_envelope_bytes")
+            .as_deref()
+            != Some(outer)
+    {
+        return Err(conflict());
+    }
+    let bytes = old
+        .get::<Option<Vec<u8>>, _>("phase_ack_bytes")
+        .ok_or_else(conflict)?;
+    let ack = wire::decode_closure_receipt(&bytes, q).map_err(|_| conflict())?;
+    let qualification: aq_admission::ArtifactRef = serde_json::from_value(
+        old.get::<Option<serde_json::Value>, _>("phase_terminal_qualification")
+            .ok_or_else(conflict)?,
+    )
+    .map_err(|_| conflict())?;
+    let (expected_context, verifier) = retained_context(loaded, q, &qualification)?;
+    let context_bytes = old.get::<Vec<u8>, _>("context_bytes");
+    if canonical(&ack)? != bytes
+        || old.get::<Vec<u8>, _>("request_bytes") != canonical(r)?
+        || old.get::<String, _>("request_digest") != ack.original.request_digest.as_str()
+        || old.get::<Vec<u8>, _>("receipt_bytes") != canonical(&ack.original)?
+        || context_bytes != expected_context
+        || old.get::<String, _>("context_digest")
+            != aq_admission::Digest::of(&context_bytes).as_str()
+        || old.get::<serde_json::Value, _>("verifier") != verifier
+        || old.get::<uuid::Uuid, _>("initial_prepare_operation_id")
+            != loaded.history.request.original.operation_id
+        || old.get::<uuid::Uuid, _>("registration_id") != loaded.registration.id
+        || old.get::<serde_json::Value, _>("binding")
+            != serde_json::to_value(&r.binding).map_err(|_| AppError::Internal)?
+    {
+        return Err(conflict());
+    }
+
     Ok(ack)
 }
 

@@ -26,18 +26,31 @@ fn fixture_body(kind: &str) -> Value {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
-/// A request body for `kind` on `machine`, with a fresh operation id.
-fn body(kind: &str, machine: &str, generation: &str) -> Value {
-    let mut v = fixture_body(kind);
-    let id = Uuid::new_v4().to_string();
-    v["operation_id"] = json!(id);
-    v["payload"]["operation_id"] = json!(id);
-    v["subject"]["id"] = json!(machine);
-    v["payload"]["machine"] = json!(machine);
-    if kind != "revoke" {
-        v["payload"]["expected_generation"] = json!(generation);
+enum MachineAction {
+    Stop(u64),
+    Start(u64),
+    Drain(u64),
+    Revoke,
+}
+impl MachineAction {
+    fn for_machine(self, machine: &str) -> Value {
+        let (kind, generation) = match self {
+            Self::Stop(n) => ("stop", Some(n)),
+            Self::Start(n) => ("start", Some(n)),
+            Self::Drain(n) => ("drain", Some(n)),
+            Self::Revoke => ("revoke", None),
+        };
+        let mut value = fixture_body(kind);
+        let id = Uuid::new_v4().to_string();
+        value["operation_id"] = json!(id);
+        value["payload"]["operation_id"] = json!(id);
+        value["subject"]["id"] = json!(machine);
+        value["payload"]["machine"] = json!(machine);
+        if let Some(generation) = generation {
+            value["payload"]["expected_generation"] = json!(generation.to_string());
+        }
+        value
     }
-    v
 }
 
 async fn act(app: &Router, email: &str, body: &Value) -> (StatusCode, Value) {
@@ -76,9 +89,18 @@ async fn machine(slots: u32) -> (Fixture, PgPool, Router) {
             worker_version: "0.1.0",
             protocol_version: 1,
         };
-        mc::mint_slots(&mut c, &caller, slots, &new, &hashes, chrono::Utc::now())
-            .await
-            .unwrap();
+        mc::mint_slots(
+            &mut c,
+            &caller,
+            mc::SlotRequest {
+                wanted: slots,
+                template: &new,
+                hashes: &hashes,
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
     }
     drop(c);
     let app = aq_server::build_admin_router(f.state.clone());
@@ -127,7 +149,12 @@ async fn control(pool: &PgPool) -> (String, i64) {
 async fn owner_stop_sets_stopped_and_requests_handoffs() {
     let (f, pool, app) = machine(1).await;
     let attempt = running_attempt(&f, &pool).await;
-    let (s, v) = act(&app, "owner@localhost", &body("stop", "desktop", "1")).await;
+    let (s, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Stop(1).for_machine("desktop"),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
     assert_eq!(control(&pool).await, ("stopped".into(), 2));
@@ -143,10 +170,20 @@ async fn owner_stop_sets_stopped_and_requests_handoffs() {
 async fn drain_and_start_change_state_without_handoffs() {
     let (f, pool, app) = machine(1).await;
     running_attempt(&f, &pool).await;
-    let (_, v) = act(&app, "owner@localhost", &body("drain", "desktop", "1")).await;
+    let (_, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Drain(1).for_machine("desktop"),
+    )
+    .await;
     assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
     assert_eq!(control(&pool).await, ("draining".into(), 2));
-    let (_, v) = act(&app, "owner@localhost", &body("start", "desktop", "2")).await;
+    let (_, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Start(2).for_machine("desktop"),
+    )
+    .await;
     assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
     assert_eq!(control(&pool).await, ("running".into(), 3));
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM attempt_handoffs")
@@ -159,9 +196,19 @@ async fn drain_and_start_change_state_without_handoffs() {
 #[tokio::test]
 async fn stale_generation_is_a_conflict() {
     let (_f, _pool, app) = machine(1).await;
-    let (_, v) = act(&app, "owner@localhost", &body("stop", "desktop", "1")).await;
+    let (_, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Stop(1).for_machine("desktop"),
+    )
+    .await;
     assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
-    let (_, v) = act(&app, "owner@localhost", &body("start", "desktop", "1")).await;
+    let (_, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Start(1).for_machine("desktop"),
+    )
+    .await;
     assert_eq!(v["data"]["disposition"], "conflict", "{v}");
     assert_eq!(v["data"]["current_versions"]["machine"], "2", "{v}");
 }
@@ -173,7 +220,12 @@ async fn legacy_machine_is_not_found() {
         "unknown-box".to_string(),
         format!("node:{}", f.node.node_id),
     ] {
-        let (s, v) = act(&app, "owner@localhost", &body("stop", &machine, "1")).await;
+        let (s, v) = act(
+            &app,
+            "owner@localhost",
+            &MachineAction::Stop(1).for_machine(&machine),
+        )
+        .await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{machine}: {v}");
     }
 }
@@ -185,7 +237,7 @@ async fn revoke_revokes_every_slot_node() {
         .execute(&pool)
         .await
         .unwrap();
-    let req = body("revoke", "desktop", "");
+    let req = MachineAction::Revoke.for_machine("desktop");
     let (s, v) = act(&app, "owner@localhost", &req).await;
     assert_eq!(
         (s, &v["data"]["disposition"]),
@@ -219,7 +271,12 @@ async fn revoke_revokes_every_slot_node() {
         .collect();
     assert!(!ids.contains(&&json!("desktop")), "{swarm}");
     // Revoking again, under a new operation, is confirmed again.
-    let (s, v) = act(&app, "owner@localhost", &body("revoke", "desktop", "")).await;
+    let (s, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Revoke.for_machine("desktop"),
+    )
+    .await;
     assert_eq!(
         (s, &v["data"]["disposition"]),
         (StatusCode::OK, &json!("confirmed")),
@@ -237,7 +294,7 @@ async fn revoking_one_slot_of_a_machine_is_refused() {
     let (s, v) = act(
         &app,
         "owner@localhost",
-        &body("revoke", &format!("node:{slot}"), ""),
+        &MachineAction::Revoke.for_machine(&format!("node:{slot}")),
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
@@ -279,10 +336,11 @@ async fn node_rows(pool: &PgPool) -> Vec<Value> {
     .unwrap()
 }
 
-/// M1 residual: an owner machine action whose node-row locks time out (1 s,
-/// `OWNER_LOCK_TIMEOUT`) changed nothing, so it is a definite refusal with the
-/// reason `busy`, not an unknown outcome. The node rows are locked in id order
-/// before any write: holding the last one leaves every node and the control
+/// M1 residual: an owner machine action whose row locks time out
+/// (`owner_lock_timeout_ms`) changed nothing, so it is a definite refusal with
+/// the reason `busy`, not an unknown outcome. Stop and Drain fence the
+/// allocation rows and Revoke the node rows, each in id order before any
+/// write: holding the last of both leaves every node and the control
 /// untouched, and a later submission succeeds.
 #[tokio::test]
 async fn an_action_that_hits_the_lock_timeout_is_refused_busy_and_changes_nothing() {
@@ -296,10 +354,16 @@ async fn an_action_that_hits_the_lock_timeout_is_refused_busy_and_changes_nothin
     .execute(&mut *held)
     .await
     .unwrap();
+    sqlx::query(
+        "SELECT a.node_id FROM node_allocation a JOIN nodes n ON n.id=a.node_id WHERE n.machine_key='desktop' ORDER BY a.node_id DESC LIMIT 1 FOR UPDATE OF a",
+    )
+    .execute(&mut *held)
+    .await
+    .unwrap();
     for request in [
-        body("stop", "desktop", "1"),
-        body("drain", "desktop", "1"),
-        body("revoke", "desktop", ""),
+        MachineAction::Stop(1).for_machine("desktop"),
+        MachineAction::Drain(1).for_machine("desktop"),
+        MachineAction::Revoke.for_machine("desktop"),
     ] {
         let (s, v) = act(&app, "owner@localhost", &request).await;
         assert_eq!(s, StatusCode::OK, "{v}");
@@ -318,7 +382,12 @@ async fn an_action_that_hits_the_lock_timeout_is_refused_busy_and_changes_nothin
         .unwrap();
     assert_eq!((controls, handoffs), (0, 0), "nothing was applied");
     held.rollback().await.unwrap();
-    let (_, v) = act(&app, "owner@localhost", &body("stop", "desktop", "1")).await;
+    let (_, v) = act(
+        &app,
+        "owner@localhost",
+        &MachineAction::Stop(1).for_machine("desktop"),
+    )
+    .await;
     assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
     assert_eq!(control(&pool).await, ("stopped".into(), 2));
 }
@@ -334,7 +403,7 @@ async fn non_owner_is_refused() {
     let (s, v) = act(
         &app,
         "worker-viewer@localhost",
-        &body("stop", "desktop", "1"),
+        &MachineAction::Stop(1).for_machine("desktop"),
     )
     .await;
     assert!(

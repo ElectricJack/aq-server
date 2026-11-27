@@ -32,8 +32,22 @@ The worker posts every 15 s.
 - `cpu_busy_bps`: CPU busy in basis points, 0-10000.
 - `disk_total_bytes`, `disk_free_bytes`: both present or both absent, free at
   most total.
+- `sandbox_admission`: present only while the machine cannot admit a sandbox and
+  rechecks automatically. `code` is 1-64 characters of `[a-z0-9_]`
+  (`sandbox_disk_headroom_unavailable`, `sandbox_daemon_unavailable`,
+  `sandbox_headroom_unreported`, `native_journal_disk_headroom_unavailable`, ...);
+  `since_ms` is when the current code started, on the worker clock, at most
+  `observed_at_ms`; `available_bytes` and `required_bytes` (both or neither) give a
+  disk shortfall. Any slot's deferral is the machine's: its slots share one disk and
+  daemon.
 
 ## Server use
+
+A fresh report's `sandbox_admission` makes every node of the machine (the nodes
+sharing its machine key) ineligible with `sandbox_admission_deferred` in the
+capacity and swarm reads, with no idle slots. Deferred for longer than the
+Settings value `node-limits` `admission_deferral_attention_ms`
+(`observed_at_ms - since_ms`), it is an overview attention item.
 
 A report is fresh when received within 60 s. A sample is stored only when the
 node's newest sample is at least 5 s older; the latest report is always updated. The 15-minute average is the mean

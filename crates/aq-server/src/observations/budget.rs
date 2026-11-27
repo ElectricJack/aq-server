@@ -100,16 +100,7 @@ pub struct LineageBudget {
     pub soft_ceiling_reached: bool,
 }
 
-/// The accounting part of a selection `BudgetSnapshot`.
-#[derive(Clone, Debug)]
-pub struct AccountingSnapshot {
-    pub spent_microunits: Option<u64>,
-    pub currency: Option<String>,
-    pub accounting: aq_selection::AccountingCompleteness,
-    pub accounting_source: aq_selection::ArtifactRef,
-    /// Always `None`: the ledger is not a hard budget provider (0004 §2.2).
-    pub hard_budget_provider: Option<aq_selection::ArtifactRef>,
-}
+pub use aq_project_policy::decision::AccountingSnapshot;
 
 impl LineageBudget {
     pub fn snapshot(&self) -> AccountingSnapshot {

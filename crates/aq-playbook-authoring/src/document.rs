@@ -31,10 +31,10 @@ pub async fn author_document<S: Server>(s: &S, record: &SourceRecord) {
 /// missed save is caught up). The engine may not be open yet; that is only
 /// logged, and the next pass tries again.
 pub async fn catch_up<S: Server>(s: &S, record: &SourceRecord) {
-    if ensure_builtin(s.as_ref(), record).await.is_ok()
-        && !no_document(s, record).await
-        && let Err(error) = author_missed(s, &record.id).await
-    {
+    if ensure_builtin(s.as_ref(), record).await.is_err() || no_document(s, record).await {
+        return;
+    }
+    if let Err(error) = author_missed(s, &record.id).await {
         tracing::info!(source = %record.id, %error, "the document is not authored yet");
     }
 }
@@ -45,7 +45,10 @@ const DELIVERY_DOCUMENT: &str = "/delivery-document";
 /// A Settings write to `path` succeeded: authors the delivery document when it
 /// is the one saved.
 pub async fn author_saved<S: Server>(s: &S, path: &str) {
-    if path.ends_with(DELIVERY_DOCUMENT) {
-        author_document(s, &crate::builtin::delivery()).await;
+    // A closed engine: the slow catch-up authors the save once it is open.
+    if path.ends_with(DELIVERY_DOCUMENT)
+        && let Some(record) = s.delivery()
+    {
+        author_document(s, &record).await;
     }
 }

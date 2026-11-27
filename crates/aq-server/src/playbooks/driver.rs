@@ -1,6 +1,10 @@
 //! One explicitly started owner and bounded service quanta. Never start another
-//! owner because a request timed out. No automatic external mutation retries.
+//! owner because a request timed out.
 use super::{domain::*, service::*};
+use aq_playbook_domain::driver_outcomes::{
+    Partial, decision_dispatch, delivery_error, host_error, host_result, message_dispatch,
+    message_result,
+};
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
     model::{CommandContract, EventEnvelope},
@@ -15,323 +19,11 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-fn host_error(error: aq_playbook_host::Error) -> Error {
-    match error {
-        aq_playbook_host::Error::Overloaded => Error::Overloaded,
-        _ => Error::Unknown,
-    }
-}
-/// An engine answer to a new event or admission: an unknown outcome or a
-/// storage failure is `Unknown` (left pending, delivered again); a refusal
-/// is `Invalid` (held).
-fn delivery_error(error: aq_playbook_host::Error) -> Error {
-    match error {
-        aq_playbook_host::Error::Overloaded => Error::Overloaded,
-        aq_playbook_host::Error::Unknown | aq_playbook_host::Error::Stopped => Error::Unknown,
-        _ => Error::Invalid,
-    }
-}
-/// What a quantum deferred. Capacity defers new work without preventing
-/// retained work from reaching its drain and tick; any other failure of one
-/// stage is kept, one reason per stage, while the rest of the quantum runs.
-#[derive(Default)]
-struct Partial {
-    overloaded: bool,
-    reasons: Vec<String>,
-}
-impl Partial {
-    fn defer<T>(&mut self, what: &str, result: Result<T>) {
-        match result {
-            Ok(_) => {}
-            Err(Error::Overloaded) => self.overloaded = true,
-            Err(error) => self.reasons.push(format!("{what}: {error}")),
-        }
-    }
-}
-struct MailHost {
-    service: Service,
-    runtime: RuntimeOwner,
-    handle: tokio::runtime::Handle,
-    mode: HostMode,
-    #[cfg(feature = "test-support")]
-    lose_decision_reply: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(feature = "test-support")]
-    lose_host_reply: Arc<Mutex<Option<String>>>,
-}
-impl DomainHost for MailHost {
-    fn transition_time(&self, _: i64) -> i64 {
-        self.service.current_time()
-    }
-    fn set_mode(&mut self, mode: HostMode) {
-        self.mode = mode
-    }
-    fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
-        self.dispatch_adapter(intent, false)
-    }
-}
-impl Host for MailHost {
-    fn authorize(&self, authority: &Authority, contract: &CommandContract) -> bool {
-        if self.mode == HostMode::RetryPlugins && command_plugin(&contract.name).is_none() {
-            return false;
-        }
-        let Ok((id, revision)) = grant_actor(authority) else {
-            return false;
-        };
-        self.handle
-            .block_on(self.service.authorize_contract(
-                &self.runtime,
-                id,
-                revision,
-                contract,
-                authority,
-                self.mode == HostMode::Dispatch,
-            ))
-            .is_ok()
-    }
-    fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
-        if self.host_command(intent) {
-            return self.dispatch_adapter(intent, true);
-        }
-        if intent.command.name == "decision.request" {
-            let Ok((id, revision)) = grant_actor(&intent.authority) else {
-                return DispatchResult::Rejected {
-                    reason: "grant binding refused".into(),
-                };
-            };
-            let result = self.handle.block_on(self.service.request_decision(
-                &self.runtime,
-                id,
-                revision,
-                intent,
-            ));
-            #[cfg(feature = "test-support")]
-            if result.is_ok()
-                && self
-                    .lose_decision_reply
-                    .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                return DispatchResult::Unknown {
-                    reason: "synthetic lost host reply after owner commit".into(),
-                };
-            }
-            return decision_dispatch(result);
-        }
-        if intent.command.name == "operation.get" {
-            let Ok((id, revision)) = grant_actor(&intent.authority) else {
-                return DispatchResult::Rejected {
-                    reason: "grant binding refused".into(),
-                };
-            };
-            return decision_dispatch(self.handle.block_on(self.service.operation_get(
-                &self.runtime,
-                id,
-                revision,
-                intent,
-            )));
-        }
-        let Ok((id, revision)) = grant_actor(&intent.authority) else {
-            return DispatchResult::Rejected {
-                reason: "grant binding refused".into(),
-            };
-        };
-        match self.handle.block_on(
-            self.service
-                .send_message(&self.runtime, id, revision, intent),
-        ) {
-            Ok(MessageResult::Queued(receipt)) => DispatchResult::Completed {
-                outcome: "queued".into(),
-                output: receipt,
-            },
-            Ok(MessageResult::Cancelled) => DispatchResult::Rejected {
-                reason: "cancelled before mailbox admission".into(),
-            },
-            Err(Error::Unknown) => DispatchResult::Unknown {
-                reason: "mailbox admission outcome unknown; retained lookup required".into(),
-            },
-            Err(error) => DispatchResult::Rejected {
-                reason: error.to_string(),
-            },
-        }
-    }
-    fn reconcile(&mut self, intent: &Intent) -> DispatchResult {
-        if self.mode != HostMode::Reconcile {
-            return DispatchResult::Unknown {
-                reason: "explicit recovery mode required".into(),
-            };
-        }
-        if intent.command.name == "decision.request" {
-            let Ok((id, revision)) = grant_actor(&intent.authority) else {
-                return DispatchResult::Unknown {
-                    reason: "grant binding refused".into(),
-                };
-            };
-            return match self
-                .handle
-                .block_on(self.service.reconcile_decision(id, revision, intent))
-            {
-                Ok(Some(result)) => decision_dispatch(Ok(result)),
-                _ => DispatchResult::Unknown {
-                    reason: "no exact retained decision owner result".into(),
-                },
-            };
-        }
-        if intent.command.name == "operation.get" {
-            return self.dispatch(intent);
-        }
-        if self.host_command(intent) {
-            let Ok((id, revision)) = grant_actor(&intent.authority) else {
-                return DispatchResult::Unknown {
-                    reason: "grant binding refused".into(),
-                };
-            };
-            return match self
-                .handle
-                .block_on(self.service.host_retained(id, revision, intent))
-            {
-                Ok(Some(result)) => host_result(result, intent),
-                _ => DispatchResult::Unknown {
-                    reason: "no retained host result; no new effect admitted".into(),
-                },
-            };
-        }
-        let Ok((id, revision)) = grant_actor(&intent.authority) else {
-            return DispatchResult::Unknown {
-                reason: "grant binding refused".into(),
-            };
-        };
-        match self
-            .handle
-            .block_on(self.service.reconcile(id, revision, intent))
-        {
-            Ok(Some(MessageResult::Queued(receipt))) => DispatchResult::Completed {
-                outcome: "queued".into(),
-                output: receipt,
-            },
-            Ok(Some(MessageResult::Cancelled)) => DispatchResult::Rejected {
-                reason: "cancelled before mailbox admission".into(),
-            },
-            _ => DispatchResult::Unknown {
-                reason: "no verified retained owner result; no new write admitted".into(),
-            },
-        }
-    }
-    fn cancel(&mut self, intent: &Intent) -> CancellationResult {
-        if self.mode != HostMode::Cancel {
-            return CancellationResult::Unknown;
-        }
-        let Ok((id, revision)) = grant_actor(&intent.authority) else {
-            return CancellationResult::Refused;
-        };
-        if self.service.profile.is_host2() && intent.command.name == "check.request" {
-            // Catalog 2.0.0 check.request is cancellable: confirmed only by an
-            // executor-reported cancelled stop, never by the request alone.
-            return self
-                .handle
-                .block_on(
-                    self.service
-                        .check_cancel(&self.runtime, id, revision, intent),
-                )
-                .unwrap_or(CancellationResult::Unknown);
-        }
-        if self.host_command(intent) {
-            // Other host effects are cancelled through operation.cancel, never
-            // by the runner withdrawing an admitted effect.
-            return CancellationResult::Refused;
-        }
-        if intent.command.name == "decision.request" {
-            return self
-                .handle
-                .block_on(
-                    self.service
-                        .cancel_decision(&self.runtime, id, revision, intent),
-                )
-                .unwrap_or(CancellationResult::Unknown);
-        }
-        self.handle
-            .block_on(self.service.cancel(&self.runtime, id, revision, intent))
-            .unwrap_or(CancellationResult::Unknown)
-    }
-}
-impl MailHost {
-    fn dispatch_adapter(&mut self, intent: &Intent, plugin_available: bool) -> DispatchResult {
-        let Ok((id, revision)) = grant_actor(&intent.authority) else {
-            return DispatchResult::Rejected {
-                reason: "grant binding refused".into(),
-            };
-        };
-        let result = self.handle.block_on(async {
-            if plugin_available {
-                self.service
-                    .host_dispatch(&self.runtime, id, revision, intent)
-                    .await
-            } else {
-                self.service
-                    .plugin_dispatch(&self.runtime, id, revision, intent, false)
-                    .await
-            }
-        });
-        // D11 GATE-05 fixture: the AQ effect and its final row committed,
-        // then the reply is lost before the runner records it.
-        #[cfg(feature = "test-support")]
-        if result.is_ok()
-            && let Ok(mut armed) = self.lose_host_reply.lock()
-            && armed.as_deref() == Some(intent.command.name.as_str())
-        {
-            *armed = None;
-            return DispatchResult::Unknown {
-                reason: "synthetic lost host reply after owner commit".into(),
-            };
-        }
-        match result {
-            Ok(result) => host_result(result, intent),
-            Err(Error::Unknown) => DispatchResult::Unknown {
-                reason: "host effect outcome unknown; retained lookup required".into(),
-            },
-            Err(error) => DispatchResult::Rejected {
-                reason: error.to_string(),
-            },
-        }
-    }
-    /// Legacy review and mailbox profiles own their base adapters separately.
-    fn host_command(&self, intent: &Intent) -> bool {
-        let name = &intent.command.name;
-        command_plugin(name).is_some()
-            || (self.service.profile.is_host()
-                && self.service.registry().commands.contains_key(name))
-    }
-}
-/// An asynchronous host command's `accepted` outcome is its durable handle.
-fn host_result(result: super::host_adapters::HostResult, intent: &Intent) -> DispatchResult {
-    if command_plugin(&intent.command.name).is_none()
-        && result.outcome == "accepted"
-        && let Some(handle) = result.output["handle"].as_str()
-    {
-        return DispatchResult::Accepted {
-            handle: handle.to_string(),
-        };
-    }
-    DispatchResult::Completed {
-        outcome: result.outcome,
-        output: result.output,
-    }
-}
-fn decision_dispatch(result: Result<DecisionResult>) -> DispatchResult {
-    match result {
-        Ok(DecisionResult::Accepted { handle }) => DispatchResult::Accepted { handle },
-        Ok(DecisionResult::Completed { outcome, output }) => {
-            DispatchResult::Completed { outcome, output }
-        }
-        Ok(DecisionResult::Cancelled) => DispatchResult::Rejected {
-            reason: "cancelled before question admission".into(),
-        },
-        Err(Error::Unknown) => DispatchResult::Unknown {
-            reason: "decision owner result unknown; retained lookup required".into(),
-        },
-        Err(e) => DispatchResult::Rejected {
-            reason: e.to_string(),
-        },
-    }
-}
+mod bindings;
+mod mail_host;
+mod quantum;
+use aq_playbook_domain::driver_outcomes::retained_dispatch;
+use mail_host::MailHost;
 pub struct Driver {
     pub(super) owner: Owner,
     pub service: Service,
@@ -339,6 +31,8 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
+    #[cfg(feature = "delivery_playbook")]
+    delivery_recovery: aq_playbook_domain::delivery_decisions::Recovery,
     /// Order binding mutations with their bridge projections.
     binding_gate: tokio::sync::Mutex<()>,
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
@@ -362,6 +56,28 @@ pub struct Driver {
     #[cfg(feature = "test-support")]
     lose_host_reply: Arc<Mutex<Option<String>>>,
 }
+struct DriverSettings {
+    deadline: Duration,
+    tick_deadline: Duration,
+    retention: aq_playbook_host::retention::Retention,
+    #[cfg(feature = "test-support")]
+    lose_decision_reply: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(feature = "test-support")]
+    lose_host_reply: Arc<Mutex<Option<String>>>,
+}
+impl DriverSettings {
+    fn new(limits: &Limits) -> Self {
+        Self {
+            deadline: limits.timeouts.call_deadline(1),
+            tick_deadline: limits.timeouts.call_deadline(limits.transitions as u32),
+            retention: limits.retention,
+            #[cfg(feature = "test-support")]
+            lose_decision_reply: Arc::default(),
+            #[cfg(feature = "test-support")]
+            lose_host_reply: Arc::default(),
+        }
+    }
+}
 impl Driver {
     pub async fn start<S, F>(service: Service, limits: Limits, factory: F) -> Result<Self>
     where
@@ -382,19 +98,13 @@ impl Driver {
         F: FnOnce() -> std::result::Result<S, aq_playbook_host::Error> + Send + 'static,
     {
         let lost = |error: Error| (error, "the acquired runtime owner was lost".to_string());
+        let settings = DriverSettings::new(&limits);
         #[cfg(feature = "test-support")]
-        let lose_decision_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let host_reply_fault = settings.lose_decision_reply.clone();
         #[cfg(feature = "test-support")]
-        let host_reply_fault = lose_decision_reply.clone();
-        #[cfg(feature = "test-support")]
-        let lose_host_reply: Arc<Mutex<Option<String>>> = Arc::default();
-        #[cfg(feature = "test-support")]
-        let host_command_fault = lose_host_reply.clone();
+        let host_command_fault = settings.lose_host_reply.clone();
         let expected = (service.runtime_revision().await)
             .map_err(|e| (e, "reading the runtime revision".into()))?;
-        let deadline = limits.timeouts.call_deadline(1);
-        let tick_deadline = (limits.timeouts).call_deadline(limits.transitions as u32);
-        let retention = limits.retention;
         let handle = tokio::runtime::Handle::current();
         let host_service = service.clone();
         let namespace = service.namespace.engine_namespace();
@@ -409,9 +119,7 @@ impl Driver {
             Ok(store)
         };
         let owner = Owner::start_registered(
-            namespace,
-            limits,
-            service.registry().clone(),
+            aq_playbook_host::Registration::new(namespace, limits, service.registry().clone()),
             guarded_factory,
             move |acquired| {
                 if acquired.namespace != expected_namespace {
@@ -440,21 +148,31 @@ impl Driver {
             },
         )
         .await
-        .map_err(|e| (e.to_string(), host_error(e)))
+        .map_err(|e| (e.to_string(), Error::from(e)))
         .map_err(|(why, error)| (error, why))?;
         let taken = proof.lock().map_err(|_| Error::Unknown);
         let runtime = taken.and_then(|mut proof| proof.take().ok_or(Error::Unknown));
         let runtime = runtime.map_err(lost)?;
-        Ok(Self {
+        Ok(Self::from_runtime(owner, service, runtime, settings))
+    }
+    fn from_runtime(
+        owner: Owner,
+        service: Service,
+        runtime: RuntimeOwner,
+        settings: DriverSettings,
+    ) -> Self {
+        Self {
             owner,
             service,
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_recovery: Default::default(),
             binding_gate: tokio::sync::Mutex::new(()),
-            deadline,
-            tick_deadline,
-            retention,
+            deadline: settings.deadline,
+            tick_deadline: settings.tick_deadline,
+            retention: settings.retention,
             pruned: Default::default(),
             reason: Mutex::default(),
             automatic: std::sync::atomic::AtomicU8::new(0),
@@ -463,10 +181,10 @@ impl Driver {
             settlement_consumer: std::sync::atomic::AtomicBool::new(false),
             schedule_consumer: std::sync::atomic::AtomicBool::new(false),
             #[cfg(feature = "test-support")]
-            lose_decision_reply,
+            lose_decision_reply: settings.lose_decision_reply,
             #[cfg(feature = "test-support")]
-            lose_host_reply,
-        })
+            lose_host_reply: settings.lose_host_reply,
+        }
     }
     pub(crate) fn set_automatic_state(&self, state: u8) {
         self.automatic
@@ -490,87 +208,6 @@ impl Driver {
             _ => "manual",
         }
     }
-    pub async fn install(&self, artifact: aq_playbook_host::model::Artifact) -> Result<()> {
-        let event = super::review_domain::graph_operation_event();
-        let consumer = artifact.content.registry.events.get(&event.name) == Some(&event);
-        let completed = super::review_domain::task_completed_event();
-        let settlement_consumer =
-            artifact.content.registry.events.get(&completed.name) == Some(&completed);
-        let schedule_consumer = self.service.profile
-            == super::review_domain::CatalogProfile::Monitoring6
-            && artifact.content.registry.events.get("aq.signal.reported")
-                == self.service.registry().events.get("aq.signal.reported");
-        let registered = artifact.clone();
-        self.owner
-            .call(
-                Request::Install {
-                    artifact: Box::new(artifact),
-                },
-                self.deadline,
-            )
-            .await
-            .map_err(host_error)?;
-        // G11 X30/X32 read model only: a registry failure leaves the run's
-        // definition view null and never refuses an owner-committed install.
-        if self.service.register_definition(&registered).await.is_err() {
-            tracing::warn!(
-                "playbook definition registry write failed; definition view unavailable"
-            );
-        }
-        if schedule_consumer {
-            self.schedule_consumer
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-        if consumer {
-            self.graph_consumer
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-        if settlement_consumer {
-            self.settlement_consumer
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-        Ok(())
-    }
-    pub async fn activate(
-        &self,
-        binding: String,
-        artifact: String,
-        grant: Uuid,
-        revision: i64,
-    ) -> Result<serde_json::Value> {
-        let _guard = self.binding_gate.lock().await;
-        let active_authority = self
-            .service
-            .active_authority(&self.runtime, grant, revision)
-            .await?;
-        self.owner
-            .call(
-                Request::ActivateAt {
-                    binding: binding.clone(),
-                    artifact,
-                    authority: active_authority,
-                    now_ms: self.service_clock(),
-                },
-                self.deadline,
-            )
-            .await
-            .map_err(|error| match error {
-                aq_playbook_host::Error::Invalid => Error::Invalid,
-                other => host_error(other),
-            })?;
-        let current = Request::Binding {
-            binding: binding.clone(),
-        };
-        let active = (self.owner.call(current, self.deadline).await).map_err(|_| Error::Unknown)?;
-        // The server's record of the engine's binding (every activation
-        // path ends here), from the engine's own answer.
-        if let Some(artifact) = active["artifact"].as_str() {
-            self.service.binding_activated(&binding, artifact).await?;
-        }
-        Ok(active)
-    }
-    /// Recovery=false permits one exact retained first admission only under current
-    /// grant. Recovery=true is lookup-only and cannot create a missing engine run.
     pub async fn admission(
         &self,
         actor: Uuid,
@@ -590,7 +227,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         let known: Option<KeyedAdmissionReceipt> = serde_json::from_value(value)?;
         let receipt = if let Some(receipt) = known {
             receipt
@@ -607,7 +244,7 @@ impl Driver {
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
                         requested_at_ms: None,
-                        now_ms: (self.service_clock()),
+                        now_ms: self.service.current_time(),
                     },
                     self.deadline,
                 )
@@ -615,7 +252,10 @@ impl Driver {
             {
                 Ok(value) => value,
                 Err(aq_playbook_host::Error::Stale(_)) => {
-                    let _ = self.service.hold(&self.runtime, false, id, "stale").await;
+                    let _ = self
+                        .service
+                        .hold(&self.runtime, HeldItem::Admission(id), "stale")
+                        .await;
                     return Err(Error::Unknown);
                 }
                 Err(error) => return Err(delivery_error(error)),
@@ -627,14 +267,11 @@ impl Driver {
             .acknowledge_admission(&self.runtime, id, receipt)
             .await
     }
-    fn service_clock(&self) -> i64 {
-        self.service.current_time()
-    }
     pub async fn recover(&self) -> Result<serde_json::Value> {
         self.owner
             .call(
                 Request::Recover {
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -672,6 +309,7 @@ impl Driver {
             .complete_health_scan(&self.runtime, observation, evaluation, complete)
             .await
     }
+<<<<<<< HEAD
     /// At most two admissions, outbox events and interval occurrences each,
     /// plus one eight-transition tick. Overlap refuses without a waiter queue.
     pub async fn quantum(&self) -> Result<serde_json::Value> {
@@ -1092,6 +730,8 @@ impl Driver {
             Err(_) => Err(Error::Unknown),
         }
     }
+=======
+>>>>>>> refs/remotes/central/main
     /// Internal shutdown only: closing retained ownership needs no fresh user
     /// business grant. Stop is attempted even if central fencing is uncertain.
     pub(crate) async fn shutdown(&self) -> Result<()> {
@@ -1156,12 +796,12 @@ impl Driver {
                     epoch: 0,
                     event: Box::new(event),
                     requested_at_ms: None,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         serde_json::from_value(value).map_err(|_| Error::Unknown)
     }
 }

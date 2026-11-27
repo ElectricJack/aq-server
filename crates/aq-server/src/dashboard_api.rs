@@ -2,6 +2,7 @@
 pub mod actions;
 mod aggregation;
 mod capacity;
+pub(crate) mod performance;
 pub mod contract {
     pub use aq_dashboard_contract::*;
 }
@@ -102,6 +103,68 @@ impl FromRequestParts<AppState> for DashboardUser {
             .map_err(Error::from)
     }
 }
+struct DashboardRequest {
+    state: AppState,
+    user: crate::store::User,
+    runtime: Arc<Runtime>,
+}
+
+impl FromRequestParts<AppState> for DashboardRequest {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &AppState,
+    ) -> std::result::Result<Self, Response> {
+        let (State(state), DashboardUser(user), Extension(runtime)) =
+            <(State<AppState>, DashboardUser, Extension<Arc<Runtime>>)>::from_request_parts(
+                parts, state,
+            )
+            .await?;
+        Ok(Self {
+            state,
+            user,
+            runtime,
+        })
+    }
+}
+
+impl DashboardRequest {
+    fn parts(&self) -> (&AppState, &Runtime, &crate::store::User) {
+        (&self.state, &self.runtime, &self.user)
+    }
+
+    async fn unpaged<'a, T, F>(
+        &'a self,
+        query: ReadQuery,
+        read: impl FnOnce(&'a Self, Scope) -> F,
+    ) -> Result<Json<T>>
+    where
+        T: serde::Serialize,
+        F: std::future::Future<Output = Result<T>>,
+    {
+        self.reply(4, || Ok(read(self, query.unpaged_scope()?)))
+            .await
+    }
+
+    async fn reply<T, F>(&self, seconds: u64, read: impl FnOnce() -> Result<F>) -> Result<Json<T>>
+    where
+        T: serde::Serialize,
+        F: std::future::Future<Output = Result<T>>,
+    {
+        let _permit = self
+            .runtime
+            .gate
+            .try_acquire()
+            .map_err(|_| Error::Unavailable)?;
+        let future = read()?;
+        let result = tokio::time::timeout(Duration::from_secs(seconds), future)
+            .await
+            .map_err(|_| Error::Unavailable)??;
+        bounded(result)
+    }
+}
+
 struct DashboardQuery(ReadQuery);
 impl FromRequestParts<AppState> for DashboardQuery {
     type Rejection = Error;
@@ -149,6 +212,13 @@ impl ReadQuery {
             }
         }
     }
+    fn unpaged_scope(&self) -> Result<Scope> {
+        let scope = self.scope()?;
+        if self.limit.is_some() || self.cursor.is_some() {
+            return Err(Error::Invalid);
+        }
+        Ok(scope)
+    }
     fn limit(&self) -> Result<u16> {
         let n = self.limit.unwrap_or(runtime::PAGE);
         if n == 0 || n > runtime::MAX_PAGE {
@@ -175,6 +245,7 @@ pub(crate) fn routes_with_reviews(
         .merge(actions::routes(Arc::new(actions::existing::registry(
             &state, reviews, playbooks,
         ))))
+        .merge(performance::routes())
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/overview", get(overview))
         .route("/api/v1/search", get(search::read))
@@ -198,173 +269,92 @@ fn bounded<T: serde::Serialize>(value: T) -> Result<Json<T>> {
     Ok(Json(value))
 }
 async fn bootstrap(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     assets: Option<Extension<Arc<crate::dashboard_assets::DashboardAssets>>>,
     owners: Option<Extension<MountedOwners>>,
 ) -> Result<Json<Envelope<Bootstrap>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    let future = service::bootstrap(
-        &state,
-        &runtime,
-        &user,
-        assets.as_ref().map(|v| format!("sha256:{}", v.0.digest())),
-        owners.map(|Extension(v)| v).unwrap_or_default(),
-    );
-    bounded(
-        tokio::time::timeout(Duration::from_secs(2), future)
-            .await
-            .map_err(|_| Error::Unavailable)??,
-    )
+    request
+        .reply(2, || {
+            Ok(service::bootstrap(
+                &request,
+                assets.as_ref().map(|v| format!("sha256:{}", v.0.digest())),
+                owners.map(|Extension(v)| v).unwrap_or_default(),
+            ))
+        })
+        .await
 }
+
 async fn overview(
     owners: Option<Extension<MountedOwners>>,
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<Overview>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    let scope = query.scope()?;
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            aggregation::overview(
-                &state,
-                &runtime,
-                &user,
-                scope,
+    request
+        .reply(2, || {
+            Ok(aggregation::overview(
+                &request,
+                query.scope()?,
                 owners.map(|Extension(v)| v).unwrap_or_default(),
-            ),
-        )
+            ))
+        })
         .await
-        .map_err(|_| Error::Unavailable)??,
-    )
 }
+
 async fn provider_usage(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<Vec<ProviderUsage>>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    let scope = query.scope()?;
-    if query.limit.is_some() || query.cursor.is_some() {
-        return Err(Error::Invalid);
-    }
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(4),
-            service::provider_usage(&state, &runtime, &user, scope),
-        )
-        .await
-        .map_err(|_| Error::Unavailable)??,
-    )
+    request.unpaged(query, service::provider_usage).await
 }
+
 async fn capacity(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<Capacity>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    let scope = query.scope()?;
-    if query.limit.is_some() || query.cursor.is_some() {
-        return Err(Error::Invalid);
-    }
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(4),
-            capacity::capacity(&state, &runtime, &user, scope),
-        )
-        .await
-        .map_err(|_| Error::Unavailable)??,
-    )
+    request.unpaged(query, capacity::capacity).await
 }
+
 async fn swarm(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<Swarm>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    let scope = query.scope()?;
-    if query.limit.is_some() || query.cursor.is_some() {
-        return Err(Error::Invalid);
-    }
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(4),
-            swarm::swarm(&state, &runtime, &user, scope),
-        )
-        .await
-        .map_err(|_| Error::Unavailable)??,
-    )
+    request.unpaged(query, swarm::swarm).await
 }
+
 async fn sessions(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<Page<SessionSummary>>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(3),
-            service::sessions(&state, &runtime, &user, query),
-        )
+    request
+        .reply(3, || Ok(service::sessions(&request, query)))
         .await
-        .map_err(|_| Error::Unavailable)??,
-    )
 }
+
 async fn operations(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     SessionPath(id): SessionPath,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<SessionOperations>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            service::operations(&state, &runtime, &user, id, query.scope()?),
-        )
+    request
+        .reply(2, || Ok(service::operations(&request, id, query.scope()?)))
         .await
-        .map_err(|_| Error::Unavailable)??,
-    )
 }
+
 async fn detail(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     SessionPath(id): SessionPath,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<SessionDetail>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            service::detail(&state, &runtime, &user, id, query.scope()?),
-        )
+    request
+        .reply(2, || Ok(service::detail(&request, id, query.scope()?)))
         .await
-        .map_err(|_| Error::Unavailable)??,
-    )
 }
+
 async fn projects(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(runtime): Extension<Arc<Runtime>>,
+    request: DashboardRequest,
     DashboardQuery(query): DashboardQuery,
 ) -> Result<Json<Envelope<Page<ProjectRef>>>> {
-    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
-    bounded(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            service::projects(&state, &runtime, &user, query),
-        )
+    request
+        .reply(2, || Ok(service::projects(&request, query)))
         .await
-        .map_err(|_| Error::Unavailable)??,
-    )
 }

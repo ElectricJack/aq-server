@@ -21,6 +21,27 @@ pub async fn record(
     .await
     .map_err(|_| AppError::IdentityUnavailable("phase Started commit outcome unknown".into()))?
 }
+fn replay_bytes(row: &PgRow) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+    let envelope = row
+        .get::<Option<Vec<u8>>, _>("phase_envelope_bytes")
+        .ok_or_else(common::conflict)?;
+    let ack = row
+        .get::<Option<Vec<u8>>, _>("phase_ack_bytes")
+        .ok_or_else(common::conflict)?;
+    if envelope.len() > wire::MAX_BYTES
+        || ack.len() > wire::MAX_BYTES
+        || row
+            .get::<Option<String>, _>("phase_envelope_digest")
+            .as_deref()
+            != Some(Digest::of(&envelope).as_str())
+        || row.get::<Option<String>, _>("phase_ack_digest").as_deref()
+            != Some(Digest::of(&ack).as_str())
+    {
+        return Err(common::conflict());
+    }
+    Ok((envelope, ack))
+}
+
 fn replay(
     row: &PgRow,
     loaded: &Loaded,
@@ -44,23 +65,7 @@ fn replay(
     {
         return Err(common::conflict());
     }
-    let envelope = row
-        .get::<Option<Vec<u8>>, _>("phase_envelope_bytes")
-        .ok_or_else(common::conflict)?;
-    let ack = row
-        .get::<Option<Vec<u8>>, _>("phase_ack_bytes")
-        .ok_or_else(common::conflict)?;
-    if envelope.len() > wire::MAX_BYTES
-        || ack.len() > wire::MAX_BYTES
-        || row
-            .get::<Option<String>, _>("phase_envelope_digest")
-            .as_deref()
-            != Some(Digest::of(&envelope).as_str())
-        || row.get::<Option<String>, _>("phase_ack_digest").as_deref()
-            != Some(Digest::of(&ack).as_str())
-    {
-        return Err(common::conflict());
-    }
+    let (envelope, ack) = replay_bytes(row)?;
     let stored: wire::StartedRequest =
         serde_json::from_slice(&envelope).map_err(|_| common::conflict())?;
     stored

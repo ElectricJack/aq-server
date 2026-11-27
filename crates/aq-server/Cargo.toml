@@ -34,6 +34,7 @@ aq-human-work = { path = "../aq-human-work", version = "=0.1.0" }
 schemars = "1"
 aq-review-protocol = { path = "../aq-review-protocol", version = "=0.1.0" }
 aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.3" }
+aq-observation-ledger = { path = "../aq-observation-ledger" }
 aq-observation-admission = { path = "../aq-observation-admission", version = "=0.1.0" }
 aq-terminal-relay = { path = "../aq-terminal-relay", version = "=0.1.0" }
 aq-terminal-relay-protocol = { path = "../aq-terminal-relay-protocol", version = "=0.1.0" }
@@ -55,10 +56,12 @@ aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version
 aq-row-retention = { path = "../aq-row-retention" }
 aq-machine-control = { path = "../aq-machine-control" }
 aq-playbook-domain = { path = "../aq-playbook-domain" }
-aq-delivery = { path = "../aq-delivery" }
+aq-delegated-permits = { path = "../aq-delegated-permits" }
+aq-delivery = { path = "../aq-delivery", features = ["source_observation"] }
 aq-project-policy = { path = "../aq-project-policy" }
 aq-provider-quota = { path = "../aq-provider-quota" }
 aq-environment-templates = { path = "../aq-environment-templates" }
+aq-environments = { path = "../aq-environments", optional = true }
 aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 aq-swarm-settings = { path = "../aq-swarm-settings" }
 aq-role-settings = { path = "../aq-role-settings" }
@@ -95,8 +98,13 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [features]
+<<<<<<< HEAD
+=======
+# Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
+delivery_playbook = ["aq-delivery/delivery_playbook", "aq-environments?/delivery_playbook", "aq-role-settings/delivery_playbook", "aq-playbook-domain/delivery_playbook", "aq-playbook-authoring/delivery_playbook", "aq-profiled-state/delivery_playbook", "aq-human-work/delivery_playbook", "aq-supervisor-control/delivery_playbook"]
+>>>>>>> refs/remotes/central/main
 # Spec 0017 (sandbox environments per project and per task), off by default.
-project_environments = ["aq-human-work/project_environments", "aq-project-policy/project_environments", "aq-role-settings/project_environments", "aq-profiles/project_environments", "aq-selection/project_environments"]
+project_environments = ["aq-agent-grants/project_environments", "aq-playbook-authoring/project_environments", "aq-playbook-domain/project_environments", "aq-command-registry/project_environments", "aq-environments/project_environments", "aq-human-work/project_environments", "aq-project-policy/project_environments", "aq-role-settings/project_environments", "aq-profiles/project_environments", "aq-selection/project_environments"]
 # Supervisors get full access (owner scope), off by default.
 supervisor_full_access = ["aq-command-registry/supervisor_full_access", "aq-supervisor-control/supervisor_full_access", "aq-internal-work/supervisor_full_access"]
 test-support = ["aq-notifications/test-support", "aq-delivery/test-support"]

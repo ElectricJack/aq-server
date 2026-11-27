@@ -143,8 +143,11 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
             "{released:?}"
         );
     }
-    let pool = &c.env.env.pool;
-    let busy = aq_server::test_support::node_busy(&c.env.env.state, &auth(&c).await).await;
+    assert_held_task_frees_machine(&c, task).await;
+}
+
+async fn assert_held_task_frees_machine(c: &Case, task: Uuid) {
+    let busy = aq_server::test_support::node_busy(&c.env.env.state, &auth(c).await).await;
     assert_eq!(
         busy.map_err(|e| format!("{e:?}")),
         Ok(false),
@@ -152,7 +155,7 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
     );
     // The next poll offers the other ready task, never the held one.
     c.mode.store(7, Ordering::SeqCst);
-    let (status, body) = native_offer::poll_offered(&c).await;
+    let (status, body) = native_offer::poll_offered(c).await;
     assert_eq!(status, 200, "never a 409: {body}");
     let offered = offers(&body);
     assert_eq!(offered.len(), 1, "{body}");
@@ -160,7 +163,7 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
         offered[0].offered.offer.manifest.bindings.task_id,
         c.second_task
     );
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll(c).await;
     assert_eq!(status, 200, "{body}");
     assert!(
         offers(&body)
@@ -168,6 +171,11 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
             .all(|o| o.offered.offer.manifest.bindings.task_id != task),
         "the held task is not re-offered: {body}"
     );
+    assert_budget_hold_evidence(c, task).await;
+}
+
+async fn assert_budget_hold_evidence(c: &Case, task: Uuid) {
+    let pool = &c.env.env.pool;
     // The hold is visible on the task: one system comment naming its reason.
     let comments: Vec<(String, String)> = sqlx::query_as(
         "SELECT author_kind,body FROM task_comments WHERE task_id=$1 AND author_kind='system'",
@@ -184,7 +192,7 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
         "{comments:?}"
     );
     // The task's own hold (R6) is that one comment's: the polls since add none.
-    let rows = super::holds::hold_rows(&c, task).await;
+    let rows = super::holds::hold_rows(c, task).await;
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].0, "lineage_retry_budget_exhausted");
     let ids: Vec<Uuid> = sqlx::query_scalar(
@@ -196,8 +204,8 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
     .unwrap();
     assert_eq!(ids, [rows[0].1]);
     assert!(rows[0].2, "marked on record");
-    assert_eq!(super::holds::agree(&c, &[task, c.second_task]).await, 1);
-    let readiness = super::holds::work(&c, task).await;
+    assert_eq!(super::holds::agree(c, &[task, c.second_task]).await, 1);
+    let readiness = super::holds::work(c, task).await;
     assert!(
         readiness["reasons"]
             .to_string()
@@ -280,7 +288,7 @@ async fn revoke(c: &Case) -> u32 {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    n
+    n.len() as u32
 }
 /// The attempt is released as a revoked node's: recorded, stopped, its claim freed, not charged.
 async fn assert_released(c: &Case, attempt: Uuid) {

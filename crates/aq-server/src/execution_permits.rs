@@ -13,8 +13,8 @@ use crate::{
     AppState,
     admin_api::ApiJson,
     error::AppError,
-    execution::authority::Kind,
-    lifecycle_artifacts::{authenticate, bad, conflict, internal, record, replay, sha, view},
+    execution::authority::{AuthorityView, Kind},
+    lifecycle_artifacts::{Operation, authenticate, bad, conflict, internal, sha, view},
 };
 use aq_admission_sandbox::sandbox::RunnerOperation;
 use aq_lifecycle_api::worker_lifecycle as lc;
@@ -61,68 +61,87 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .layer(DefaultBodyLimit::max(16384))
         .with_state(state)
 }
+impl PermitRequest {
+    fn expires_at(&self) -> Result<u64> {
+        if self.span_ms == 0 || self.span_ms > MAX_PERMIT_MS {
+            return Err(bad("permit span out of range"));
+        }
+        self.now_boot_ms
+            .checked_add(self.span_ms)
+            .ok_or_else(|| bad("permit window overflow"))
+    }
+    fn matches_boot(&self, session: &SessionIdentity, node: Uuid) -> bool {
+        matches!(session, SessionIdentity::Remote {node_id,boot_id,..} if *node_id == node && *boot_id == self.machine_boot_id)
+    }
+    fn authorize(&self, a: &AuthorityView, node: Uuid) -> Result<()> {
+        if !self.matches_boot(&a.session, node) {
+            return Err(AppError::Forbidden("permit session boot mismatch".into()));
+        }
+        let launch_blocked =
+            a.revoked || a.stopped || a.cancellation_id.is_some() || a.retention_released;
+        if launch_blocked {
+            return Err(conflict("attempt is not launchable"));
+        }
+        if a.kind == Kind::ProfiledV1 && a.grant_id.is_none() {
+            return Err(AppError::Forbidden(
+                "permit requires an issued execution grant".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn validate_manifest(&self, a: &AuthorityView, now: u64) -> Result<()> {
+        if a.execution_deadline_ms.is_some_and(|d| now >= d) {
+            return Err(conflict("execution deadline passed"));
+        }
+        if a.launch_manifest_digest
+            .as_ref()
+            .is_some_and(|d| d != &self.manifest_digest)
+        {
+            return Err(AppError::Forbidden(
+                "launch manifest digest mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    async fn next_sequence(&self, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<u64> {
+        // The attempt row is locked by `view`, so the sequence is serialized.
+        let last: Option<(String, i64)> = sqlx::query_as(
+        "SELECT manifest_digest,sequence FROM execution_permits WHERE attempt_id=$1 ORDER BY sequence DESC LIMIT 1",
+    )
+    .bind(self.attempt_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(internal)?;
+        match &last {
+            Some((digest, _)) if digest != self.manifest_digest.as_str() => {
+                Err(conflict("permit manifest digest is pinned"))
+            }
+            Some((_, seq)) => Ok((*seq).max(0) as u64 + 1),
+            None => Ok(1),
+        }
+    }
+}
 async fn issue(
     State(s): State<AppState>,
     headers: HeaderMap,
     ApiJson(r): ApiJson<PermitRequest>,
 ) -> Result<Json<PermitIssued>> {
-    if r.span_ms == 0 || r.span_ms > MAX_PERMIT_MS {
-        return Err(bad("permit span out of range"));
-    }
-    let expires = r
-        .now_boot_ms
-        .checked_add(r.span_ms)
-        .ok_or_else(|| bad("permit window overflow"))?;
+    let expires = r.expires_at()?;
     let n = authenticate(&s, &headers, RunnerOperation::FetchExecutionMaterial).await?;
     let mut tx = s.store.pool.begin().await.map_err(internal)?;
     let a = view(&s, &mut tx, &n, r.attempt_id).await?;
-    let payload = sha(&serde_json::to_vec(&r).map_err(internal)?);
-    if let Some(old) = replay(&mut tx, n.id(), r.operation_id, &payload).await? {
+    let operation = Operation::new(
+        n.id(),
+        r.operation_id,
+        sha(&serde_json::to_vec(&r).map_err(internal)?),
+    );
+    if let Some(old) = operation.replay(&mut tx).await? {
         return Ok(Json(old));
     }
-    match &a.session {
-        SessionIdentity::Remote {
-            node_id, boot_id, ..
-        } if *node_id == n.id() && *boot_id == r.machine_boot_id => {}
-        _ => {
-            return Err(AppError::Forbidden("permit session boot mismatch".into()));
-        }
-    }
-    if a.revoked || a.stopped || a.cancellation_id.is_some() || a.retention_released {
-        return Err(conflict("attempt is not launchable"));
-    }
-    if a.kind == Kind::ProfiledV1 && a.grant_id.is_none() {
-        return Err(AppError::Forbidden(
-            "permit requires an issued execution grant".into(),
-        ));
-    }
+    r.authorize(&a, n.id())?;
     let now = crate::execution::api::now(&s);
-    if a.execution_deadline_ms.is_some_and(|d| now >= d) {
-        return Err(conflict("execution deadline passed"));
-    }
-    if a.launch_manifest_digest
-        .as_ref()
-        .is_some_and(|d| d != &r.manifest_digest)
-    {
-        return Err(AppError::Forbidden(
-            "launch manifest digest mismatch".into(),
-        ));
-    }
-    // The attempt row is locked by `view`, so the sequence is serialized.
-    let last: Option<(String, i64)> = sqlx::query_as(
-        "SELECT manifest_digest,sequence FROM execution_permits WHERE attempt_id=$1 ORDER BY sequence DESC LIMIT 1",
-    )
-    .bind(r.attempt_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(internal)?;
-    let sequence = match &last {
-        Some((digest, _)) if digest != r.manifest_digest.as_str() => {
-            return Err(conflict("permit manifest digest is pinned"));
-        }
-        Some((_, seq)) => (*seq).max(0) as u64 + 1,
-        None => 1,
-    };
+    r.validate_manifest(&a, now)?;
+    let sequence = r.next_sequence(&mut tx).await?;
     let permit = ExecutionPermit {
         session: a.session.clone(),
         manifest_digest: r.manifest_digest.clone(),
@@ -140,7 +159,7 @@ async fn issue(
         .bind(now as i64)
         .execute(&mut *tx).await.map_err(internal)?;
     let out = PermitIssued { permit_id, permit };
-    record(&mut tx, n.id(), r.operation_id, &payload, &out).await?;
+    operation.record(&mut tx, &out).await?;
     tx.commit().await.map_err(internal)?;
     Ok(Json(out))
 }
@@ -156,7 +175,7 @@ async fn effects(
     let mut ids = r.operation_ids.clone();
     ids.sort();
     ids.dedup();
-    if ids.is_empty() || ids.len() != r.operation_ids.len() || ids.len() > lc::MAX_REFS {
+    if !(1..=lc::MAX_REFS).contains(&ids.len()) || ids.len() != r.operation_ids.len() {
         return Err(bad("operation ids must be unique, non-empty and bounded"));
     }
     let n = authenticate(&s, &headers, RunnerOperation::Observe).await?;

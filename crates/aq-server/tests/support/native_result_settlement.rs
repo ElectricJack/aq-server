@@ -180,6 +180,33 @@ impl PreparedQuestion {
     }
 }
 
+fn validate_retained_tree(tree: &Value) -> Result<()> {
+    ensure!(
+        canonical(tree)?.len() <= 65536 && tree["truncated"] == false,
+        "actual retained source tree must be bounded/complete"
+    );
+    let entries = tree["entries"]
+        .as_array()
+        .context("actual retained tree entries absent")?;
+    ensure!(entries.len() <= 100, "actual retained tree entry bound");
+    let files: Vec<_> = entries
+        .iter()
+        .filter(|e| {
+            (e["path"]["encoding"] == "utf8" && e["path"]["value"] == PROOF_PATH)
+                || (e["path"]["encoding"] == "hex"
+                    && e["path"]["value"] == "6761746530342d70726f6f662e747874")
+        })
+        .collect();
+    ensure!(
+        files.len() == 1
+            && files[0]["mode"] == "100644"
+            && files[0]["type"] == "blob"
+            && files[0]["oid"] == json!({"algorithm":"sha1","hex":PROOF_BLOB}),
+        "actual retained checkpoint does not contain exact checked proof file"
+    );
+    Ok(())
+}
+
 pub struct B1Request<'a> {
     pub pool: &'a sqlx::PgPool,
     pub actor: Uuid,
@@ -315,29 +342,7 @@ pub async fn prepare_question(
             json!({"oid":source.receipt.source,"limit":100,"recursive":true}),
         )
         .await;
-    ensure!(
-        canonical(&tree)?.len() <= 65536 && tree["truncated"] == false,
-        "actual retained source tree must be bounded/complete"
-    );
-    let entries = tree["entries"]
-        .as_array()
-        .context("actual retained tree entries absent")?;
-    ensure!(entries.len() <= 100, "actual retained tree entry bound");
-    let files: Vec<_> = entries
-        .iter()
-        .filter(|e| {
-            (e["path"]["encoding"] == "utf8" && e["path"]["value"] == PROOF_PATH)
-                || (e["path"]["encoding"] == "hex"
-                    && e["path"]["value"] == "6761746530342d70726f6f662e747874")
-        })
-        .collect();
-    ensure!(
-        files.len() == 1
-            && files[0]["mode"] == "100644"
-            && files[0]["type"] == "blob"
-            && files[0]["oid"] == json!({"algorithm":"sha1","hex":PROOF_BLOB}),
-        "actual retained checkpoint does not contain exact checked proof file"
-    );
+    validate_retained_tree(&tree)?;
     let refs = ObservationRefs {
         actual_tool_output: reference(
             format!("aq.fixture-observed-result-tools/{report_id}"),
@@ -525,4 +530,49 @@ async fn settle_after_answer(
         original_task: prepared.original_task.clone(),
         checkpoint: prepared.checkpoint.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proof_entry(encoding: &str, path: &str) -> Value {
+        json!({"path":{"encoding":encoding,"value":path},"mode":"100644",
+            "type":"blob","oid":{"algorithm":"sha1","hex":PROOF_BLOB}})
+    }
+
+    #[test]
+    fn retained_tree_accepts_exact_utf8_or_hex_proof_but_never_duplicate_members() {
+        let utf8 = proof_entry("utf8", PROOF_PATH);
+        let hex = proof_entry("hex", &hex::encode(PROOF_PATH));
+        for entry in [&utf8, &hex] {
+            validate_retained_tree(&json!({"truncated":false,"entries":[entry]})).unwrap();
+        }
+        assert!(validate_retained_tree(&json!({"truncated":false,"entries":[utf8,hex]})).is_err());
+    }
+
+    #[test]
+    fn retained_tree_refuses_incomplete_or_changed_proof() {
+        let entry = proof_entry("utf8", PROOF_PATH);
+        for tree in [
+            json!({"truncated":true,"entries":[entry]}),
+            json!({"entries":[entry]}),
+            json!({"truncated":false,"entries":[]}),
+            json!({"truncated":false,"entries":vec![entry.clone();101]}),
+        ] {
+            assert!(validate_retained_tree(&tree).is_err());
+        }
+        for (key, value) in [
+            ("mode", json!("100755")),
+            ("type", json!("tree")),
+            ("oid", json!({"algorithm":"sha1","hex":"0".repeat(40)})),
+            ("path", json!({"encoding":"utf8","value":"other.txt"})),
+        ] {
+            let mut changed = entry.clone();
+            changed[key] = value;
+            assert!(
+                validate_retained_tree(&json!({"truncated":false,"entries":[changed]})).is_err()
+            );
+        }
+    }
 }

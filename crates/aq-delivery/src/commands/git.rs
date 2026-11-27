@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 /// The prefix a task branch lives under, in central aq-git and on the forge.
 pub const TASK_BRANCH_PREFIX: &str = "refs/heads/aq/";
+/// Spec 0017 §6.2: the namespace of the attempts' try refs, never published.
+pub const TRY_PREFIX: &str = "refs/heads/aq-try/";
 
 /// A commit retained under a handle by `repo.retain_ref`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +54,8 @@ pub struct GitFailure {
     pub message: String,
     /// The same operation may be sent again (aq-git said so, or no answer).
     pub transient: bool,
+    /// aq-git's `details`, such as the operation that holds a destination.
+    pub details: Value,
 }
 impl GitFailure {
     pub(crate) fn transport() -> Self {
@@ -59,6 +63,7 @@ impl GitFailure {
             code: "transport".into(),
             message: "aq-git did not answer".into(),
             transient: true,
+            details: Value::Null,
         }
     }
     fn protocol() -> Self {
@@ -66,6 +71,7 @@ impl GitFailure {
             code: "protocol".into(),
             message: "invalid or incompatible aq-git response".into(),
             transient: false,
+            details: Value::Null,
         }
     }
 }
@@ -93,6 +99,15 @@ pub trait GitPort: Send + Sync {
     /// Deletes `reference` on the remote and in the central pool (`ref.delete`).
     /// The lease holds even when one side is already absent.
     async fn delete_ref(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure>;
+    /// Deletes `reference` in the central pool only, under the lease
+    /// `expected_head`, for when the remote branch moved past it by a refresh.
+    async fn delete_central_ref(
         &self,
         operation: Uuid,
         repo: &GitTarget,
@@ -129,8 +144,7 @@ impl SocketGit {
 
     async fn call(
         &self,
-        operation: Uuid,
-        name: &str,
+        (operation, name): (Uuid, &str),
         repo: &GitTarget,
         params: Value,
     ) -> Result<Value, GitFailure> {
@@ -168,6 +182,7 @@ impl SocketGit {
                     code: text(&v["error"]["code"]),
                     message: text(&v["error"]["message"]),
                     transient: v["error"]["retry"] == "safe_same_operation",
+                    details: v["error"]["details"].clone(),
                 })
             }
             _ => Err(GitFailure::protocol()),
@@ -184,14 +199,39 @@ impl SocketGit {
         reference: &str,
     ) -> Result<Option<String>, GitFailure> {
         let params = json!({"ref": reference});
-        let result = self.call(Uuid::new_v4(), "ref.show", repo, params).await?;
+        let result = self
+            .call((Uuid::new_v4(), "ref.show"), repo, params)
+            .await?;
         let oid = &result["oid"];
-        if result["ref"] != reference || !(oid.is_null() || oid["algorithm"] == "sha1") {
+        let typed = oid.is_null() || oid["algorithm"] == "sha1";
+        if result["ref"] != reference || !typed {
             return Err(GitFailure::protocol());
         }
         match oid["hex"].as_str() {
             None if oid.is_null() => Ok(None),
             Some(hex) if object_id(hex) => Ok(Some(hex.to_owned())),
+            _ => Err(GitFailure::protocol()),
+        }
+    }
+
+    /// Spec 0017 §6.2: deletes an attempt's try ref (`refs/heads/aq-try/…`)
+    /// from the central repository only (`ref.delete` with `remote: false`);
+    /// an absent ref is already deleted. Never touches GitHub.
+    pub async fn delete_try_ref(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<RefDeletion, GitFailure> {
+        if !reference.starts_with(TRY_PREFIX) {
+            return Err(GitFailure::protocol());
+        }
+        let params = json!({"ref": reference, "remote": false, "expected_old": null});
+        let result = self
+            .call((Uuid::new_v4(), "ref.delete"), repo, params)
+            .await?;
+        match result["outcome"].as_str() {
+            Some("deleted") => Ok(RefDeletion::Deleted),
+            Some("already_absent") => Ok(RefDeletion::AlreadyAbsent),
             _ => Err(GitFailure::protocol()),
         }
     }
@@ -212,9 +252,50 @@ fn task_ref(reference: &str) -> Result<&str, GitFailure> {
         code: "invalid_ref".into(),
         message: format!("only refs under {TASK_BRANCH_PREFIX} may be published or deleted"),
         transient: false,
+        details: Value::Null,
     })
 }
 
+impl RefPublication {
+    fn from_reply(
+        result: &Value,
+        reference: &str,
+        old: &Value,
+        expected_source: Option<&str>,
+    ) -> Result<Self, GitFailure> {
+        let head = match result["outcome"].as_str() {
+            Some("applied") if result["target"] == reference && &result["old"] == old => {
+                sha1_hex(&result["new"])?
+            }
+            Some("already_present") => sha1_hex(&result["observed_target"])?,
+            Some("rejected") if result["reason"] == "target_moved" => {
+                let observed = sha1_hex(&result["observed_target"]).ok();
+                match observed {
+                    Some(head) if expected_source == Some(head.as_str()) => head,
+                    _ => return Ok(RefPublication::Moved),
+                }
+            }
+            Some("rejected") => {
+                return Err(GitFailure {
+                    code: "rejected".into(),
+                    message: result["reason"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(256)
+                        .collect(),
+                    transient: false,
+                    details: Value::Null,
+                });
+            }
+            _ => return Err(GitFailure::protocol()),
+        };
+        if expected_source.is_some_and(|expected| head != expected) {
+            return Err(GitFailure::protocol());
+        }
+        Ok(RefPublication::Published { head })
+    }
+}
 #[async_trait::async_trait]
 impl GitPort for SocketGit {
     async fn retain_ref(
@@ -228,12 +309,12 @@ impl GitPort for SocketGit {
                 code: "invalid_ref".into(),
                 message: "not a full branch ref".into(),
                 transient: false,
+                details: Value::Null,
             });
         }
         let result = self
             .call(
-                operation,
-                "repo.retain_ref",
+                (operation, "repo.retain_ref"),
                 repo,
                 json!({"ref": reference}),
             )
@@ -269,40 +350,31 @@ impl GitPort for SocketGit {
         if let Some(source) = expected_source {
             params["expected_source"] = sha1(source)?;
         }
-        let result = match self.call(operation, "publish", repo, params).await {
-            Ok(result) => result,
-            Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
-            Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
-                return Ok(RefPublication::Moved);
+        let mut released = false;
+        let result = loop {
+            match self
+                .call((operation, "publish"), repo, params.clone())
+                .await
+            {
+                Ok(result) => break result,
+                Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
+                Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
+                    return Ok(RefPublication::Moved);
+                }
+                // The same operation, never dispatched, goes on once the hold is released.
+                Err(e)
+                    if e.code == "operation_indeterminate"
+                        && !released
+                        && self
+                            .release_destination(operation, repo, reference, &e.details)
+                            .await =>
+                {
+                    released = true;
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         };
-        let head = match result["outcome"].as_str() {
-            Some("applied") if result["target"] == reference && result["old"] == old => {
-                sha1_hex(&result["new"])?
-            }
-            Some("already_present") => sha1_hex(&result["observed_target"])?,
-            Some("rejected") if result["reason"] == "target_moved" => {
-                return Ok(RefPublication::Moved);
-            }
-            Some("rejected") => {
-                return Err(GitFailure {
-                    code: "rejected".into(),
-                    message: result["reason"]
-                        .as_str()
-                        .unwrap_or("")
-                        .chars()
-                        .take(256)
-                        .collect(),
-                    transient: false,
-                });
-            }
-            _ => return Err(GitFailure::protocol()),
-        };
-        if expected_source.is_some_and(|expected| head != expected) {
-            return Err(GitFailure::protocol());
-        }
-        Ok(RefPublication::Published { head })
+        RefPublication::from_reply(&result, reference, &old, expected_source)
     }
 
     async fn delete_ref(
@@ -311,6 +383,91 @@ impl GitPort for SocketGit {
         repo: &GitTarget,
         reference: &str,
         expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure> {
+        self.delete((operation, repo), reference, expected_head, true)
+            .await
+    }
+    async fn delete_central_ref(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure> {
+        self.delete((operation, repo), reference, expected_head, false)
+            .await
+    }
+}
+impl SocketGit {
+    /// aq-git §10.3: an earlier dispatched publish whose outcome aq-git never
+    /// learned holds `reference`. Observe it under a new operation ID
+    /// (`operation.reconcile`, which settles it when its push landed). When the
+    /// remote is still at that publication's own lease, its push had no effect
+    /// and a new publication is permitted (`operation.resolve`). aq-git runs one
+    /// mutation per repository at a time and never redispatches a publish, so no
+    /// publisher of the held operation is running. `true` once the hold is gone.
+    async fn release_destination(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        held: &Value,
+    ) -> bool {
+        let Some(blocking) = held["blocking_operation_id"]
+            .as_str()
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .filter(|id| *id != operation && held["target"] == reference)
+        else {
+            return false;
+        };
+        let show = json!({"target_operation_id": blocking});
+        let Ok(shown) = self
+            .call((Uuid::new_v4(), "operation.show"), repo, show)
+            .await
+        else {
+            return false;
+        };
+        let (Some(generation), Some(lease)) = (
+            shown["generation"].as_u64(),
+            shown["metadata"]["expected_old"]
+                .as_str()
+                .filter(|o| object_id(o)),
+        ) else {
+            return false;
+        };
+        let mut target =
+            json!({"target_operation_id": blocking, "expected_generation": generation});
+        let Ok(observed) = self
+            .call(
+                (Uuid::new_v4(), "operation.reconcile"),
+                repo,
+                target.clone(),
+            )
+            .await
+        else {
+            return false;
+        };
+        if observed["resolution"].is_object() {
+            return true;
+        }
+        if observed["outcome"] != "indeterminate" || observed["observed_target"]["hex"] != lease {
+            return false;
+        }
+        target["disposition"] = json!("permit_new_operation");
+        target["reason"] = json!("the remote branch is still at the held publication's lease");
+        target["old_publishers_stopped"] = json!(true);
+        target["evidence"] = json!({"lease": lease, "reconciled": observed});
+        self.call((Uuid::new_v4(), "operation.resolve"), repo, target)
+            .await
+            .is_ok_and(|resolved| resolved["resolution"].is_object())
+    }
+
+    async fn delete(
+        &self,
+        (operation, repo): (Uuid, &GitTarget),
+        reference: &str,
+        expected_head: Option<&str>,
+        remote: bool,
     ) -> Result<RefDeletion, GitFailure> {
         let reference = task_ref(reference)?;
         let lease = expected_head
@@ -323,10 +480,9 @@ impl GitPort for SocketGit {
             .transpose()?;
         let result = self
             .call(
-                operation,
-                "ref.delete",
+                (operation, "ref.delete"),
                 repo,
-                json!({"ref": reference, "remote": true, "expected_old": lease}),
+                json!({"ref": reference, "remote": remote, "expected_old": lease}),
             )
             .await?;
         match result["outcome"].as_str() {

@@ -65,9 +65,7 @@ async fn actual_qualified_private_owner_records_provisionability_and_exact_repla
 async fn compatible_revisions_preserve_epoch_but_new_legacy_and_restore_create_barriers() {
     let c = setup().await;
     record(&c, &c.request).await;
-    let mut next = c.request.clone();
-    next.operation_id = Uuid::new_v4();
-    next.sequence += 1;
+    let mut next = next_inventory(&c.request);
     record(&c, &next).await;
     assert_eq!(epoch(&c).await, (1, "scoped_v1".into(), 2));
     let legacy = json!({"operation_id":Uuid::new_v4(),"boot_id":c.request.identity.boot_id,"sequence":4,"ttl_ms":30_000,"qualifications":c.request.qualifications,"credentials":[]});
@@ -158,6 +156,65 @@ async fn empty_inventory_derives_only_actual_authorized_backing_and_never_instal
     );
     assert_eq!(epoch(&c).await, (1, "scoped_v1".into(), 1));
 }
+#[tokio::test]
+async fn only_qualified_docker_runtime_offers_docker_only_credentials() {
+    let mut c = setup().await;
+    let mut config = (*c.c.env.env.state.config).clone();
+    let mut registry = config.intelligence.as_ref().unwrap().config.clone();
+    registry.revision += 1;
+    registry.credentials[0].allowed_backends = vec![aq_selection::BackendKind::DockerLocal];
+    config.intelligence = Some(std::sync::Arc::new(registry.load().unwrap()));
+    c.c.env.env.state.config = std::sync::Arc::new(config);
+    let app = aq_server::build_admin_router(c.c.env.env.state.clone());
+    assert_eq!(
+        common::selection::call(
+            &app,
+            "/api/intelligence/register",
+            Some(json!({})),
+            "owner@localhost",
+        )
+        .await
+        .0,
+        200
+    );
+    c.request.provisionable_only.clear();
+
+    for (sequence, backend, expected) in [
+        (2, None, 0),
+        (3, Some(aq_selection::BackendKind::Boat), 0),
+        (4, Some(aq_selection::BackendKind::DockerLocal), 1),
+    ] {
+        let mut config = (*c.c.env.env.state.config).clone();
+        let mut profile = (**config.profiled_execution.as_ref().unwrap()).clone();
+        profile.qualified_runtimes[0].backend_kind = backend;
+        profile.revision += 1;
+        config.profiled_execution = Some(std::sync::Arc::new(profile));
+        c.c.env.env.state.config = std::sync::Arc::new(config);
+        policies::install(&c.c.env.env.state).await.unwrap();
+        c.request.sequence = sequence;
+        c.request.operation_id = Uuid::new_v4();
+        record(&c, &c.request).await;
+
+        let snapshot: aq_selection::CapabilitySnapshot =
+            sqlx::query_scalar::<_, sqlx::types::Json<aq_selection::CapabilitySnapshot>>(
+                "SELECT snapshot FROM intelligence_node_snapshots WHERE node_id=$1",
+            )
+            .bind(c.request.identity.node_id)
+            .fetch_one(&c.c.env.env.pool)
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(snapshot.backend_kind, backend);
+        let restricted_profile = &c.c.env.input.credentials[0].profile;
+        let restricted = snapshot
+            .credential_bindings
+            .iter()
+            .filter(|b| &b.credential_profile == restricted_profile)
+            .count();
+        assert_eq!(restricted, expected);
+    }
+}
+
 #[tokio::test]
 async fn qualification_change_then_restore_retains_barrier_and_exact_retry_cannot_reset_it() {
     let c = setup().await;
@@ -381,9 +438,7 @@ async fn snapshot_row_lock_timeout_is_retryable_not_internal() {
         .execute(&mut *holder)
         .await
         .unwrap();
-    let mut next = c.request.clone();
-    next.operation_id = Uuid::new_v4();
-    next.sequence += 1;
+    let next = next_inventory(&c.request);
     let error = inventory::record(&c.c.env.env.state, &auth(&c).await, &next)
         .await
         .unwrap_err();
@@ -423,9 +478,9 @@ async fn hold(c: &Case, sql: &str, id: Uuid) -> sqlx::Transaction<'static, sqlx:
 const NODE_LOCK: &str = "SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE";
 
 /// M1/M6: a lock timeout on a worker endpoint is a retryable 503 with
-/// `Retry-After`, never a 500. While another transaction holds the node row,
-/// inventory-v2's 150 ms node lock times out (55P03); once it is released the
-/// same request records.
+/// `Retry-After`, never a 500. While a revocation's drain holds the node row
+/// FOR UPDATE, inventory-v2's credential check times out (55P03,
+/// `reserved_lock_timeout_ms`); once it is released the same request records.
 #[tokio::test]
 async fn inventory_v2_node_lock_timeout_is_a_retryable_503() {
     let c = setup().await;
@@ -443,21 +498,7 @@ async fn inventory_v2_node_lock_timeout_is_a_retryable_503() {
         .unwrap();
 }
 
-/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
-/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
-/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
-/// kept it while it waited on the attempt row, so inventory-v2's node lock
-/// timed out. Here a worker write holds the attempt row while the read loops.
-/// A locking reader (the old read's loader) still fails the write; the Swarm
-/// read takes no row lock, so every write records and every read answers.
-#[tokio::test]
-async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
-    let mut c = setup().await;
-    let (status, _, body) = post_inventory(&c, &c.request).await;
-    assert_eq!(status, 200, "{body}");
-    c.c.request.inventory_sequence = c.request.sequence;
-    // Poll may return an empty page after 750 ms while its assembly continues
-    // in the background. Wait for the actual offer before testing row locks.
+async fn wait_for_offer(c: &Case) {
     let mut last_body = Value::Null;
     let offered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -481,6 +522,25 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
         offered.is_ok(),
         "initial poll did not publish the fixture attempt: {last_body}"
     );
+}
+
+/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
+/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
+/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
+/// kept it while it waited on the attempt row, so inventory-v2's node lock
+/// timed out. Here a worker write holds the attempt row while the read loops.
+/// Since the loader's node check became FOR KEY SHARE (0185) even a locking
+/// reader no longer fails the write; the Swarm read takes no row lock, so
+/// every write records and every read answers.
+#[tokio::test]
+async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
+    let mut c = setup().await;
+    let (status, _, body) = post_inventory(&c, &c.request).await;
+    assert_eq!(status, 200, "{body}");
+    c.c.request.inventory_sequence = c.request.sequence;
+    // Poll may return an empty page after 750 ms while its assembly continues
+    // in the background. Wait for the actual offer before testing row locks.
+    wait_for_offer(&c).await;
     let (state, pool) = (c.c.env.env.state.clone(), c.c.env.env.pool.clone());
     let node = c.request.identity.node_id;
     let attempt: Uuid = sqlx::query_scalar(
@@ -501,7 +561,7 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
     )
     .await;
 
-    // Failure case: a reader that locks the node row first (the old read).
+    // A reader that locks through the authority loader (the old read).
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let locking = tokio::spawn({
         let (state, pool, stop) = (state.clone(), pool.clone(), stop.clone());
@@ -525,8 +585,8 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let mut request = next_inventory(&c.request);
-    let (status, after, body) = post_inventory(&c, &request).await;
-    assert_eq!((status, after.as_deref()), (503, Some("1")), "{body}");
+    let (status, _, body) = post_inventory(&c, &request).await;
+    assert_eq!(status, 200, "{body}");
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     locking.await.unwrap();
 
@@ -561,4 +621,106 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
         "the read looped while the writes ran: {reads:?}"
     );
     assert!(reads.iter().all(|r| *r == (200, json!(0))), "{reads:?}");
+}
+
+/// The credential check is FOR KEY SHARE: while a worker transaction holds it,
+/// the node's inventory records and its heartbeat updates `last_seen_at`
+/// without waiting. The heartbeat's row lock is taken NOWAIT first, so a
+/// conflict fails the test at once instead of waiting.
+#[tokio::test]
+async fn inventory_and_heartbeat_complete_while_a_worker_transaction_holds_the_check() {
+    let c = setup().await;
+    record(&c, &c.request).await;
+    let (state, pool) = (&c.c.env.env.state, &c.c.env.env.pool);
+    let node = c.request.identity.node_id;
+    let mut worker = pool.begin().await.unwrap();
+    worker_api::lock_current_node(&mut worker, &auth(&c).await)
+        .await
+        .unwrap();
+    let mut probe = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR NO KEY UPDATE NOWAIT")
+        .bind(node)
+        .execute(&mut *probe)
+        .await
+        .expect("a heartbeat's row lock is compatible with the credential check");
+    probe.rollback().await.unwrap();
+    let heartbeat = json!({"worker_version": "0.1.0", "protocol_version": 1});
+    let response = common::native_offer::post(
+        state,
+        &c.c.env.env.credential,
+        "/v1/worker/heartbeat",
+        serde_json::to_vec(&heartbeat).unwrap(),
+    )
+    .await;
+    assert_eq!(response.status().as_u16(), 200);
+    let next = next_inventory(&c.request);
+    let (status, _, body) = post_inventory(&c, &next).await;
+    assert_eq!(status, 200, "{body}");
+    worker.commit().await.unwrap();
+}
+
+/// The sequence fence is the snapshot write itself: an inventory older than
+/// the recorded one is `changed` (409), and the newer snapshot stays.
+#[tokio::test]
+async fn an_out_of_order_inventory_sequence_is_changed() {
+    let c = setup().await;
+    record(&c, &c.request).await;
+    let newer = next_inventory(&next_inventory(&c.request));
+    record(&c, &newer).await;
+    let mut older = next_inventory(&c.request);
+    older.operation_id = Uuid::new_v4();
+    let error = inventory::record(&c.c.env.env.state, &auth(&c).await, &older)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), 409, "{error:?}");
+    let sequence: i64 =
+        sqlx::query_scalar("SELECT sequence FROM intelligence_node_snapshots WHERE node_id=$1")
+            .bind(c.request.identity.node_id)
+            .fetch_one(&c.c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(sequence as u64, newer.sequence);
+}
+
+/// Revocation commits without waiting for an open credential check (a stream
+/// of checks cannot hold it off), refuses every later check, and its drain
+/// waits for the open one: the drain's FOR UPDATE conflicts with it (55P03
+/// NOWAIT) until that transaction ends, and then completes.
+#[tokio::test]
+async fn revoke_fences_an_open_credential_check() {
+    let c = setup().await;
+    let (state, pool) = (&c.c.env.env.state, &c.c.env.env.pool);
+    let node = c.request.identity.node_id;
+    // Authenticated before the revocation, as a request already in flight.
+    let authenticated = auth(&c).await;
+    let mut worker = pool.begin().await.unwrap();
+    worker_api::lock_current_node(&mut worker, &authenticated)
+        .await
+        .unwrap();
+    let now = (state.clock)();
+    let mut revoke = pool.begin().await.unwrap();
+    let revoked = aq_machine_control::revoke_machine(&mut revoke, &format!("node:{node}"), now)
+        .await
+        .unwrap();
+    assert_eq!(revoked, [node]);
+    revoke.commit().await.unwrap();
+    let mut late = pool.begin().await.unwrap();
+    let refused = worker_api::lock_current_node(&mut late, &authenticated).await;
+    assert!(
+        matches!(refused, Err(aq_server::error::AppError::CredentialRevoked)),
+        "{refused:?}"
+    );
+    late.rollback().await.unwrap();
+    let mut drain = pool.begin().await.unwrap();
+    let blocked = sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE NOWAIT")
+        .bind(node)
+        .execute(&mut *drain)
+        .await
+        .unwrap_err();
+    assert!(aq_machine_control::is_lock_timeout(&blocked), "{blocked:?}");
+    drain.rollback().await.unwrap();
+    worker.commit().await.unwrap();
+    aq_machine_control::drain_revoked(pool, &[node], now)
+        .await
+        .unwrap();
 }

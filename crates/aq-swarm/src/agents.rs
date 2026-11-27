@@ -84,31 +84,10 @@ fn phase(row: &sqlx::postgres::PgRow, now_ms: u64) -> AgentPhase {
 
 /// Every attempt holding a slot on `nodes`: two statements for the whole page.
 pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<Held> {
-    let time = |v: Option<u64>| {
-        v.map(crate::timestamp)
-            .transpose()
-            .map_err(|_| sqlx::Error::Protocol("time".into()))
-    };
     let modern = aq_machine_control::slots::available(conn)
         .await
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
-    let query = if modern {
-        // A stopped attempt can still hold its task while the slot takes new work.
-        SQL.replace("SELECT e.attempt_id,", "SELECT x.slot, e.attempt_id,")
-            .replace(
-                "LEFT JOIN profiled_authority_hot h",
-                "LEFT JOIN execution_attempt_slots x ON x.attempt_id=e.attempt_id LEFT JOIN profiled_authority_hot h",
-            )
-            .replace(
-                "WHERE e.holds_task",
-                "WHERE e.holds_task AND native_attempt_holds_compute(e.attempt_id,e.node_id)",
-            )
-    } else {
-        SQL.replace(
-            "SELECT e.attempt_id,",
-            "SELECT NULL::INTEGER AS slot, e.attempt_id,",
-        )
-    };
+    let query = held_query(modern);
     let mut rows = sqlx::query(&query)
         .bind(q.nodes)
         .bind(q.project.map(|p| p.to_string()))
@@ -131,41 +110,58 @@ pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<H
     };
     for row in &rows {
         let attempt: Uuid = row.get("attempt_id");
-        let task: Uuid = row.get("task_id");
-        let phase = phase(row, q.now_ms);
-        held.running += usize::from(phase == AgentPhase::Running);
-        let project = (row.get::<Option<String>, _>("project_id"))
-            .and_then(|p| p.parse::<Uuid>().ok())
-            .unwrap_or_default();
-        let name = row.get::<Option<String>, _>("project_name");
+        let agent = q.agent(row, attempt, summaries.remove(&attempt))?;
+        held.running += usize::from(agent.phase == Some(AgentPhase::Running));
+        held.agents.push((row.get("node_id"), agent));
+    }
+    Ok(held)
+}
+fn held_query(modern: bool) -> String {
+    if modern {
+        // A stopped attempt can still hold its task while the slot takes new work.
+        SQL.replace("SELECT e.attempt_id,", "SELECT x.slot, e.attempt_id,")
+            .replace(
+                "LEFT JOIN profiled_authority_hot h",
+                "LEFT JOIN execution_attempt_slots x ON x.attempt_id=e.attempt_id LEFT JOIN profiled_authority_hot h",
+            )
+            .replace(
+                "WHERE e.holds_task",
+                "WHERE e.holds_task AND NOT EXISTS(SELECT 1 FROM execution_attempt_compute c WHERE c.attempt_id=e.attempt_id AND c.released)",
+            )
+    } else {
+        SQL.replace(
+            "SELECT e.attempt_id,",
+            "SELECT NULL::INTEGER AS slot, e.attempt_id,",
+        )
+    }
+}
+impl Query<'_> {
+    fn agent(
+        &self,
+        row: &sqlx::postgres::PgRow,
+        attempt: Uuid,
+        summary: Option<aq_role_settings::attempts::RanWith>,
+    ) -> sqlx::Result<SwarmAgent> {
+        let time = |v: Option<u64>| {
+            v.map(crate::timestamp)
+                .transpose()
+                .map_err(|_| sqlx::Error::Protocol("time".into()))
+        };
+        let phase = phase(row, self.now_ms);
         let model: Option<String> = row.get("model");
-        let revision = row.get::<Option<String>, _>("task_revision").filter(|r| {
-            r.parse::<u128>()
-                .is_ok_and(|n| n > 0 && n.to_string() == *r)
-        });
         // A terminal is shown only when this server's runtime registered it.
         let shown = !row.get::<bool, _>("revoked")
-            && q.runtime.is_some()
-            && row.get::<Option<Uuid>, _>("runtime_id") == q.runtime;
+            && self.runtime.is_some()
+            && row.get::<Option<Uuid>, _>("runtime_id") == self.runtime;
         let terminal = row.get::<Option<Uuid>, _>("terminal_id").filter(|_| shown);
         let held_since = ms(row, "held_ms");
         let started = ms(row, "started_ms").filter(|_| phase != AgentPhase::Starting);
-        let agent = SwarmAgent {
+        Ok(SwarmAgent {
             slot: row.get::<Option<i32>, _>("slot").map(|v| v as u32),
             session_id: row.get("session_id"),
             attempt_id: attempt,
-            task: Some(TitledRef {
-                kind: "task".into(),
-                id: task,
-                revision: revision.map(|r| Revision(r).into()),
-                title: task.to_string(),
-            }),
-            project: ProjectRef {
-                id: project,
-                label: name
-                    .filter(|s| !s.is_empty() && s.len() <= 512)
-                    .unwrap_or_else(|| project.to_string()),
-            },
+            task: Some(task_ref(row)),
+            project: project_ref(row),
             provider: row.get("provider"),
             intelligence_class: model.as_deref().map(intelligence_class),
             model,
@@ -180,7 +176,7 @@ pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<H
             started_at: time(started.or(held_since))?,
             phase: Some(phase),
             held_since: time(held_since)?,
-            ran_with: summaries.remove(&attempt).map(|r| RanWith {
+            ran_with: summary.map(|r| RanWith {
                 role: r.role,
                 level: r.level,
                 provider: r.provider,
@@ -191,12 +187,35 @@ pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<H
                 snapshot_digest: r.snapshot_digest,
             }),
             last_output_at: time(ms(row, "last_output_at_ms").filter(|_| shown))?,
-        };
-        held.agents.push((row.get("node_id"), agent));
+        })
     }
-    Ok(held)
 }
 
+fn task_ref(row: &sqlx::postgres::PgRow) -> TitledRef {
+    let task: Uuid = row.get("task_id");
+    let revision = row.get::<Option<String>, _>("task_revision").filter(|r| {
+        r.parse::<u128>()
+            .is_ok_and(|n| n > 0 && n.to_string() == *r)
+    });
+    TitledRef {
+        kind: "task".into(),
+        id: task,
+        revision: revision.map(|r| Revision(r).into()),
+        title: task.to_string(),
+    }
+}
+fn project_ref(row: &sqlx::postgres::PgRow) -> ProjectRef {
+    let project = (row.get::<Option<String>, _>("project_id"))
+        .and_then(|p| p.parse::<Uuid>().ok())
+        .unwrap_or_default();
+    let name = row.get::<Option<String>, _>("project_name");
+    ProjectRef {
+        id: project,
+        label: name
+            .filter(|s| !s.is_empty() && s.len() <= 512)
+            .unwrap_or_else(|| project.to_string()),
+    }
+}
 /// How long a title read from the graph is served, and how long a task whose
 /// title could not be read is left alone.
 const TITLE_TTL: Duration = Duration::from_secs(300);

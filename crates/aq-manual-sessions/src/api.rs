@@ -55,10 +55,7 @@ async fn spec(
         .get(&project)
         .ok_or_else(|| conflict("Worker source setup is incomplete"))?;
     let b = binding(s, project).await?;
-    if let Some(ids) = b["allowed_node_ids"].as_array()
-        && !ids.is_empty()
-        && !ids.iter().any(|id| id.as_str() == Some(&node.to_string()))
-    {
+    if !assigned(&b["allowed_node_ids"], node) {
         return Err(conflict("This worker is not assigned to the project"));
     }
     if b["allowed_worker_groups"]
@@ -82,6 +79,11 @@ async fn spec(
         json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":choice["provider"],"model":choice["model"],"reasoning":choice["reasoning"],"harness":choice["harness"],"intelligence_profile":{"profile_id":choice["profile_id"],"candidate_id":choice["candidate_id"]},"profile_name":choice["name"],"snapshot_digest":choice["snapshot_digest"],"intelligence_class":choice["profile_id"]}),
     )
 }
+fn assigned(ids: &Value, node: Uuid) -> bool {
+    let node = node.to_string();
+    ids.as_array()
+        .is_none_or(|ids| ids.is_empty() || ids.iter().any(|id| id.as_str() == Some(node.as_str())))
+}
 async fn list(
     State(s): State<Service>,
     headers: HeaderMap,
@@ -90,21 +92,7 @@ async fn list(
     (s.owner)(headers).await?;
     let rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(m)-'actor_id'-'stopped_at_ms' FROM manual_agent_sessions m WHERE ($1::uuid IS NULL OR project_id=$1) AND (stopped_at_ms IS NULL OR stopped_at_ms>$2) ORDER BY created_at_ms DESC,id LIMIT 256").bind(q.project_id).bind(now()-86400000).fetch_all(&s.pool).await?;
     let reports:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(r) FROM manual_worker_reports r JOIN nodes n ON n.id=r.node_id WHERE n.revoked_at IS NULL").fetch_all(&s.pool).await?;
-    let mut workers = Vec::new();
-    let mut conn = s.pool.acquire().await?;
-    for mut report in reports {
-        let node = serde_json::from_value(report["node_id"].clone())
-            .map_err(|_| bad("Invalid worker report"))?;
-        let limits = aq_machine_control::management::capacity(&mut conn, node)
-            .await
-            .map_err(management::storage)?;
-        if !limits.removed {
-            report["max_slots"] =
-                json!(limits.maximum(report["max_slots"].as_u64().unwrap_or(1) as u32));
-            workers.push(report);
-        }
-    }
-    drop(conn);
+    let workers = available_workers(&s.pool, reports).await?;
     let slots: Vec<Value> = sqlx::query_scalar(
         "SELECT to_jsonb(p) FROM manual_project_slots p WHERE $1::uuid IS NULL OR project_id=$1",
     )
@@ -128,6 +116,23 @@ struct Launch {
     operation_id: Uuid,
     #[serde(default)]
     intelligence_profile: Option<intelligence::Selection>,
+}
+async fn available_workers(pool: &PgPool, reports: Vec<Value>) -> Result<Vec<Value>> {
+    let mut workers = Vec::new();
+    let mut conn = pool.acquire().await?;
+    for mut report in reports {
+        let node = serde_json::from_value(report["node_id"].clone())
+            .map_err(|_| bad("Invalid worker report"))?;
+        let limits = aq_machine_control::management::capacity(&mut conn, node)
+            .await
+            .map_err(management::storage)?;
+        if !limits.removed {
+            report["max_slots"] =
+                json!(limits.maximum(report["max_slots"].as_u64().unwrap_or(1) as u32));
+            workers.push(report);
+        }
+    }
+    Ok(workers)
 }
 fn same_launch(
     old: &Session,
@@ -169,29 +174,39 @@ async fn start(
             serde_json::to_value(selected).map_err(|_| bad("Invalid profile choice"))?;
     }
     let mut tx = s.pool.begin().await?;
-    aq_machine_control::management::lock(&mut tx)
+    reserve_launch(&mut tx, node, &spec).await?;
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'pending','Waiting for a slot',$6,$6) ON CONFLICT(id) DO NOTHING").bind(op.operation_id).bind(actor).bind(node).bind(project).bind(&spec).bind(now()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    let saved = session(&s, op.operation_id).await?;
+    if !same_launch(&saved, node, project, &op.intelligence_profile) {
+        return Err(conflict("Launch identity is already used"));
+    }
+    Ok(Json(saved))
+}
+async fn reserve_launch(conn: &mut sqlx::PgConnection, node: Uuid, spec: &Value) -> Result<()> {
+    aq_machine_control::allocation::lock(&mut *conn, node)
         .await
         .map_err(management::storage)?;
     sqlx::query("SELECT pg_advisory_xact_lock(107107)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     let live: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL",
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
     if live >= 256 {
         return Err(conflict(
             "There are already 256 pending or running manual agents",
         ));
     }
-    let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN manual_worker_reports r ON r.node_id=n.id WHERE n.id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2 AND r.repositories @> $3::jsonb AND r.providers @> $4::jsonb)").bind(node).bind(now()-15000).bind(json!([spec["repository_id"]])).bind(json!([spec["provider"]])).fetch_one(&mut *tx).await?;
+    let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN manual_worker_reports r ON r.node_id=n.id WHERE n.id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2 AND r.repositories @> $3::jsonb AND r.providers @> $4::jsonb)").bind(node).bind(now()-15000).bind(json!([spec["repository_id"]])).bind(json!([spec["provider"]])).fetch_one(&mut *conn).await?;
     if !available {
         return Err(conflict(
             "This worker has not reported interactive support for the project",
         ));
     }
-    if aq_machine_control::management::capacity(&mut tx, node)
+    if aq_machine_control::management::capacity(&mut *conn, node)
         .await
         .map_err(management::storage)?
         .removed
@@ -200,26 +215,20 @@ async fn start(
     }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,107))")
         .bind(node.to_string())
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM manual_agent_sessions WHERE node_id=$1 AND stopped_at_ms IS NULL",
     )
     .bind(node)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
     if count >= 32 {
         return Err(conflict(
             "This worker already has 32 pending or running sessions",
         ));
     }
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'pending','Waiting for a slot',$6,$6) ON CONFLICT(id) DO NOTHING").bind(op.operation_id).bind(actor).bind(node).bind(project).bind(&spec).bind(now()).execute(&mut *tx).await?;
-    tx.commit().await?;
-    let saved = session(&s, op.operation_id).await?;
-    if !same_launch(&saved, node, project, &op.intelligence_profile) {
-        return Err(conflict("Launch identity is already used"));
-    }
-    Ok(Json(saved))
+    Ok(())
 }
 async fn stop(
     State(s): State<Service>,
@@ -253,24 +262,15 @@ async fn slots(
     binding(&s, project).await?;
     let request = json!({"node":node,"project":project,"body":v});
     let mut tx = s.pool.begin().await?;
-    aq_machine_control::management::lock(&mut tx)
+    aq_machine_control::allocation::lock(&mut tx, node)
         .await
         .map_err(management::storage)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,107))")
         .bind(node.to_string())
         .execute(&mut *tx)
         .await?;
-    if let Some(row) = sqlx::query(
-        "SELECT actor_id,request,receipt FROM manual_agent_operations WHERE operation_id=$1",
-    )
-    .bind(v.operation_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    {
-        if row.get::<Uuid, _>("actor_id") != actor || row.get::<Value, _>("request") != request {
-            return Err(conflict("Slot operation identity is already used"));
-        }
-        return Ok(Json(row.get("receipt")));
+    if let Some(receipt) = v.prior(&mut tx, actor, &request).await? {
+        return Ok(Json(receipt));
     }
     let max:Option<i32>=sqlx::query_scalar("SELECT max_slots FROM manual_worker_reports r JOIN nodes n ON n.id=r.node_id WHERE r.node_id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2").bind(node).bind(now()-15000).fetch_optional(&mut *tx).await?;
     let limits = aq_machine_control::management::capacity(&mut tx, node)
@@ -291,4 +291,28 @@ async fn slots(
     sqlx::query("INSERT INTO manual_agent_operations(operation_id,actor_id,request,receipt) VALUES($1,$2,$3,$4)").bind(v.operation_id).bind(actor).bind(request).bind(&receipt).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(receipt))
+}
+
+impl Slots {
+    async fn prior(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        actor: Uuid,
+        request: &Value,
+    ) -> Result<Option<Value>> {
+        if let Some(row) = sqlx::query(
+            "SELECT actor_id,request,receipt FROM manual_agent_operations WHERE operation_id=$1",
+        )
+        .bind(self.operation_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        {
+            if row.get::<Uuid, _>("actor_id") != actor || row.get::<Value, _>("request") != *request
+            {
+                return Err(conflict("Slot operation identity is already used"));
+            }
+            return Ok(Some(row.get("receipt")));
+        }
+        Ok(None)
+    }
 }

@@ -36,6 +36,26 @@ struct Request {
 fn default_kind() -> String {
     "sandbox_startup_v1".into()
 }
+impl Request {
+    fn valid(&self) -> bool {
+        match (self.kind.as_str(), self.installer_sha256.as_deref()) {
+            ("sandbox_startup_v1", None) => true,
+            ("receiver_update_v1", Some(hash)) => {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }
+            _ => false,
+        }
+    }
+    fn matches(&self, row: &sqlx::postgres::PgRow, actor: Uuid, node: Uuid) -> bool {
+        row.get::<Uuid, _>("actor_id") == actor
+            && row.get::<Uuid, _>("node_id") == node
+            && row.get::<String, _>("kind") == self.kind
+            && row.get::<Option<String>, _>("installer_sha256") == self.installer_sha256
+    }
+}
 async fn request(
     State(s): State<Service>,
     headers: HeaderMap,
@@ -44,23 +64,13 @@ async fn request(
 ) -> Result<Json<Value>> {
     let actor = (s.owner)(headers).await?;
     valid_id(req.operation_id)?;
-    if !matches!(
-        req.kind.as_str(),
-        "sandbox_startup_v1" | "receiver_update_v1"
-    ) || (req.kind == "receiver_update_v1") != req.installer_sha256.is_some()
-        || req.installer_sha256.as_ref().is_some_and(|s| {
-            s.len() != 64
-                || !s
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        })
-    {
+    if !req.valid() {
         return Err(bad(
             "Choose a supported worker check or a pinned receiver update",
         ));
     }
     let mut tx = s.pool.begin().await?;
-    aq_machine_control::management::lock(&mut tx)
+    aq_machine_control::allocation::lock(&mut tx, node)
         .await
         .map_err(management::storage)?;
     super::logins::live(&mut tx, node).await?;
@@ -71,11 +81,7 @@ async fn request(
     .fetch_optional(&mut *tx)
     .await?
     {
-        if row.get::<Uuid, _>("actor_id") != actor
-            || row.get::<Uuid, _>("node_id") != node
-            || row.get::<String, _>("kind") != req.kind
-            || row.get::<Option<String>, _>("installer_sha256") != req.installer_sha256
-        {
+        if !req.matches(&row, actor, node) {
             return Err(conflict(
                 "Operation was used for a different worker request",
             ));
@@ -121,15 +127,12 @@ async fn poll(
     Json(req): Json<Poll>,
 ) -> Result<Json<Value>> {
     let node = (s.node)(headers.clone()).await?;
-    if req.version != 1
-        || req.operation_id.is_some() != req.report.is_some()
-        || req.report.as_ref().is_some_and(|v| !valid_report(v))
-    {
+    if !req.valid() {
         return Err(bad("Invalid worker diagnostic receipt"));
     }
     let mut tx = s.pool.begin().await?;
     super::logins::live(&mut tx, node).await?;
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR KEY SHARE")
         .bind(node)
         .fetch_optional(&mut *tx)
         .await?;
@@ -138,21 +141,7 @@ async fn poll(
     }
     sqlx::query("INSERT INTO worker_diagnostic_receivers(node_id,seen_at_ms,version) VALUES($1,$2,$3) ON CONFLICT(node_id) DO UPDATE SET seen_at_ms=$2,version=$3").bind(node).bind(now()).bind(req.version).execute(&mut *tx).await?;
     if let (Some(id), Some(report)) = (req.operation_id, req.report) {
-        let existing: Option<Value> = sqlx::query_scalar(
-            "SELECT result FROM worker_diagnostic_jobs WHERE id=$1 AND node_id=$2",
-        )
-        .bind(id)
-        .bind(node)
-        .fetch_optional(&mut *tx)
-        .await?
-        .flatten();
-        if existing.as_ref().is_some_and(|v| v != &report) {
-            return Err(conflict("Diagnostic receipt changed"));
-        }
-        let changed=sqlx::query("UPDATE worker_diagnostic_jobs SET status='completed',result=$3,updated_at_ms=$4 WHERE id=$1 AND node_id=$2").bind(id).bind(node).bind(report).bind(now()).execute(&mut *tx).await?;
-        if changed.rows_affected() != 1 {
-            return Err(missing());
-        }
+        save_receipt(&mut tx, node, id, report).await?;
         tx.commit().await?;
         return Ok(Json(json!({"operation_id":null})));
     }
@@ -164,4 +153,34 @@ async fn poll(
     }
     tx.commit().await?;
     Ok(Json(job.unwrap_or_else(|| json!({"operation_id":null}))))
+}
+
+impl Poll {
+    fn valid(&self) -> bool {
+        self.version == 1
+            && self.operation_id.is_some() == self.report.is_some()
+            && self.report.as_ref().is_none_or(valid_report)
+    }
+}
+async fn save_receipt(
+    conn: &mut sqlx::PgConnection,
+    node: Uuid,
+    id: Uuid,
+    report: Value,
+) -> Result<()> {
+    let existing: Option<Value> =
+        sqlx::query_scalar("SELECT result FROM worker_diagnostic_jobs WHERE id=$1 AND node_id=$2")
+            .bind(id)
+            .bind(node)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
+    if existing.as_ref().is_some_and(|v| v != &report) {
+        return Err(conflict("Diagnostic receipt changed"));
+    }
+    let changed=sqlx::query("UPDATE worker_diagnostic_jobs SET status='completed',result=$3,updated_at_ms=$4 WHERE id=$1 AND node_id=$2").bind(id).bind(node).bind(report).bind(now()).execute(&mut *conn).await?;
+    if changed.rows_affected() != 1 {
+        return Err(missing());
+    }
+    Ok(())
 }

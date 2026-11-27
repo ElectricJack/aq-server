@@ -39,99 +39,8 @@ struct Fake {
 }
 type Shared = Arc<Mutex<Fake>>;
 
-fn reply(r: &Value, outcome: Result<Value, (&str, &str)>) -> Vec<u8> {
-    let mut out = json!({"protocol_version":1,"request_id":r["request_id"]});
-    match outcome {
-        Ok(result) => {
-            out["ok"] = true.into();
-            out["result"] = result;
-        }
-        Err((code, message)) => {
-            out["ok"] = false.into();
-            out["error"] =
-                json!({"code":code,"message":message,"details":{},"retry":"refresh_inputs"});
-        }
-    }
-    let mut bytes = serde_json::to_vec(&out).unwrap();
-    bytes.push(b'\n');
-    bytes
-}
-
-fn fake_git(path: &std::path::Path, fake: Shared) -> tokio::task::JoinHandle<()> {
-    let listener = tokio::net::UnixListener::bind(path).unwrap();
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            let fake = fake.clone();
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stream);
-                let mut line = Vec::new();
-                reader.read_until(b'\n', &mut line).await.unwrap();
-                let r: Value = serde_json::from_slice(&line).unwrap();
-                let target = {
-                    let f = fake.lock().unwrap();
-                    format!("refs/heads/{}", f.branch)
-                };
-                let outcome = match r["operation"].as_str().unwrap() {
-                    "repo.register" => {
-                        assert_eq!(r["expected_binding_generation"], 0);
-                        fake.lock().unwrap().registers.push(r["params"].clone());
-                        if r["params"].get("credential_profile").is_some() {
-                            Err((
-                                "unsupported_feature",
-                                "Named credential profiles are not enabled",
-                            ))
-                        } else {
-                            Ok(
-                                json!({"repository_id":r["repository_id"],"binding_generation":1,"mode":"central","object_format":"sha1","allowed_refs":[target],"allowed_targets":[target]}),
-                            )
-                        }
-                    }
-                    "repo.sync" => {
-                        fake.lock().unwrap().syncs.push(r["params"].clone());
-                        Ok(
-                            json!({"observation_id":"obs-1","binding_generation":1,"covered_refs":[target],"refs":{target.clone():HEAD},"availability":"available"}),
-                        )
-                    }
-                    "tree" => {
-                        assert_eq!(r["params"]["oid"], json!({"algorithm":"sha1","hex":HEAD}));
-                        Ok(json!({"entries":fake.lock().unwrap().tree,"truncated":false}))
-                    }
-                    "repo.show" => {
-                        let f = fake.lock().unwrap();
-                        if r["expected_binding_generation"] != f.generation {
-                            Err(("binding_conflict", "stale"))
-                        } else {
-                            let mut shown = json!({"repository_id":r["repository_id"],"binding_generation":f.generation,"mode":"central","object_format":"sha1","identity":"historical-seed","allowed_refs":[target],"allowed_targets":[target],"remote_url":f.remote});
-                            shown
-                                .as_object_mut()
-                                .unwrap()
-                                .extend(f.show_overrides.clone());
-                            Ok(shown)
-                        }
-                    }
-                    "repo.observation" => {
-                        let f = fake.lock().unwrap();
-                        if r["expected_binding_generation"] != f.generation {
-                            Err(("binding_conflict", "stale"))
-                        } else {
-                            assert_eq!(r["params"]["refs"], json!([target]));
-                            let head = (!f.absent_ref).then_some(HEAD);
-                            Ok(
-                                json!({"observation_id":Uuid::new_v4(),"binding_generation":f.generation,
-                                "started_at_ms":1000,"completed_at_ms":2000,"availability":"available",
-                                "covered_refs":[target],"refs":{target:head},"last_refresh_error":null}),
-                            )
-                        }
-                    }
-                    other => panic!("unexpected aq-git operation {other}"),
-                };
-                let bytes = reply(&r, outcome);
-                reader.into_inner().write_all(&bytes).await.unwrap();
-            });
-        }
-    })
-}
+mod git;
+use git::fake_git;
 
 async fn repo(
     State(f): State<Shared>,
@@ -279,6 +188,7 @@ async fn onboard(o: &Onboarding, body: Value) -> (StatusCode, Value) {
     .await
 }
 
+<<<<<<< HEAD
 #[tokio::test]
 async fn onboard_github_repo_creates_binding_and_retained_base() {
     let o = onboarding().await;
@@ -432,6 +342,9 @@ async fn onboarding_resumes_after_partial_failure() {
     let (status, _) = onboard(&o, body).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+=======
+mod onboard;
+>>>>>>> refs/remotes/central/main
 
 fn adopt_request(op: Uuid) -> Value {
     json!({"operation_id":op,"project_id":Uuid::from_u128(1),"repository_id":Uuid::from_u128(2),
@@ -465,6 +378,7 @@ async fn delivery_target(
         .await
         .unwrap()
 }
+<<<<<<< HEAD
 
 #[tokio::test]
 async fn adopting_task_branch_delivery_needs_no_direct_push_to_the_default_branch() {
@@ -942,3 +856,7 @@ installation_id = 42
     );
     assert!(!answer.to_string().contains(APP_TOKEN));
 }
+=======
+mod adoption;
+mod cli;
+>>>>>>> refs/remotes/central/main

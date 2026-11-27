@@ -9,104 +9,13 @@ pub(super) fn receipt(op: &Operation, raw: &Value) -> Result<Receipt> {
         return Err(unavailable());
     }
     let payload: Value = serde_json::from_slice(&op.payload).map_err(|_| unavailable())?;
-    let expected = &payload["operations"][0];
-    let rows = raw["results"].as_array().ok_or_else(unavailable)?;
-    let operations = payload["operations"].as_array().ok_or_else(unavailable)?;
-    if rows.len() != operations.len() || !(1..=2).contains(&rows.len()) {
-        return Err(unavailable());
+    Creation {
+        task: op.id,
+        workspace: op.workspace,
+        actor: &op.service["actor"],
     }
-    if operations.len() == 2 {
-        let edge = &rows[1];
-        let expected = &operations[1];
-        if !contract::upstream_valid("Edge", edge)
-            || edge["workspace_id"] != json!(op.workspace)
-            || edge["deleted"] != false
-            || edge["version"] != 1
-            || !edge["created_at"].is_string()
-            || [
-                "id",
-                "source",
-                "target",
-                "edge_type",
-                "description",
-                "source_revision",
-                "target_revision",
-            ]
-            .iter()
-            .any(|key| edge[*key] != expected[*key])
-        {
-            return Err(unavailable());
-        }
-    }
-    let node = &rows[0];
-    if !contract::upstream_valid("Node", node)
-        || node["id"] != json!(op.id)
-        || node["workspace_id"] != json!(op.workspace)
-        || node["kind"] != "task"
-        || node["created_by"] != op.service["actor"]
-    {
-        return Err(unavailable());
-    }
-    for key in [
-        "title",
-        "body",
-        "acceptance_criteria",
-        "labels",
-        "task_state",
-        "metadata",
-    ] {
-        if node[key] != expected[key] {
-            return Err(unavailable());
-        }
-    }
-    if node["content_type"] != "note"
-        || node["verification"] != "unverified"
-        || node["deleted"] != false
-        || node["retired"] != false
-        || node["provenance"] != json!([])
-    {
-        return Err(unavailable());
-    }
-    for key in [
-        "summary",
-        "summary_of_revision",
-        "last_verified_by",
-        "last_verified_at",
-        "retirement_reason",
-        "valid_from",
-        "valid_until",
-        "review_at",
-        "successor_id",
-    ] {
-        if !node[key].is_null() {
-            return Err(unavailable());
-        }
-    }
-    for key in ["created_at", "updated_at"] {
-        if node[key].as_str().is_none_or(|s| s.len() > 64) {
-            return Err(unavailable());
-        }
-    }
-    let uuid = |v: &Value| {
-        v.as_str()
-            .and_then(|s| s.parse::<Uuid>().ok())
-            .filter(|id| !id.is_nil())
-            .ok_or_else(unavailable)
-    };
-    let revision = |k: &str| {
-        node[k]
-            .as_i64()
-            .filter(|n| *n > 0)
-            .map(|n| n.to_string())
-            .ok_or_else(unavailable)
-    };
-    Ok(Receipt {
-        workspace_id: op.workspace,
-        change_set_id: uuid(&raw["change_set_id"])?,
-        task_id: op.id,
-        version: revision("version")?,
-        content_revision: revision("content_revision")?,
-    })
+    .receipt(&payload, raw, contract::upstream_valid)
+    .ok_or_else(unavailable)
 }
 pub(super) async fn run(
     state: &AppState,
@@ -124,18 +33,8 @@ pub(super) async fn run(
         tx.commit().await.map_err(db)?;
         return journal::status(state, r, actor, &original).await;
     }
-    let op = Operation::decode(
-        sqlx::query("SELECT * FROM human_graph_operations WHERE operation_id=$1 FOR UPDATE")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?,
-    )?;
-    if op.status.terminal()
-        || op.lease_until.is_some_and(|n| n > stamp(state))
-        || op.count >= MAX_ATTEMPTS
-        || op.stop.is_some()
-    {
+    let op = locked(&mut tx, id).await?;
+    if op.dispatch_blocked(state) {
         tx.commit().await.map_err(db)?;
         return journal::status(state, r, actor, &op).await;
     }
@@ -144,75 +43,154 @@ pub(super) async fn run(
         tx.commit().await.map_err(db)?;
         return journal::status(state, r, actor, &op).await;
     }
-    let lease = Uuid::new_v4();
-    let mut claimed = op.status.clone();
-    claimed.state = OperationState::Unknown;
-    claimed.effect = Effect::Possible;
-    claimed.recovery = Recovery {
-        allowed: false,
-        reason: Some("dispatch_in_progress".into()),
-    };
-    sqlx::query("UPDATE human_graph_operations SET status=$2,dispatch_count=dispatch_count+1,lease_id=$3,lease_expires_at_ms=$4 WHERE operation_id=$1").bind(id).bind(serde_json::to_value(&claimed).map_err(|_|unavailable())?).bind(lease).bind(now.checked_add(6000).ok_or_else(unavailable)?).execute(&mut *tx).await.map_err(db)?;
-    tx.commit().await.map_err(db)?;
-    // Exact retained bytes only; no authority transaction crosses HTTP.
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(3),
-        super::super::super::mutations::post_human_creation(
-            runtime(state)?,
-            op.workspace,
-            op.payload.clone(),
-        ),
-    )
-    .await;
-    let mut next = claimed;
-    next.recovery = Recovery {
-        allowed: true,
-        reason: None,
-    };
-    let mut raw_receipt = None;
-    let mut stop = None;
-    if let Ok(Ok((code, raw))) = outcome {
-        if code.is_success() {
-            if let Ok(proof) = receipt(&op, &raw) {
-                next.state = OperationState::Confirmed;
-                next.effect = Effect::Confirmed;
-                next.receipt = Some(proof);
-                next.recovery.allowed = false;
-                raw_receipt = Some(raw)
-            }
-        } else if code == StatusCode::CONFLICT && raw["error"]["code"] == "conflict" {
-            if op.count == 0 {
-                next.state = OperationState::Conflict;
-                next.effect = Effect::NotApplied;
-                next.recovery.allowed = false
-            } else {
-                stop = Some("graph_conflict_after_possible_effect".to_string());
-                next.recovery = Recovery {
-                    allowed: false,
-                    reason: stop.clone(),
-                }
-            }
-        } else if matches!(code.as_u16(), 400 | 401 | 403 | 404 | 422)
-            && raw["error"]["code"].is_string()
-            && op.count == 0
-        {
-            next.state = OperationState::Rejected;
-            next.effect = Effect::NotApplied;
-            next.recovery.allowed = false
-        }
-    }
-    let mut tx = journal::transaction(r).await?;
-    let current = Operation::decode(
-        sqlx::query("SELECT * FROM human_graph_operations WHERE operation_id=$1 FOR UPDATE")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?,
-    )?;
-    if current.lease == Some(lease) {
-        sqlx::query("UPDATE human_graph_operations SET status=$2,raw_receipt=$3,lease_id=NULL,lease_expires_at_ms=NULL,stop_reason=$4 WHERE operation_id=$1").bind(id).bind(serde_json::to_value(&next).map_err(|_|unavailable())?).bind(raw_receipt).bind(stop).execute(&mut *tx).await.map_err(db)?;
-    }
-    tx.commit().await.map_err(db)?;
+    let claim = Claim::reserve(tx, op, now).await?;
+    claim.dispatch(state, r).await?;
     let saved = journal::load(r, id).await?.ok_or_else(unavailable)?;
     journal::status(state, r, actor, &saved).await
+}
+
+impl Operation {
+    fn dispatch_blocked(&self, state: &AppState) -> bool {
+        let occupied =
+            self.status.terminal() || self.lease_until.is_some_and(|until| until > stamp(state));
+        occupied || self.count >= MAX_ATTEMPTS || self.stop.is_some()
+    }
+}
+async fn locked(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, id: Uuid) -> Result<Operation> {
+    Operation::decode(
+        sqlx::query("SELECT * FROM human_graph_operations WHERE operation_id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?,
+    )
+}
+struct Claim {
+    lease: Uuid,
+    op: Operation,
+    status: Status,
+}
+
+impl Claim {
+    async fn reserve(
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        op: Operation,
+        now: i64,
+    ) -> Result<Self> {
+        let lease = Uuid::new_v4();
+        let mut claimed = op.status.clone();
+        claimed.state = OperationState::Unknown;
+        claimed.effect = Effect::Possible;
+        claimed.recovery = Recovery {
+            allowed: false,
+            reason: Some("dispatch_in_progress".into()),
+        };
+        sqlx::query("UPDATE human_graph_operations SET status=$2,dispatch_count=dispatch_count+1,lease_id=$3,lease_expires_at_ms=$4 WHERE operation_id=$1")
+            .bind(op.id)
+            .bind(serde_json::to_value(&claimed).map_err(|_|unavailable())?)
+            .bind(lease)
+            .bind(now.checked_add(6000).ok_or_else(unavailable)?)
+            .execute(&mut *tx)
+            .await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(Self {
+            lease,
+            op,
+            status: claimed,
+        })
+    }
+    async fn dispatch(self, state: &AppState, r: &ReadRuntime) -> Result<()> {
+        let id = self.op.id;
+        // Exact retained bytes only; no authority transaction crosses HTTP.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(3),
+            super::super::super::mutations::post_human_creation(
+                runtime(state)?,
+                self.op.workspace,
+                self.op.payload.clone(),
+                false,
+            ),
+        )
+        .await;
+        let mut completion = Completion::awaiting(self.status);
+        if let Ok(Ok((code, raw))) = outcome {
+            completion.observe(&self.op, code, raw);
+        }
+        let mut tx = journal::transaction(r).await?;
+        let current = locked(&mut tx, id).await?;
+        if current.lease == Some(self.lease) {
+            if completion.status.terminal() && !parse(&current.request)?.workspace.is_empty() {
+                crate::project_bindings::workspace::creation::finish(
+                    &mut tx,
+                    current.project,
+                    id,
+                    matches!(completion.status.state, OperationState::Confirmed),
+                )
+                .await?;
+            }
+            sqlx::query("UPDATE human_graph_operations SET status=$2,raw_receipt=$3,lease_id=NULL,lease_expires_at_ms=NULL,stop_reason=$4 WHERE operation_id=$1")
+                .bind(id)
+                .bind(serde_json::to_value(&completion.status).map_err(|_|unavailable())?)
+                .bind(completion.raw_receipt)
+                .bind(completion.stop)
+                .execute(&mut *tx)
+                .await.map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+}
+
+struct Completion {
+    status: Status,
+    raw_receipt: Option<Value>,
+    stop: Option<String>,
+}
+
+impl Completion {
+    fn awaiting(mut status: Status) -> Self {
+        status.recovery = Recovery {
+            allowed: true,
+            reason: None,
+        };
+        Self {
+            status,
+            raw_receipt: None,
+            stop: None,
+        }
+    }
+    fn observe(&mut self, op: &Operation, code: StatusCode, raw: Value) {
+        if code.is_success() {
+            if let Ok(proof) = receipt(op, &raw) {
+                self.status.receipt = Some(proof);
+                self.raw_receipt = Some(raw);
+                self.terminal(OperationState::Confirmed, Effect::Confirmed);
+            }
+            return;
+        }
+        let error = &raw["error"]["code"];
+        let explicit_rejection =
+            error.is_string() && matches!(code.as_u16(), 400 | 401 | 403 | 404 | 422);
+        if code == StatusCode::CONFLICT && error == "conflict" {
+            self.conflict(op.count);
+        } else if op.count == 0 && explicit_rejection {
+            self.terminal(OperationState::Rejected, Effect::NotApplied);
+        }
+    }
+    fn conflict(&mut self, prior_dispatches: i32) {
+        if prior_dispatches == 0 {
+            self.terminal(OperationState::Conflict, Effect::NotApplied);
+        } else {
+            self.stop = Some("graph_conflict_after_possible_effect".into());
+            self.status.recovery = Recovery {
+                allowed: false,
+                reason: self.stop.clone(),
+            };
+        }
+    }
+    fn terminal(&mut self, state: OperationState, effect: Effect) {
+        self.status.state = state;
+        self.status.effect = effect;
+        self.status.recovery.allowed = false;
+    }
 }
