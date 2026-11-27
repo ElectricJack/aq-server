@@ -244,18 +244,6 @@ impl<'a> OverviewRead<'a> {
         }
         Ok(())
     }
-    /// Which of these entries the caller cleared. A failed read fails the whole
-    /// overview: a cleared-state outage must never show as an empty or shorter list.
-    async fn cleared(&self, ids: Vec<String>) -> Result<std::collections::BTreeSet<String>> {
-        if ids.is_empty() {
-            return Ok(Default::default());
-        }
-        let mut transaction = tx(&self.request.runtime).await?;
-        let rows: Vec<String> = sqlx::query_scalar("SELECT attention_id FROM dashboard_attention_dismissals WHERE principal_id=$1 AND attention_id=ANY($2)")
-            .bind(self.request.user.id).bind(&ids).fetch_all(&mut *transaction).await?;
-        transaction.commit().await?;
-        Ok(rows.into_iter().collect())
-    }
     async fn collect(&self, mounted: &MountedOwners) -> Result<Overview> {
         // SO-01: results holds node row locks for its whole page while attempts
         // locks each node with a 250 ms timeout. Run concurrently, attempts lost
@@ -281,7 +269,7 @@ impl<'a> OverviewRead<'a> {
             Box::pin(bounded_source("operations", self.operations())),
             Box::pin(bounded_source("internal_work", self.internal_work())),
         );
-        let mut sources = OverviewSources {
+        let sources = OverviewSources {
             attempts,
             ready,
             reviews,
@@ -290,12 +278,12 @@ impl<'a> OverviewRead<'a> {
             operations,
             internal,
         };
-        let cleared = self.cleared(sources.clearable_ids()).await?;
-        sources.without_cleared(&cleared);
-        Ok(sources.overview(
+        let mut data = sources.overview(
             self.projects.iter().map(|p| p.label.clone()),
             self.truncated,
-        ))
+        );
+        super::attention::filter(&self.request.runtime, self.request.user.id, &mut data).await?;
+        Ok(data)
     }
 }
 

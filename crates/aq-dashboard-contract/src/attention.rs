@@ -3,28 +3,76 @@
 //! The list is the overview's attention list (same sources, same filtering), so the
 //! overview count and this list agree by construction. Clearing is a per-user
 //! notification state: it never resolves, approves or cancels the underlying record.
-use crate::{AttentionItem, AttentionKind, SourceObservation, Total};
+use crate::{AttentionItem, AttentionKind, Overview, SourceObservation, Total};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Longest attention id the server accepts or stores.
 pub const MAX_ID_BYTES: usize = 256;
 pub const DEFAULT_LIMIT: usize = 25;
 pub const MAX_LIMIT: usize = 100;
-/// Entries whose id starts with one of these are informational: a retained failed
-/// process result (settlement is a separate decision) and failed internal work.
-/// Decisions, questions, uncertain operations, blocked work and offline workers
-/// are never clearable; each resolves through its own owner.
-const DISMISSIBLE_PREFIXES: [&str; 2] = ["result:", "internal_work:"];
+/// Notification families eligible for dismissal. The server must additionally
+/// check current revisions, affected kinds, authorization and unresolved gates.
+const DISMISSIBLE_PREFIXES: [&str; 4] = ["result:", "internal_work:", "operation:", "worker:"];
 
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_ID_BYTES && id.bytes().all(|b| b.is_ascii_graphic())
 }
-/// Whether an entry with this id may be cleared. Stale or already resolved
-/// entries are judged by id alone, so clearing them stays possible.
+/// Whether an id belongs to a dismissible notification family. Authorization,
+/// subject revisions and open gates still require current server checks.
 pub fn dismissible(id: &str) -> bool {
     valid_id(id) && DISMISSIBLE_PREFIXES.iter().any(|p| id.starts_with(p))
 }
+/// Invalid request revision or a subject that changed since it was read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RevisionError {
+    Invalid,
+    Changed,
+}
+
+pub fn check_revision(expected: &str, current: Option<&str>) -> Result<(), RevisionError> {
+    if expected.is_empty()
+        || expected.len() > 256
+        || !expected.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return Err(RevisionError::Invalid);
+    }
+    if current.is_some_and(|revision| revision != expected) {
+        return Err(RevisionError::Changed);
+    }
+    Ok(())
+}
+
+/// Filter per-principal, revision-pinned dismissals while protecting open gates.
+pub fn filter_dismissed(
+    data: &mut Overview,
+    cleared: &std::collections::BTreeSet<(String, String)>,
+    gates: &std::collections::BTreeSet<Uuid>,
+    protected: &std::collections::BTreeSet<String>,
+) {
+    let before = data.attention.len();
+    for item in &mut data.attention {
+        item.dismissible = dismissible(&item.id)
+            && !matches!(item.kind, AttentionKind::Decision | AttentionKind::Question)
+            && !matches!(item.subject.kind.as_str(), "decision" | "question")
+            && !gates.contains(&item.subject.id)
+            && !protected.contains(&item.id);
+    }
+    data.attention.retain(|item| {
+        let revision = item
+            .subject
+            .revision
+            .as_ref()
+            .and_then(|r| serde_json::to_value(r).ok())
+            .and_then(|r| r.as_str().map(str::to_owned));
+        !(item.dismissible && revision.is_some_and(|r| cleared.contains(&(item.id.clone(), r))))
+    });
+    if let Some(count) = &mut data.counts.needs_you.value {
+        *count = count.saturating_sub((before - data.attention.len()) as u32);
+    }
+}
+
 impl AttentionKind {
     pub fn parse(name: &str) -> Option<Self> {
         serde_json::from_value(serde_json::Value::String(name.into())).ok()
@@ -58,7 +106,7 @@ pub struct AttentionPage {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DismissAttention {
-    pub attention_id: String,
+    pub expected_revision: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -66,8 +114,10 @@ pub struct AttentionDismissal {
     pub attention_id: String,
     /// Always true on success; the entry stays cleared across refreshes.
     pub dismissed: bool,
-    /// False when the entry was already cleared (a repeated request).
-    pub newly_dismissed: bool,
+    /// The source revision whose notification was dismissed.
+    pub expected_revision: String,
+    /// Original timestamp, unchanged on replay.
+    pub dismissed_at_ms: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -116,7 +166,8 @@ pub fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntityRef, overview};
+    use crate as contract;
+    use crate::{EntityRef, Revision, overview};
     use uuid::Uuid;
 
     fn item(kind: AttentionKind, id: &str) -> AttentionItem {
@@ -145,11 +196,11 @@ mod tests {
     fn only_informational_entries_can_be_cleared() {
         assert!(dismissible("result:abc:def"));
         assert!(dismissible("internal_work:abc"));
+        assert!(dismissible("operation:abc:def"));
+        assert!(dismissible("worker:abc:def"));
         for id in [
             "decision:abc:def",
-            "operation:abc:def",
             "question:abc",
-            "worker:abc:def",
             "blocked:abc",
             "",
             "result: with space",
@@ -160,6 +211,30 @@ mod tests {
             "result:{}",
             "a".repeat(MAX_ID_BYTES)
         )));
+    }
+
+    #[test]
+    fn dismissal_contract_requires_the_revision_and_has_a_stable_record() {
+        let request: DismissAttention =
+            serde_json::from_str(r#"{"expected_revision":"12"}"#).unwrap();
+        assert_eq!(request.expected_revision, "12");
+        assert!(
+            serde_json::from_str::<DismissAttention>(r#"{"attention_id":"internal_work:x"}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<DismissAttention>("{}").is_err());
+        let record = AttentionDismissal {
+            attention_id: "internal_work:x".into(),
+            expected_revision: "12".into(),
+            dismissed: true,
+            dismissed_at_ms: 2000,
+        };
+        let serialized = serde_json::to_value(&record).unwrap();
+        assert_eq!(serialized["dismissed_at_ms"], 2000);
+        assert_eq!(
+            serde_json::from_value::<AttentionDismissal>(serialized).unwrap(),
+            record
+        );
     }
 
     #[test]
@@ -298,5 +373,63 @@ mod tests {
         let (_, _, matching) =
             page(items, Some(&AttentionKind::Failed), None, DEFAULT_LIMIT).unwrap();
         assert_eq!(matching, 1);
+    }
+    #[test]
+    fn revision_fence_accepts_replay_and_gone_but_refuses_change() {
+        assert!(check_revision("12", Some("12")).is_ok());
+        assert!(check_revision("12", None).is_ok());
+        assert!(matches!(
+            check_revision("12", Some("13")),
+            Err(RevisionError::Changed)
+        ));
+        assert!(matches!(
+            check_revision("", None),
+            Err(RevisionError::Invalid)
+        ));
+    }
+    #[test]
+    fn revision_filter_keeps_counts_lists_and_gates_in_agreement() {
+        let subject = Uuid::new_v4();
+        let make = |id: &str, revision: &str| {
+            let mut item = contract::overview::attention(
+                AttentionKind::InternalWork,
+                EntityRef {
+                    kind: "task".into(),
+                    id: subject,
+                    revision: Some(Revision(revision.into()).into()),
+                },
+                None,
+                contract::overview::AttentionDescription {
+                    title: "work",
+                    reason: "failed",
+                    since: None,
+                },
+            );
+            item.id = id.into();
+            item
+        };
+        let mut data = Overview::hidden();
+        data.attention = vec![make("internal_work:a", "1"), make("internal_work:b", "2")];
+        data.counts.needs_you = contract::overview::total(2, false);
+        let cleared = [
+            ("internal_work:a".into(), "1".into()),
+            ("internal_work:b".into(), "1".into()),
+        ]
+        .into();
+        let original = data.clone();
+        filter_dismissed(
+            &mut data,
+            &cleared,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(data.attention.len(), 1);
+        assert_eq!(data.attention[0].id, "internal_work:b");
+        assert_eq!(data.counts.needs_you.value, Some(1));
+        let mut gated = original;
+        filter_dismissed(&mut gated, &cleared, &[subject].into(), &Default::default());
+        assert_eq!(gated.attention.len(), 2);
+        assert_eq!(gated.counts.needs_you.value, Some(2));
+        assert!(gated.attention.iter().all(|item| !item.dismissible));
     }
 }

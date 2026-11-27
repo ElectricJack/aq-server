@@ -262,17 +262,9 @@ key, so it stays valid when entries are resolved or cleared between requests;
 a malformed cursor or unknown `kind` is a 422. A non-owner receives the same
 hidden overview coverage (`owner_visibility_required`) with an unknown total.
 
-An entry with `dismissible: true` is informational (a retained failed process
-result, or failed internal work) and may be cleared with
-`POST /api/v1/attention/dismissals` and body `{"attention_id": "<item id>"}`
-(capability `attention.dismiss`, owner only). Clearing is a per-user
-notification state kept in the server's database, so it persists across
-refreshes and the overview count and list update at once. It is idempotent
-(`newly_dismissed` is false on a repeat), an id the overview no longer lists
-(stale or already resolved) can still be cleared, and a new failure has a new id
-and shows again. Clearing never approves, releases, cancels or otherwise decides
-the record behind the entry. Decisions, questions, uncertain operations, blocked
-work and offline workers are not dismissible: the request is refused with 409
-`attention_not_dismissible`, and they stay listed until resolved through their
-own controls. Cleared ids remain stored for that user: clearing more entries
-does not make older notifications reappear.
+An entry with `dismissible: true` may be cleared with
+`POST /api/v1/attention/{attention_id}/dismiss`, supplying the item's
+`subject.revision` as `expected_revision`. The capability is `attention.dismiss`
+(owner only). The [published dismissal contract](../../../docs/api/attention-dismissal.md)
+describes revision conflicts, stable replay responses, protected review gates,
+and persistence. The former `/attention/dismissals` mutation is no longer exposed.

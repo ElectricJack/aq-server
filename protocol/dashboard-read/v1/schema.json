@@ -84,15 +84,21 @@
           "description": "Always true on success; the entry stays cleared across refreshes.",
           "type": "boolean"
         },
-        "newly_dismissed": {
-          "description": "False when the entry was already cleared (a repeated request).",
-          "type": "boolean"
+        "dismissed_at_ms": {
+          "description": "Original timestamp, unchanged on replay.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "expected_revision": {
+          "description": "The source revision whose notification was dismissed.",
+          "type": "string"
         }
       },
       "required": [
         "attention_id",
         "dismissed",
-        "newly_dismissed"
+        "expected_revision",
+        "dismissed_at_ms"
       ],
       "type": "object"
     },
@@ -110,7 +116,7 @@
           ]
         },
         "dismissible": {
-          "description": "True when the entry is informational and may be cleared with\n`POST /api/v1/attention/dismissals`. Clearing hides this notification\nfor the caller only; it never resolves the underlying record. Absent\n(false) for unresolved decisions and other entries that need their own\ncontrols.",
+          "description": "True when the entry is informational and may be cleared with\n`POST /api/v1/attention/{attention_id}/dismiss`. Clearing hides this notification\nfor the caller only; it never resolves the underlying record. Absent\n(false) for unresolved decisions and other entries that need their own\ncontrols.",
           "type": "boolean"
         },
         "id": {

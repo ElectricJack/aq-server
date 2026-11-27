@@ -180,7 +180,7 @@ impl OverviewRead<'_> {
         let labels = &self.labels;
 
         let mut transaction = tx(runtime).await?;
-        let rows = sqlx::query("SELECT id,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms,CASE WHEN purpose='routing_classification' AND affected_kind='task' AND request->>'input' ~ '^(not_offered|unroutable|unrouted)@' THEN left(detail,600) END AS unrouted FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
+        let rows = sqlx::query("SELECT id,xmin::text AS revision,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms,CASE WHEN purpose='routing_classification' AND affected_kind='task' AND request->>'input' ~ '^(not_offered|unroutable|unrouted)@' THEN left(detail,600) END AS unrouted FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
         .bind(scope.project()).fetch_all(&mut *transaction).await?;
         transaction.commit().await?;
         let mut c = Contribution::default();
@@ -288,7 +288,7 @@ fn internal_attention(
             "internal_run".into()
         },
         id: affected.unwrap_or(run),
-        revision: None,
+        revision: Some(Revision(row.get("revision")).into()),
     };
     let diagnosis: Option<String> = row.get("diagnosis");
     let since = row.get::<Option<i64>, _>("escalated_at_ms");

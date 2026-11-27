@@ -413,7 +413,7 @@ pub struct AttentionItem {
     pub subject: EntityRef,
     pub action: Option<ActionDescriptor>,
     /// True when the entry is informational and may be cleared with
-    /// `POST /api/v1/attention/dismissals`. Clearing hides this notification
+    /// `POST /api/v1/attention/{attention_id}/dismiss`. Clearing hides this notification
     /// for the caller only; it never resolves the underlying record. Absent
     /// (false) for unresolved decisions and other entries that need their own
     /// controls.

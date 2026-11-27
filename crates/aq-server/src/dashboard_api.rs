@@ -61,6 +61,7 @@ enum Error {
     Unavailable,
     /// The entry needs its own controls; it cannot be cleared.
     NotDismissible,
+    RevisionChanged,
 }
 impl From<sqlx::Error> for Error {
     fn from(_: sqlx::Error) -> Self {
@@ -93,6 +94,11 @@ impl IntoResponse for Error {
                 StatusCode::CONFLICT,
                 "attention_not_dismissible",
                 "This entry must be resolved through its own controls; it cannot be cleared",
+            ),
+            Self::RevisionChanged => ApiError::new(
+                StatusCode::CONFLICT,
+                "attention_revision_changed",
+                "The attention subject changed; refresh before dismissing it",
             ),
         }
         .into_response()
