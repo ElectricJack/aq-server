@@ -2214,7 +2214,6 @@ mod delivery {
 
     // `work.complete`, `work.return`, `work.hold` and `supervisor.notify`.
     mod decisions;
-    #[cfg(feature = "delivery_playbook")]
     mod publication_fixture;
 
     #[tokio::test]

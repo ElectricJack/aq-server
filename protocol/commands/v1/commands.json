@@ -4968,6 +4968,134 @@
     {
       "cli": [
         "result",
+        "publication",
+        "reconcile"
+      ],
+      "grant": "result.publication.reconcile",
+      "kind": "mutation",
+      "name": "result.publication.reconcile",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:62713238d0abfac21746f97696f085ac2c96ca19b166f1c66d92302577cb1ecf",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "operation_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "publication_operation_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "report_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "repository_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "revision": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "report_id",
+              "revision",
+              "repository_id",
+              "operation_id",
+              "publication_operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/publication/reconcile"
+          }
+        }
+      },
+      "summary": "Recover a receipt for an exact retained result by observation only; never publishes, forces, releases or accepts",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "result",
+        "publication",
+        "show"
+      ],
+      "grant": "result.read",
+      "kind": "read",
+      "name": "result.publication.show",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:eb9edd84fb56e36a38e2071c5dbda3098068ad46c7fd1b75771e1b726d20e743",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "publication_operation_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "report_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "repository_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "revision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "report_id",
+              "revision",
+              "repository_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/publication"
+          }
+        }
+      },
+      "summary": "Bounded publication requests and outcomes for an exact retained result; never pushes",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "result",
         "review",
         "list"
       ],

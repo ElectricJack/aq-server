@@ -10,7 +10,6 @@ use axum::{
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
-#[cfg(feature = "delivery_playbook")]
 mod publication;
 type Result<T> = std::result::Result<T, AppError>;
 pub use aq_dashboard_contract::result_metadata::{
@@ -159,12 +158,8 @@ async fn read_inner(
     Ok(found.finish(server_time_ms, more))
 }
 pub fn routes() -> Router<AppState> {
-    #[cfg(feature = "delivery_playbook")]
-    let publication = publication::routes();
-    #[cfg(not(feature = "delivery_playbook"))]
-    let publication = Router::new();
     Router::new()
-        .merge(publication)
+        .merge(publication::routes())
         .route("/api/human/results", get(list))
         .route("/api/human/results/{id}/revisions/{revision}", get(detail))
         .route("/api/v1/results/{id}/revisions/{revision}", get(v1))

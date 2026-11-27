@@ -368,7 +368,7 @@ mod tests {
 
     /// A Host10 routing namespace authors on catalog 2.3.0: its workspace
     /// describes 2.3.0's work.route, without the 2.5.0 environment.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_routing_record_on_a_host10_namespace_gets_catalog_2_3_0_notes() {
         let record = routing();
