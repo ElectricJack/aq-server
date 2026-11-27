@@ -21,9 +21,10 @@ const CHECK_NAME_BYTES: usize = 256;
 const CHECK_NAMES: usize = 64;
 const RETURNS_MAX: u32 = 1000;
 /// Catalog 2.6.0's bounds: the graph's on acceptance criteria and the result
-/// report's on its conclusion.
+/// report's on its conclusion, which 2.7.0 raises to the report's new bound.
 const ACCEPTANCE_CRITERIA_BYTES: usize = 8192;
-const CONCLUSION_BYTES: usize = 512;
+const CONCLUSION_BYTES_2_6: usize = 512;
+const CONCLUSION_BYTES_2_7: usize = 4096;
 const PULL_REQUEST_MAX: u64 = 1_000_000_000;
 
 /// The branch of a task's result in the central git (`aq/<task-id>`).
@@ -130,13 +131,24 @@ pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultF
     output
 }
 
-/// The `observed` output of `work.read` under catalog 2.6.0: the 2.3.0
-/// `output` with the acceptance criteria of the graph node `node` and the
-/// `conclusion` of the latest result (`""` when there is none).
-pub fn with_judgment_facts(mut output: Value, node: &Value, conclusion: &str) -> Value {
+/// The `observed` output of `work.read` `version` (catalog 2.6.0 or 2.7.0):
+/// the 2.3.0 `output` with the acceptance criteria of the graph node `node`
+/// and the `conclusion` of the latest result (`""` when there is none), cut to
+/// that catalog's bound.
+pub fn with_judgment_facts(
+    mut output: Value,
+    node: &Value,
+    conclusion: &str,
+    version: &str,
+) -> Value {
     let criteria = node["acceptance_criteria"].as_str().unwrap_or("");
+    let bound = if version == "2.6.0" {
+        CONCLUSION_BYTES_2_6
+    } else {
+        CONCLUSION_BYTES_2_7
+    };
     output["facts"]["acceptance_criteria"] = truncate(criteria, ACCEPTANCE_CRITERIA_BYTES).into();
-    output["facts"]["conclusion"] = truncate(conclusion, CONCLUSION_BYTES).into();
+    output["facts"]["conclusion"] = truncate(conclusion, bound).into();
     output
 }
 
@@ -461,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn work_read_2_6_0_adds_the_acceptance_criteria_and_the_conclusion_within_bounds() {
+    fn work_read_2_6_0_and_2_7_0_add_the_acceptance_criteria_and_the_conclusion_within_bounds() {
         let registry: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
             "../../../vendor/aq-host-catalog-2.6.0/registry.json"
         ))
@@ -474,22 +486,35 @@ mod tests {
         let base = read_output(task, 3, &work, &ResultFacts::default());
         // Without the two facts the 2.3.0 answer does not fit 2.6.0.
         assert!(observed.validate(&base).is_err());
-        let read = with_judgment_facts(base.clone(), &node, "Outcome: done; Changes: none");
+        let read =
+            with_judgment_facts(base.clone(), &node, "Outcome: done; Changes: none", "2.6.0");
         observed.validate(&read).unwrap();
         assert_eq!(read["facts"]["acceptance_criteria"], "It runs.");
         assert_eq!(read["facts"]["conclusion"], "Outcome: done; Changes: none");
         // A node without criteria and no result: both empty.
-        let empty = with_judgment_facts(base.clone(), &json!({}), "");
+        let empty = with_judgment_facts(base.clone(), &json!({}), "", "2.6.0");
         observed.validate(&empty).unwrap();
         assert_eq!(empty["facts"]["acceptance_criteria"], "");
         // Longer values are cut to the catalog's byte bounds at a character boundary.
         let long = json!({"acceptance_criteria": "é".repeat(5000)});
-        let cut = with_judgment_facts(base, &long, &"é".repeat(300));
+        let cut = with_judgment_facts(base.clone(), &long, &"é".repeat(300), "2.6.0");
         observed.validate(&cut).unwrap();
         assert_eq!(
             cut["facts"]["acceptance_criteria"].as_str().unwrap().len(),
             8192
         );
         assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 512);
+        // 2.7.0 keeps up to 4096 bytes of the conclusion, and cuts the rest.
+        let v2_7: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.7.0/registry.json"
+        ))
+        .unwrap();
+        let observed = &v2_7.commands["work.read"].outcomes["observed"];
+        let kept = with_judgment_facts(base.clone(), &node, &"é".repeat(2048), "2.7.0");
+        observed.validate(&kept).unwrap();
+        assert_eq!(kept["facts"]["conclusion"].as_str().unwrap().len(), 4096);
+        let cut = with_judgment_facts(base, &node, &"é".repeat(2100), "2.7.0");
+        observed.validate(&cut).unwrap();
+        assert_eq!(cut["facts"]["conclusion"].as_str().unwrap().len(), 4096);
     }
 }

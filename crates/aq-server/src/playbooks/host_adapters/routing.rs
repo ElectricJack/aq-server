@@ -273,7 +273,8 @@ impl Service {
 
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
     /// those of its latest result, for a task of any bound project. The 2.6.0
-    /// one adds the task's acceptance criteria and the result's conclusion.
+    /// and 2.7.0 ones add the task's acceptance criteria and the result's
+    /// conclusion (2.7.0's up to 4096 bytes).
     #[cfg(feature = "delivery_playbook")]
     async fn read_delivery(
         &self,
@@ -311,9 +312,9 @@ impl Service {
         let facts = (self.namespace_work(tx, task).await?, charged, ended);
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
         let output = match version {
-            "2.6.0" => {
+            "2.6.0" | "2.7.0" => {
                 let conclusion = latest.as_ref().map_or("", |l| l.conclusion.as_str());
-                host10::with_judgment_facts(output, &node, conclusion)
+                host10::with_judgment_facts(output, &node, conclusion, version)
             }
             #[cfg(feature = "project_environments")]
             "2.5.0" => {

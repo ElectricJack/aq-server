@@ -1764,60 +1764,27 @@ mod delivery {
         }
     }
 
-    /// The delivery record is authored against catalog 2.6.0 (vendored and
-    /// pinned byte for byte): a Host10 namespace accepts its contracts, the
-    /// 2.6.0 work.read included, beside routing's 2.2.0 one.
-    #[test]
-    fn host10_accepts_the_delivery_records_catalog_2_6_0() {
-        let registry = CatalogProfile::Host10.registry();
-        let manifest: Value = serde_json::from_str(include_str!(
-            "../../../../vendor/aq-host-catalog-2.6.0/manifest.json"
-        ))
-        .unwrap();
-        assert_eq!(manifest["version"], "2.6.0");
-        assert_eq!(manifest["supersedes"]["fingerprint"], HOST10_FINGERPRINT);
-        let v2_6: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
-            "../../../../vendor/aq-host-catalog-2.6.0/registry.json"
-        ))
-        .unwrap();
+    /// Catalogs 2.6.0 and 2.7.0, vendored and pinned byte for byte.
+    fn vendored_delivery_catalog(version: &str) -> (Value, aq_playbook_host::model::Registry) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../vendor/aq-host-catalog-{version}"));
+        let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap();
+        let manifest: Value = serde_json::from_str(&read("manifest.json")).unwrap();
+        let registry: aq_playbook_host::model::Registry =
+            serde_json::from_str(&read("registry.json")).unwrap();
+        assert_eq!(manifest["version"], version);
         assert_eq!(
-            digest(&("2.6.0", &v2_6)).unwrap(),
+            digest(&(version, &registry)).unwrap(),
             manifest["fingerprint"].as_str().unwrap()
         );
-        // Without environments (spec 0017, see playbook_environments) the
-        // record's catalog is 2.6.0 whole.
-        {
-            let record = aq_playbook_authoring::builtin::delivery(false);
-            let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
-            assert_eq!(pinned, v2_6);
-            let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
-            assert!(kept.commands.contains_key("judgment.assess"));
-        }
-        for contract in v2_6.commands.values() {
-            assert!(
-                aq_playbook_host::accepts_command(&registry, contract),
-                "{}",
-                contract.name
-            );
-        }
-        let host9 = CatalogProfile::Host9.registry();
-        assert!(aq_playbook_host::accepts_command(
-            &registry,
-            &host9.commands["work.read"]
-        ));
-        // A namespace of another catalog does not take it.
-        assert!(!aq_playbook_host::accepts_command(
-            &host9,
-            &v2_6.commands["work.read"]
-        ));
-        // The pin lists the vendored files byte for byte.
-        let pin: Value = serde_json::from_str(include_str!(
-            "../../../../vendor/aq-host-catalog-2.6.0-source.json"
-        ))
+        let pin: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                root.with_file_name(format!("aq-host-catalog-{version}-source.json")),
+            )
+            .unwrap(),
+        )
         .unwrap();
         assert_eq!(pin["catalog_fingerprint"], manifest["fingerprint"]);
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/aq-host-catalog-2.6.0");
         let files = pin["files"].as_array().unwrap();
         assert_eq!(files.len(), std::fs::read_dir(&root).unwrap().count());
         for file in files {
@@ -1828,6 +1795,54 @@ mod delivery {
                 hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
             );
         }
+        (manifest, registry)
+    }
+
+    /// The delivery record is authored against catalog 2.7.0 (2.6.0 with a
+    /// conclusion of up to 4096 bytes): a Host10 namespace accepts its
+    /// contracts, its work.read and 2.6.0's (artifacts sealed before 2.7.0
+    /// keep it) included, beside routing's 2.2.0 one.
+    #[test]
+    fn host10_accepts_the_delivery_records_catalogs_2_6_0_and_2_7_0() {
+        let registry = CatalogProfile::Host10.registry();
+        let (v2_6_manifest, v2_6) = vendored_delivery_catalog("2.6.0");
+        assert_eq!(
+            v2_6_manifest["supersedes"]["fingerprint"],
+            HOST10_FINGERPRINT
+        );
+        let (v2_7_manifest, v2_7) = vendored_delivery_catalog("2.7.0");
+        assert_eq!(
+            v2_7_manifest["supersedes"]["fingerprint"],
+            v2_6_manifest["fingerprint"]
+        );
+        // Without environments (spec 0017, see playbook_environments) the
+        // record's catalog is 2.7.0 whole.
+        {
+            let record = aq_playbook_authoring::builtin::delivery(false);
+            let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
+            assert_eq!(pinned, v2_7);
+            let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
+            assert!(kept.commands.contains_key("judgment.assess"));
+        }
+        let host9 = CatalogProfile::Host9.registry();
+        for catalog in [&v2_6, &v2_7] {
+            for contract in catalog.commands.values() {
+                assert!(
+                    aq_playbook_host::accepts_command(&registry, contract),
+                    "{}",
+                    contract.name
+                );
+            }
+            // A namespace of another catalog does not take it.
+            assert!(!aq_playbook_host::accepts_command(
+                &host9,
+                &catalog.commands["work.read"]
+            ));
+        }
+        assert!(aq_playbook_host::accepts_command(
+            &registry,
+            &host9.commands["work.read"]
+        ));
     }
 
     /// What the server records of results: pending results, the latest result
@@ -2466,11 +2481,12 @@ mod delivery {
         );
     }
 
-    /// Catalog 2.6.0's work.read, which the delivery source is authored
-    /// against, adds the task's acceptance criteria and the latest result's
-    /// conclusion; the 2.3.0 one on the same namespace keeps its shape.
+    /// Catalog 2.6.0's work.read adds the task's acceptance criteria and the
+    /// latest result's conclusion; 2.7.0's, which the delivery source is
+    /// authored against, keeps up to 4096 bytes of the conclusion instead of
+    /// 512; the 2.3.0 one on the same namespace keeps its shape.
     #[tokio::test]
-    async fn work_read_2_6_0_gives_the_acceptance_criteria_and_the_conclusion() {
+    async fn work_read_2_6_0_and_2_7_0_give_the_acceptance_criteria_and_the_conclusion() {
         let h = delivery(false).await;
         let own = h.scope.project_id;
         h.routing.on_router.lock().unwrap().insert(own);
@@ -2512,6 +2528,34 @@ mod delivery {
         // 2.3.0's answer (h.read validates it against 2.3.0) has neither.
         let old = h.read(task).await.output["facts"].clone();
         assert!(old.get("conclusion").is_none() && old.get("acceptance_criteria").is_none());
+        // A long conclusion: 2.7.0 gives it whole, 2.6.0 cuts it to 512 bytes.
+        let long = format!("Outcome: done; Changes: none; {}", "evidence ".repeat(300));
+        h.port
+            .latest
+            .lock()
+            .unwrap()
+            .get_mut(&task)
+            .unwrap()
+            .conclusion = long.clone();
+        let v2_7: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.7.0/registry.json"
+        ))
+        .unwrap();
+        for (name, contract, expected) in [
+            ("read-2-7-long", &v2_7, long.len().min(4096)),
+            ("read-2-6-long", &v2_6, 512),
+        ] {
+            let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+            let mut intent = h.intent(name, "work.read", input);
+            intent.command = contract.commands["work.read"].clone();
+            let read = h.try_run(&intent).await.unwrap();
+            intent.command.outcomes["observed"]
+                .validate(&read.output)
+                .unwrap();
+            let conclusion = read.output["facts"]["conclusion"].as_str().unwrap();
+            assert_eq!(conclusion.len(), expected, "{name}");
+            assert!(long.starts_with(conclusion));
+        }
     }
 
     #[tokio::test]
