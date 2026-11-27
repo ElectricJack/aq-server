@@ -12,4 +12,4 @@ ALTER TABLE dashboard_attention_dismissals
 ALTER TABLE dashboard_attention_dismissals
     ADD PRIMARY KEY (principal_id, attention_id, expected_revision);
 
-UPDATE meta SET value='181' WHERE key='state_format_version';
+UPDATE meta SET value='188' WHERE key='state_format_version';

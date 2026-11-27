@@ -256,7 +256,6 @@ async fn post(app: &axum::Router, id: &str, revision: &str) -> (StatusCode, Valu
 #[tokio::test]
 async fn escalated_internal_runs_are_listed_in_full_and_can_be_cleared() {
     use aq_internal_work::store;
-    use serde_json::json;
     use uuid::Uuid;
     let f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;

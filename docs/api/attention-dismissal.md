@@ -50,6 +50,9 @@ revision or newly pending gate is visible again. Dismissals have no eviction.
 The already supported attention list accepts `cursor`, `limit`, `kind`, and
 `scope`; it pages the overview's bounded source sample, not unseen owner records.
 
-Migration 0181 adds revision keys after retained migration 0180. Existing
+Migrations 0187–0188 follow main's migration 0186. The retained checkout lacked
+main's migrations 0179–0186; these are restored unchanged from aq-server commit
+`3d236e533d7b7ea31b9417d9f5942c4dc1010181` to keep the catalog contiguous.
+Migration 0187 creates the dismissal ledger; 0188 adds revision keys. Existing
 dismissals are pinned to their current retained source revision.
 Unmatched legacy rows remain retained but cannot hide a newly revisioned subject.
