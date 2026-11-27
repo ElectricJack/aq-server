@@ -314,7 +314,7 @@ pub async fn result_facts(
             .bind(project)
             .fetch_optional(&mut *db)
             .await?;
-    let pull_request = sqlx::query("SELECT number,url,state,mergeable,checks_state,checks_failed FROM delivery_pull_requests WHERE task_id=$1")
+    let pull_request = sqlx::query("SELECT number,url,state,mergeable,checks_state,checks_failed,checks_head FROM delivery_pull_requests WHERE task_id=$1")
         .bind(task)
         .fetch_optional(&mut *db)
         .await?
@@ -325,6 +325,7 @@ pub async fn result_facts(
             mergeable: r.get("mergeable"),
             checks_state: r.get("checks_state"),
             checks_failed: serde_json::from_value(r.get("checks_failed")).unwrap_or_default(),
+            checks_head: r.get("checks_head"),
         });
     let mut facts = ResultFacts {
         returns: u32::try_from(returns.unwrap_or(0)).unwrap_or(0),
