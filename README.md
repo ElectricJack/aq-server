@@ -1,16 +1,16 @@
 # aq-server
 
-The new Agent Queue foundation, developed as a fresh start alongside the existing installation. V1 migration is not a launch requirement. Any optional owner-specific data transfer belongs in an external one-off script outside aq-graph.
+aq-server is the AQ v2 coordination server: it owns durable execution authority, coordinates workers and profiled agent sessions, and serves human and scoped agent APIs. See the [aq-platform/agent-queue umbrella repository](https://github.com/aq-platform/agent-queue) for the platform overview.
 
-Start with [Phase 1: Infrastructure foundation](docs/specs/0001-infrastructure-foundation.md).
+In an umbrella checkout, this repository is the `aq-server/` submodule alongside `aq-graph/`, `aq-worker/`, `aq-git/`, `aq-playbooks/`, and `aq-dashboard/`. The sibling links below resolve in that layout.
 
-The initial deployment targets a Bluehost self-managed VPS with Docker Compose and Cloudflare DNS, Tunnel, and Access. Phase one covers hosting, login, worker connectivity, development, deployment, self-update, and recovery.
+## Current implementation
 
-The foundation has passed local qualification. This repository now owns durable execution authority and consumes an independently packaged Rust worker. The first execution slice runs a deterministic fixture agent with replay, cancellation and recovery checks; production graph scheduling, real agent harnesses and policy workflows remain later milestones. See the [implementation evidence](docs/implementation/execution-authority.md) and current [milestone status](docs/plans/0001-v2-milestones.md).
+The Rust workspace includes the server, the `aq` CLI (`aqv2` crate), and the host updater (`aq-updater`). The server persists its state in PostgreSQL and integrates with independently packaged worker, Graph, Git, playbook, and dashboard components.
 
-The worker recovery implementation uses a Linux guardian with independent expiry and conservative recovery when process ownership is uncertain. See [recovery authority](docs/implementation/recovery-authority.md). The separately tested [scoped agent graph contract](protocol/agent-access/v1/README.md) defines the next integration boundary; its production gateway and client remain to be implemented.
+The implementation includes graph-backed task selection, profiled execution and result handling, scoped agent graph access and messaging, human dashboard APIs, terminal access, waits, notifications, and configured playbook and review owners. Availability depends on the configured dependencies and owners. The [agent access contract](protocol/agent-access/v1/README.md) describes the scoped interface; [CLI setup](crates/aqv2/README.md) covers its client and connection modes.
 
-The standalone task and knowledge service is **aq-graph**, maintained in its own repository. Its [draft specification](../aq-graph/docs/specs/0001-aq-graph.md) covers the Rust service and CLI, PostgreSQL storage, selective history, and concurrent access. This relative link assumes the repositories are checked out side by side. Agent Q will consume its versioned API; this component does not expand the infrastructure phase.
+The standalone task and knowledge service is [aq-graph](https://github.com/aq-platform/aq-graph). The server consumes its versioned API rather than owning its storage. See the [Graph specification](../aq-graph/docs/specs/0001-aq-graph.md).
 
 ## Architecture and component specifications
 
@@ -25,9 +25,9 @@ The standalone task and knowledge service is **aq-graph**, maintained in its own
 
 Component implementations remain in independently tested repositories. AQ assembles pinned libraries, executables, images and the dashboard bundle into a tested product release; ordinary builds do not require sibling source checkouts or submodules.
 
-## Implementation planning
+## Historical planning
 
-The [implementation audit](docs/research/2026-10-30-v2-implementation-audit.md) distinguishes existing code and recorded evidence from missing integration work. The [milestone task graph](docs/plans/0001-v2-milestones.md) defines repository ownership, prerequisites and acceptance for the next implementation slices. Its [JSON source](docs/plans/0001-v2-milestones.json) is a local planning format, not a live AQ queue.
+The [infrastructure specification](docs/specs/0001-infrastructure-foundation.md), [implementation audit](docs/research/2026-10-30-v2-implementation-audit.md), and [milestone task graph](docs/plans/0001-v2-milestones.md) record earlier plans and evidence. They are historical references, not a current feature inventory. The milestone graph's [JSON source](docs/plans/0001-v2-milestones.json) is a local planning format, not a live AQ queue.
 
 Validate the plan with `python3 scripts/check-v2-plan.py`; use `--ready` to list tasks whose hard prerequisites are complete.
 
@@ -35,15 +35,27 @@ Validate the plan with `python3 scripts/check-v2-plan.py`; use `--ready` to list
 
 Run the stack with `scripts/dev-up`, a worker with `scripts/dev-worker`, and the container lifecycle check with `scripts/smoke`. See [docs/development.md](docs/development.md).
 
+Rust 1.96.1 is pinned in `rust-toolchain.toml`. Build the server, CLI, and updater with:
+
+```sh
+cargo build --locked -p aq-server -p aqv2 -p aq-updater
+```
+
+For tests, install `cargo-nextest` and configure a disposable PostgreSQL test database as described in the [development guide](docs/development.md#tests). Run:
+
+```sh
+cargo nextest run --workspace --locked --no-fail-fast
+cargo test --workspace --locked --doc
+```
+
+For a focused server test run, use the binary and module filters in [AGENTS.md](AGENTS.md#running-a-subset). The development stack and smoke check require Docker with Compose; the worker must be enrolled before it can connect.
+
 ## AQ v2 skills
 
 The [skills directory](skills/) is the source for the eight AQ operator and
 agent skills, including usage of the `aq` CLI, tasks, communication, knowledge,
 playbooks, reviews, mini-projects, and Git workspaces. The
 playbook engine's authoring skill is maintained in the `aq-playbooks` repository.
-The legacy `aq-bazel-upgrade` skill describes the v1 test backend and integration
-train. Retire that skill from a v2 installation by moving its `SKILL.md` out of
-the harness's skill discovery path.
 
 Install or update the suite from the checkout whose revision you want to use.
 
