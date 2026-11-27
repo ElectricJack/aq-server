@@ -193,6 +193,30 @@ async fn a_retry_keeps_the_environment_of_the_attempt_it_replaces() {
     assert_eq!(placed(&c, second).await, roles::ENVIRONMENT);
 }
 
+/// A retry whose predecessor's environment no node lists any more (every
+/// node moved on to a newer version) is placed afresh instead of waiting for
+/// it forever: needing `node`, it goes to `web` and waits for a node there,
+/// where a kept `confined-worktree` would be held for lacking `node`.
+#[tokio::test]
+async fn a_retry_is_placed_afresh_when_no_node_lists_its_predecessors_environment() {
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    unpin(&c).await;
+    let first = offer(&mut c).await;
+    fail_and_release(&c, first).await;
+    // No node lists the predecessor's environment any more.
+    sqlx::query(
+        "UPDATE intelligence_node_snapshots SET snapshot=jsonb_set(snapshot,'{harnesses}',\
+         (SELECT jsonb_agg(jsonb_set(h,'{environment,id}','\"retired\"')) FROM jsonb_array_elements(snapshot->'harnesses') h))",
+    )
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    needs(&c, &["node"]);
+    let reason = refused(&mut c, "no_node_has_environment").await;
+    assert_eq!(reason["environment"], "web", "{reason}");
+}
+
 /// A router route of the default level that chose `environment`, on a task
 /// that needs `needs`.
 fn routed(c: &Case, environment: &str, needs: &[&str]) {

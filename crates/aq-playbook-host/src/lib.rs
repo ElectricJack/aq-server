@@ -866,7 +866,8 @@ fn accepts_base(registry: &Registry, artifact: &Registry) -> bool {
 
 /// Exact host contracts, including the pinned Host9 work.read on Host10 so
 /// the existing routing artifact can be installed in the new namespace, and
-/// the catalog 2.6.0 work.read the delivery source is authored against.
+/// the catalog 2.7.0 work.read the delivery source is authored against (and
+/// 2.6.0's, which artifacts sealed before 2.7.0 keep).
 pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool {
     let current = registry.commands.get(&contract.name);
     if current == Some(contract) {
@@ -883,13 +884,16 @@ pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool 
                 == Some(contract)
         };
         static HOST9: OnceLock<Registry> = OnceLock::new();
-        static DELIVERY: OnceLock<Registry> = OnceLock::new();
+        static DELIVERY_2_6: OnceLock<Registry> = OnceLock::new();
+        static DELIVERY_2_7: OnceLock<Registry> = OnceLock::new();
         let host9 = include_str!("../../../vendor/aq-host-catalog-2.2.0/registry.json");
-        let delivery = include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
+        let v2_6 = include_str!("../../../vendor/aq-host-catalog-2.6.0/registry.json");
+        let v2_7 = include_str!("../../../vendor/aq-host-catalog-2.7.0/registry.json");
+        let delivery = || pinned(&DELIVERY_2_7, v2_7) || pinned(&DELIVERY_2_6, v2_6);
         return match current.map(|c| c.version.as_str()) {
-            Some("2.3.0") => pinned(&HOST9, host9) || pinned(&DELIVERY, delivery),
-            // Catalog 2.5.0 (spec 0017): the delivery source keeps its 2.6.0 work.read.
-            Some("2.5.0") if cfg!(feature = "project_environments") => pinned(&DELIVERY, delivery),
+            Some("2.3.0") => pinned(&HOST9, host9) || delivery(),
+            // Catalog 2.5.0 (spec 0017): the delivery source keeps its delivery work.read.
+            Some("2.5.0") if cfg!(feature = "project_environments") => delivery(),
             _ => false,
         };
     }

@@ -534,6 +534,10 @@ async fn run_with_listeners_and_dashboard(
         rx.clone(),
     ));
     let terminal_task = tokio::spawn(terminal::runtime::run(state.clone(), rx.clone()));
+    tokio::spawn(aq_machine_control::connections::watch(
+        state.store.control_view().pool,
+        rx.clone(),
+    ));
     let retention_task = tokio::spawn(row_retention::run(state.clone(), rx.clone()));
     tokio::spawn(aq_machine_control::warn_widened_bindings(
         state.store.pool.clone(),

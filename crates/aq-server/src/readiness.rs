@@ -63,6 +63,9 @@ struct DependencyReadinessReport {
     status: &'static str,
     database: &'static str,
     dependencies: std::collections::BTreeMap<&'static str, &'static str>,
+    /// Latest PostgreSQL connection pressure; read without the database.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_pressure: Option<aq_machine_control::connections::Status>,
 }
 
 pub async fn dependency_readyz(State(state): State<AppState>, req: Request) -> Response {
@@ -93,6 +96,7 @@ pub async fn dependency_readyz(State(state): State<AppState>, req: Request) -> R
             .into_iter()
             .filter_map(|(name, ok)| ok.map(|ok| (name, if ok { "ready" } else { "degraded" })))
             .collect(),
+        connection_pressure: aq_machine_control::connections::latest(),
     };
     let status = if ready {
         StatusCode::OK

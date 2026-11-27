@@ -67,7 +67,7 @@ fn assert_bounded_redaction(tail: &str, key: &str) {
 }
 fn check_log_credentials(mock: &Mock) {
     // The job's logs are asked of the API with the installation token; the
-    // signed download carries neither it nor anything of ours but the range.
+    // signed download does not carry it.
     let requests = mock.seen();
     let asked = &requests[requests.len() - 2];
     assert_eq!(asked.path, "/api/v3/repos/Acme/widgets/actions/jobs/9/logs");
@@ -75,7 +75,45 @@ fn check_log_credentials(mock: &Mock) {
     let blob = &requests[requests.len() - 1];
     assert_eq!(blob.path, "/blob/job-9.log");
     assert!(!blob.headers.contains_key("authorization"));
-    assert_eq!(blob.headers["range"], "bytes=-289");
+}
+
+#[tokio::test]
+async fn a_failed_test_log_records_the_test_its_panic_and_the_job_page() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let open = || pull(7, json!({}));
+    let page = "https://github.com/Acme/widgets/actions/runs/5/job/9";
+    let failed = json!({"total_count": 1, "check_runs": [{"id": 9, "name": "unit",
+        "status": "completed", "conclusion": "failure", "html_url": page}]});
+    poll(&mock, open(), open(), failed.clone());
+    mock.reply(200, vec![], failed);
+    mock.reply(
+        302,
+        vec![("location", "/blob/job-9.log".to_string())],
+        json!({}),
+    );
+    let mut log: String = (0..400)
+        .map(|i| format!("2026-11-27T09:32:01.9700000Z    Compiling crate_{i:04}\r\n"))
+        .collect();
+    log.push_str(concat!(
+        "2026-11-27T09:32:02.0000000Z \u{1b}[31m        FAIL\u{1b}[0m [   0.010s] widgets::it unit::adds\r\n",
+        "2026-11-27T09:32:02.0000000Z thread 'unit::adds' panicked at tests/unit.rs:12:5:\r\n",
+        "2026-11-27T09:32:02.0000000Z assertion `left == right` failed\r\n",
+        "2026-11-27T09:32:02.0000000Z   left: 1\r\n",
+        "2026-11-27T09:32:02.0000000Z  right: 2\r\n",
+        "2026-11-27T09:32:02.0000000Z \r\n",
+    ));
+    log.push_str(&"2026-11-27T09:32:03.0000000Z Post job cleanup.\r\n".repeat(50));
+    mock.reply(200, vec![], json!(log));
+    let tail = log_poll(&delivery, 300).await.observed.unwrap().checks_log;
+    assert_eq!(
+        tail.unwrap().tail,
+        format!(
+            "== unit ==\n{page}\nFAIL [   0.010s] widgets::it unit::adds\n\
+             thread 'unit::adds' panicked at tests/unit.rs:12:5:\n\
+             assertion `left == right` failed\n  left: 1\n right: 2"
+        )
+    );
 }
 
 #[tokio::test]
@@ -89,8 +127,13 @@ async fn a_log_that_cannot_be_read_records_the_failed_check_without_a_tail() {
         (c.outcome, c.output),
         ("failed", json!({"names": ["unit"]}))
     );
+    // The check's name stays (with its page, when GitHub gives one).
     let seen = p.observed.unwrap();
-    assert_eq!((seen.checks_state, seen.checks_log), ("failed", None));
+    let log = seen.checks_log.map(|l| l.tail);
+    assert_eq!(
+        (seen.checks_state, log.as_deref()),
+        ("failed", Some("== unit =="))
+    );
 
     // A transport failure is the same.
     let open = || pull(7, json!({}));

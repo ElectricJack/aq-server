@@ -12,7 +12,7 @@
 use super::GitTarget;
 use crate::{DeliveryError, protocol};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 use uuid::Uuid;
 
 /// The prefix a task branch lives under, in central aq-git and on the forge.
@@ -130,16 +130,32 @@ fn sha1(hex: &str) -> Result<Value, GitFailure> {
     }
 }
 
+/// How long aq-git may take to answer a ref read of the central repository.
+/// shortcut: a fixed budget for local reads; move it to Settings if a read ever reaches the remote.
+const LOCAL_CALL: Duration = Duration::from_secs(30);
+/// The time aq-git has to write its answer after the deadline it was given.
+const REPLY_MARGIN: Duration = Duration::from_secs(5);
+
 /// The aq-git socket (`SourceRetentionConfig::git_socket`).
 #[derive(Debug, Clone)]
 pub struct SocketGit {
     socket: PathBuf,
+    /// The `deadline_ms` each call gives aq-git.
+    deadline: Duration,
 }
 impl SocketGit {
     pub fn new(socket: impl Into<PathBuf>) -> Self {
         Self {
             socket: socket.into(),
+            deadline: LOCAL_CALL,
         }
+    }
+
+    /// Calls that reach the remote (sync, publish, branch deletion) get
+    /// Settings `delivery-limits.git_transfer_timeout_ms`. aq-git caps a
+    /// publish at 300 s of its own.
+    pub fn waiting(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
     }
 
     async fn call(
@@ -153,11 +169,11 @@ impl SocketGit {
             "operation_id": operation, "operation": name,
             "repository_id": repo.repository_id,
             "expected_binding_generation": repo.binding_generation,
-            "params": params, "deadline_ms": 30000,
+            "params": params, "deadline_ms": self.deadline.as_millis() as u64,
         });
         let mut bytes = serde_json::to_vec(&request).map_err(|_| GitFailure::protocol())?;
         bytes.push(b'\n');
-        let raw = protocol::exchange(&self.socket, &bytes)
+        let raw = protocol::exchange_within(&self.socket, &bytes, self.deadline + REPLY_MARGIN)
             .await
             .map_err(|e| match e {
                 DeliveryError::Protocol => GitFailure::protocol(),

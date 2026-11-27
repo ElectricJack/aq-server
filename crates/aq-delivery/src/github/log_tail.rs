@@ -49,7 +49,7 @@ fn fit(text: &str, max: usize) -> &str {
 
 /// Removes ANSI escape sequences and every control character but newline and
 /// tab (a carriage return only ends a progress line).
-fn strip_controls(text: &str) -> String {
+pub(super) fn strip_controls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {

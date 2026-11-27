@@ -801,8 +801,46 @@ async fn return_once(state: &AppState, report_id: Uuid, reason: &str) -> Result<
             .execute(&mut *tx).await.map_err(db)?;
     }
     tx.commit().await.map_err(db)?;
+    // Before the replacement facts, so that the next attempt's startup reads it.
+    let thread = aq_task_comments::Thread {
+        project_id: r.spec.lifecycle.project_id,
+        task_id: r.spec.task.task_id,
+    };
+    post_failed_checks(state, report_id, thread).await;
     Box::pin(replacement_facts_after_rework(state, report_id)).await;
     Ok(Settled::Returned)
+}
+
+/// The system comment naming what the result's failed required checks
+/// showed, once per result. Best effort: it never fails the return.
+#[cfg(feature = "delivery_playbook")]
+async fn post_failed_checks(state: &AppState, report_id: Uuid, thread: aq_task_comments::Thread) {
+    let pool = &state.store.pool;
+    let max = aq_task_comments::MAX_BODY_BYTES;
+    // A bounded read (bridge timeouts), so that a slow database cannot hold the return.
+    let body = async {
+        let mut tx = aq_playbook_domain::bridge_tx(pool).await?;
+        aq_playbook_domain::delivery_store::failed_checks_comment(&mut tx, report_id, max).await
+    };
+    let body = match body.await {
+        Ok(Some(body)) => body,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%report_id, ?error, "failed checks comment not read");
+            return;
+        }
+    };
+    let author = aq_task_comments::Author::System {
+        component: "aq.swarm".into(),
+    };
+    let id = Uuid::new_v5(
+        &thread.task_id,
+        format!("aq.checks-failed/{report_id}").as_bytes(),
+    );
+    match aq_task_comments::add(pool, id, thread, &author, &body, (state.clock)()).await {
+        Ok(_) | Err(aq_task_comments::Error::IdConflict) => {}
+        Err(error) => tracing::warn!(%report_id, ?error, "failed checks comment not posted"),
+    }
 }
 
 #[cfg(test)]

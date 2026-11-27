@@ -44,6 +44,7 @@
       },
       {
         "action": null,
+        "dismissible": true,
         "id": "result:ae2dde95-086d-4a5b-ad60-f877e404a807:00000000-0000-0000-0000-000000000001",
         "impact": "Review the owning record for current context",
         "kind": "failed",

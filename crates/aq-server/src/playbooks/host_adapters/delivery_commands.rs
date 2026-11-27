@@ -49,15 +49,23 @@ impl DeliveryOps for ServerDelivery {
     }
 
     async fn commands(&self) -> Option<Delivery> {
+        let socket = &self.state.source_retention.as_ref()?.config.git_socket;
         let init = || async {
-            let socket = &self.state.source_retention.as_ref()?.config.git_socket;
             let app = self.state.config.delivery.as_ref();
             Some(Delivery::configured(
                 socket,
                 app.and_then(|d| d.github.as_ref()),
             ))
         };
-        self.commands.get_or_init(init).await.clone()
+        let commands = self.commands.get_or_init(init).await.clone()?;
+        // Read for each step, so an owner's change applies to the next aq-git call.
+        let (limits, _) = aq_role_settings::delivery_limits(&self.state.store.pool)
+            .await
+            .ok()?;
+        Some(commands.git_waiting(
+            socket,
+            std::time::Duration::from_millis(limits.git_transfer_timeout_ms),
+        ))
     }
 
     async fn replay_publication(

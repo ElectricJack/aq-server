@@ -2,6 +2,13 @@ use super::super::replacement::seed_agent_binding;
 use super::*;
 
 pub(super) async fn held_retry_env(outcome: aq_admission::transport::ProcessOutcome) -> AutoEnv {
+    held_env(outcome, ReportSource::Pushed { changed: true }).await
+}
+
+async fn held_env(
+    outcome: aq_admission::transport::ProcessOutcome,
+    source: ReportSource,
+) -> AutoEnv {
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
     ))
@@ -17,13 +24,7 @@ pub(super) async fn held_retry_env(outcome: aq_admission::transport::ProcessOutc
     ))
     .await;
     report.outcome = outcome;
-    let env = finish_auto_env(
-        f,
-        report,
-        axum::http::StatusCode::OK,
-        ReportSource::Pushed { changed: true },
-    )
-    .await;
+    let env = finish_auto_env(f, report, axum::http::StatusCode::OK, source).await;
     seed_agent_binding(&env, &profile).await;
     env
 }
@@ -70,6 +71,9 @@ impl RetryHistory {
             aq_admission::transport::ProcessOutcome::Success,
         ))
         .await;
+        Self::of(env).await
+    }
+    async fn of(env: AutoEnv) -> Self {
         let pool = env.f.db.pool().await;
         let lineage = &env.f.selection.lineage;
         let (task, attempt, result) = (
@@ -615,6 +619,75 @@ async fn the_sweep_reconciles_a_successful_result_held_by_policy() {
     assert_eq!(history.env.writes.load(Ordering::SeqCst), 0);
 }
 
+/// A successful no-change result the delivery judge refused until its returns ran out is
+/// reconciled like a policy hold: nothing was published, so its source is the pushed base and
+/// its effects are quiescent. Before, `held_report` took a `returns_exhausted` success only
+/// with a failed PR, and the owner's approved retry waited forever on its effects.
+#[tokio::test]
+async fn the_sweep_reconciles_a_judged_no_change_result_whose_returns_ran_out() {
+    use aq_server::profiled_execution::{
+        expiry::ReworkSweep,
+        replacement::{self, Assessment},
+    };
+    let env = Box::pin(held_env(
+        aq_admission::transport::ProcessOutcome::Success,
+        ReportSource::Pushed { changed: false },
+    ))
+    .await;
+    let history = RetryHistory::of(env).await;
+    let (pool, task, attempt, result) =
+        (&history.pool, history.task, history.attempt, history.result);
+    super::super::replacement::seed_native_offer_clock(pool, attempt).await;
+    let facts = || async {
+        sqlx::query_as::<_,(String,String)>("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(pool).await.unwrap()
+    };
+    let assess = || replacement::assess_task(&history.env.f.state, task, NOW + 1);
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',$3)")
+        .bind(result).bind(task).bind(NOW as i64).execute(pool).await.unwrap();
+    // A published branch for the result is an effect this rule does not reconcile.
+    let publish = history.record("branch.publish", "published", result).await;
+    ReworkSweep::default()
+        .tick(&history.env.f.state)
+        .await
+        .unwrap();
+    assert_eq!(facts().await, ("pending".into(), "unknown".into()));
+    sqlx::query("DELETE FROM playbook_host_operations WHERE operation_id=$1")
+        .bind(publish)
+        .execute(pool)
+        .await
+        .unwrap();
+    ReworkSweep::default()
+        .tick(&history.env.f.state)
+        .await
+        .unwrap();
+    assert_eq!(facts().await, ("retained".into(), "quiescent".into()));
+    assert_eq!(
+        assess().await.unwrap(),
+        Assessment::Blocked("returns_exhausted")
+    );
+    let o = aq_machine_control::holds::Override {
+        operation_id: Uuid::new_v4(),
+        attempt_id: attempt,
+        hold_code: "returns_exhausted".into(),
+        reason: "The judge now checks agent-side criteria only".into(),
+        actor: "owner@localhost".into(),
+        recorded_at_ms: NOW as i64 + 1,
+        spent_microunits: None,
+    };
+    let mut conn = pool.acquire().await.unwrap();
+    aq_machine_control::holds::record_override(&mut conn, task, &o, chrono::Utc::now())
+        .await
+        .unwrap();
+    drop(conn);
+    let Assessment::Replace(r) = assess().await.unwrap() else {
+        panic!("an overridden, reconciled no-change result is replaceable");
+    };
+    assert_eq!((r.predecessor, r.needs_release), (attempt, true));
+    assert!(history.env.holds_task().await);
+    assert_eq!(history.env.writes.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     use http_body_util::BodyExt;
@@ -866,4 +939,59 @@ async fn successor_needs_requires_an_exact_quiescent_predecessor() {
     let retry = act("task.retry", (observed + 1).to_string(), None).await;
     assert_eq!(retry["data"]["disposition"], "confirmed", "{retry}");
     assert!(!env.holds_task().await);
+}
+
+/// A result returned because its required checks failed leaves the next
+/// attempt a task comment with what the checks showed: the check's name and
+/// page, the failed test and its panic line. Once per result.
+#[tokio::test]
+async fn a_checks_failed_return_posts_what_the_failed_checks_showed() {
+    let env = Box::pin(held_retry_env(
+        aq_admission::transport::ProcessOutcome::Failed,
+    ))
+    .await;
+    let history = RetryHistory::of(env).await;
+    let thread = aq_task_comments::Thread {
+        project_id: history.env.f.selection.lineage.project_id,
+        task_id: history.task,
+    };
+    history
+        .record("pull_request.await_checks", "failed", history.result)
+        .await;
+    let page = "https://github.com/Acme/widgets/actions/runs/5/job/9";
+    let panic = "thread 'playbook_host9::delivery::posts' panicked at crates/aq-server/tests/it_playbook/playbook_host9/delivery.rs:212:5:";
+    let log = format!(
+        "== tests (feature-on runs) ==\n{page}\nFAIL [   1.034s] aq-server::it_playbook playbook_host9::delivery::posts\n{panic}\nassertion failed: posted"
+    );
+    history.failed_log("4".repeat(40), log).await;
+    for _ in 0..2 {
+        assert_eq!(
+            super::send_back(&history.env, "checks_failed").await,
+            Settled::Returned
+        );
+    }
+    let (comments, _) = aq_task_comments::list(&history.pool, thread, None, 20)
+        .await
+        .unwrap();
+    let posted: Vec<_> = (comments.iter())
+        .filter(|c| (c.body.as_deref()).is_some_and(|b| b.contains("required checks failed")))
+        .collect();
+    assert_eq!(posted.len(), 1, "{comments:?}");
+    let body = posted[0].body.as_deref().unwrap();
+    for shown in [
+        "tests (feature-on runs)",
+        page,
+        "playbook_host9::delivery::posts",
+        panic,
+        "untrusted",
+        &"4".repeat(40),
+    ] {
+        assert!(body.contains(shown), "{shown} not in {body}");
+    }
+    assert_eq!(
+        posted[0].author,
+        aq_task_comments::Author::System {
+            component: "aq.swarm".into()
+        }
+    );
 }

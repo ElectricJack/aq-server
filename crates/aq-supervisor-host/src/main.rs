@@ -115,7 +115,8 @@ async fn controller(
     digest: aq_session_protocol::Digest,
 ) -> Result<Controller> {
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(4)
+        .max_connections(aq_machine_control::connections::SUPERVISOR_CONTROLLER_POOL)
+        .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
         .connect(&c.database_url)
         .await?;
     let authority = Arc::new(InstalledAuthority {

@@ -118,7 +118,7 @@ pub(super) async fn overview(
         );
     }
     let read = OverviewRead::load(request, &scope).await?;
-    let mut data = read.collect(&mounted).await;
+    let mut data = read.collect(&mounted).await?;
     read.fence_projects().await?;
     fence(state, runtime, user, &a).await?;
     let now = stamp(state)?;
@@ -244,7 +244,7 @@ impl<'a> OverviewRead<'a> {
         }
         Ok(())
     }
-    async fn collect(&self, mounted: &MountedOwners) -> Overview {
+    async fn collect(&self, mounted: &MountedOwners) -> Result<Overview> {
         // SO-01: results holds node row locks for its whole page while attempts
         // locks each node with a 250 ms timeout. Run concurrently, attempts lost
         // that wait on ~40% of reads, so these two sources run in turn.
@@ -269,7 +269,7 @@ impl<'a> OverviewRead<'a> {
             Box::pin(bounded_source("operations", self.operations())),
             Box::pin(bounded_source("internal_work", self.internal_work())),
         );
-        OverviewSources {
+        let sources = OverviewSources {
             attempts,
             ready,
             reviews,
@@ -277,11 +277,13 @@ impl<'a> OverviewRead<'a> {
             settlements,
             operations,
             internal,
-        }
-        .overview(
+        };
+        let mut data = sources.overview(
             self.projects.iter().map(|p| p.label.clone()),
             self.truncated,
-        )
+        );
+        super::attention::filter(&self.request.runtime, self.request.user.id, &mut data).await?;
+        Ok(data)
     }
 }
 

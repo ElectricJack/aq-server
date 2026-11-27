@@ -73,6 +73,19 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
     );
     assert_eq!(git.request(1)["params"]["expected_old"]["hex"], old);
     assert_eq!(git.request(1)["params"]["update"], "replace");
+    // The host gives aq-git the Settings deadline for a call that reaches the remote.
+    let waiting = delivery.git_waiting(git.path(), std::time::Duration::from_secs(300));
+    done(
+        waiting
+            .branch_publish(
+                TaskOperation::new(Uuid::from_u128(5), &target(), TASK),
+                Some(&old),
+                None,
+            )
+            .await,
+    );
+    assert_eq!(git.request(0)["deadline_ms"], 30_000);
+    assert_eq!(git.request(2)["deadline_ms"], 300_000);
 }
 
 #[tokio::test]

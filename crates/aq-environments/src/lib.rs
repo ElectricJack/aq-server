@@ -193,9 +193,17 @@ pub async fn place(
     metadata: &Value,
     predecessor: Option<Uuid>,
     services: &[String],
+    now_ms: i64,
 ) -> Result<(String, bool), OfferRefusal> {
+    use aq_role_settings::environments::{listed, ran_in};
+    // A retry keeps its predecessor's environment while a node still lists it.
+    // A version every node has moved past (`name@1` after `name@2` replaced it)
+    // can never run again, so the retry is placed afresh instead of waiting.
     let kept = match predecessor {
-        Some(attempt) => aq_role_settings::environments::ran_in(pool, attempt).await,
+        Some(attempt) => match ran_in(pool, attempt).await {
+            Some(e) if listed(pool, &e, now_ms).await => Some(e),
+            _ => None,
+        },
         None => None,
     };
     let provides = |e: &str| catalog.provides(e);

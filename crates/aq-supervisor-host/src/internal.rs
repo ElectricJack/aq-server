@@ -67,6 +67,7 @@ pub async fn run(path: &Path) -> Result<()> {
     let options = options.options([("statement_timeout", "30000")]);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(MAX_RUNS as u32 + 1)
+        .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
         .connect_with(options)
         .await?;
     let runner = format!("internal-host:{}", hostname()?);

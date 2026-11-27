@@ -216,16 +216,19 @@ impl GitHubClient {
             .map_err(|_| GitHubApiError::Protocol("unexpected GraphQL data".into()))
     }
 
-    /// The last `keep + 1` bytes (at most) of a text download that `path`
-    /// answers with a redirect, such as a job's logs. The redirect target is a
-    /// signed URL: it is fetched once, without the installation token, and
-    /// read as a stream so that a long log is never held whole.
-    pub async fn send_text_tail(
+    /// A text download that `path` answers with a redirect, such as a job's
+    /// logs, handed to `line` one line at a time (lossy UTF-8, each cut to
+    /// `max_line` bytes). The redirect target is a signed URL: it is fetched
+    /// once, without the installation token, and read as a stream so that a
+    /// long log is never held whole. A read cut short has already handed
+    /// over the lines before the cut.
+    pub async fn send_text_lines(
         &self,
         path: &str,
         auth: Auth<'_>,
-        keep: usize,
-    ) -> GitHubResult<Vec<u8>> {
+        max_line: usize,
+        mut line: impl FnMut(&str),
+    ) -> GitHubResult<()> {
         let url = self.url(path)?;
         let authorization = auth.header()?;
         let first = self
@@ -235,18 +238,33 @@ impl GitHubClient {
             .send()
             .await
             .map_err(transport)?;
-        let response = if first.status().is_redirection() {
+        let mut response = if first.status().is_redirection() {
             let target = redirect_target(&first, &url)?;
-            self.http
-                .get(target)
-                .header(reqwest::header::RANGE, format!("bytes=-{}", keep + 1))
-                .send()
-                .await
-                .map_err(transport)?
+            self.http.get(target).send().await.map_err(transport)?
         } else {
             first
         };
-        read_tail(response, keep + 1).await
+        let status = response.status();
+        if !status.is_success() {
+            let headers = response.headers().clone();
+            let body = response.bytes().await.map_err(transport)?;
+            return Err(map_error(status, &headers, &body, Utc::now()));
+        }
+        let mut pending: Vec<u8> = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(transport)? {
+            for piece in chunk.split_inclusive(|b| *b == b'\n') {
+                let room = max_line.saturating_sub(pending.len()).min(piece.len());
+                pending.extend_from_slice(&piece[..room]);
+                if piece.ends_with(b"\n") {
+                    line(&String::from_utf8_lossy(&pending));
+                    pending.clear();
+                }
+            }
+        }
+        if !pending.is_empty() {
+            line(&String::from_utf8_lossy(&pending));
+        }
+        Ok(())
     }
 }
 
@@ -258,26 +276,6 @@ fn redirect_target(response: &reqwest::Response, base: &Url) -> GitHubResult<Url
         .and_then(|location| base.join(location).ok())
         .filter(|t| matches!(t.scheme(), "http" | "https") && no_credentials(t))
         .ok_or_else(|| GitHubApiError::Protocol("unusable log redirect".into()))
-}
-
-async fn read_tail(mut response: reqwest::Response, window: usize) -> GitHubResult<Vec<u8>> {
-    let status = response.status();
-    if !status.is_success() {
-        let headers = response.headers().clone();
-        let body = response.bytes().await.map_err(transport)?;
-        return Err(map_error(status, &headers, &body, Utc::now()));
-    }
-    let mut tail: Vec<u8> = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport)? {
-        tail.extend_from_slice(&chunk);
-        if tail.len() > 2 * window {
-            tail.drain(..tail.len() - window);
-        }
-    }
-    if tail.len() > window {
-        tail.drain(..tail.len() - window);
-    }
-    Ok(tail)
 }
 
 /// GitHub's `message`, followed by any `errors[].message` details.
