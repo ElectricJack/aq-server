@@ -44,7 +44,14 @@ pub(super) async fn configured(
         .delivery
         .as_ref()
         .and_then(|settings| settings.github.as_ref());
-    Ok((Delivery::configured(socket, forge), target))
+    let (limits, _) = aq_role_settings::delivery_limits(&state.store.pool)
+        .await
+        .map_err(|_| AppError::UpdatesUnavailable("delivery limits unavailable".into()))?;
+    let wait = std::time::Duration::from_millis(limits.git_transfer_timeout_ms);
+    Ok((
+        Delivery::configured(socket, forge).git_waiting(socket, wait),
+        target,
+    ))
 }
 
 pub(super) struct Admission<'a> {
