@@ -105,10 +105,12 @@ impl Runtime {
             performance_pool: PgPoolOptions::new()
                 .max_connections(3)
                 .acquire_timeout(Duration::from_millis(700))
+                .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
                 .connect_lazy_with(performance_options),
             pool: PgPoolOptions::new()
                 .max_connections(2)
                 .acquire_timeout(Duration::from_millis(500))
+                .idle_timeout(aq_machine_control::connections::SECONDARY_IDLE)
                 .connect_lazy_with(options),
             gate: Semaphore::new(4),
             reviews: None,
