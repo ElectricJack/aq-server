@@ -143,7 +143,6 @@ pub async fn compile(
         })
         .collect();
     let (project, repository) = (binding.project_id, binding.repository_id);
-    #[cfg(feature = "delivery_playbook")]
     let retry_check = {
         let workspace = binding.graph_workspace_id;
         let scope = (project, workspace, context.revision.task_id);
@@ -254,7 +253,6 @@ pub async fn compile(
                 );
             }
         };
-        #[cfg(feature = "delivery_playbook")]
         let startup =
             startup.with_retry_evidence(|used| retry_check.as_ref()?.startup(limit, used));
         let policy = GraphAccessPolicy {

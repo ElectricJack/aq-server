@@ -17,24 +17,16 @@ pub mod coding;
 pub mod config_policy;
 pub mod context_reads;
 pub mod daily_schedules;
-<<<<<<< HEAD
-=======
 pub mod decision_effects;
-#[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
 pub mod delivery_decisions;
 mod delivery_review;
 pub mod delivery_runs;
 pub mod delivery_store;
-<<<<<<< HEAD
-=======
 pub mod driver_outcomes;
 pub mod effect_store;
 pub mod finding_episodes;
 pub mod grants;
 pub mod health_scans;
-#[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
 pub mod hold_notice;
 pub mod host10;
 pub mod host9;
@@ -51,7 +43,6 @@ pub mod namespace_store;
 pub mod playbook_view;
 pub mod plugin_effects;
 pub mod publication_evidence;
-#[cfg(feature = "delivery_playbook")]
 pub mod retry_check;
 pub mod review_domain;
 pub mod route_effect;

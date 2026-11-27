@@ -26,7 +26,6 @@ const DIGEST: &str = "sha256:ddddddddddddddddddddddddddddddddddddddddddddddddddd
 struct Harness {
     worker: Router,
     // The git tests serve `/v1/git` from it.
-    #[cfg_attr(not(feature = "delivery_playbook"), allow(dead_code))]
     state: AppState,
     pool: PgPool,
     project: Uuid,
@@ -594,7 +593,6 @@ async fn a_job_claimed_more_than_max_job_claims_times_completes_failed() {
 }
 
 /// The git route on the harness's server, serving aq-git through `fake`.
-#[cfg(feature = "delivery_playbook")]
 fn git_router(h: &Harness, fake: &aq_delivery::git_grant::fake::FakeGitHttp) -> Router {
     let mut state = h.state.clone();
     let mut config = (*state.config).clone();
@@ -606,7 +604,6 @@ fn git_router(h: &Harness, fake: &aq_delivery::git_grant::fake::FakeGitHttp) -> 
     build_worker_router(state)
 }
 /// A job for `commit` claimed by BUILDER.
-#[cfg(feature = "delivery_playbook")]
 async fn claimed_at(h: &Harness, commit: &str) -> Uuid {
     let recipes = vec!["web".to_string()];
     let job = NewJob {
@@ -625,7 +622,6 @@ async fn claimed_at(h: &Harness, commit: &str) -> Uuid {
 
 /// Spec 0017 §6.3: the builder fetches the job's commit through `/v1/git`
 /// with its node credential and `AQ-Environment-Job` instead of an attempt.
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn a_claim_holder_can_fetch_its_jobs_repository() {
     use aq_delivery::git_grant::fake::{FakeGitHttp, git};
@@ -678,7 +674,6 @@ async fn a_claim_holder_can_fetch_its_jobs_repository() {
 
 /// The job grant is fetch-only, for the job's repository, for the node that
 /// holds the live claim: everything else is refused before aq-git.
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_job_grant_refuses_push_other_repositories_other_nodes_and_expired_claims() {
     use aq_delivery::git_grant::fake::FakeGitHttp;

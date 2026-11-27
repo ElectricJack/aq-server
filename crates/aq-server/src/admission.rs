@@ -99,12 +99,7 @@ pub fn classify(path: &str) -> Class {
     {
         return Class::AgentCommand;
     }
-<<<<<<< HEAD
-    if path.starts_with("/v1/git/") {
-=======
-    #[cfg(feature = "delivery_playbook")]
     if path.starts_with("/v1/git/") || path.starts_with("/v1/supervisor/git/") {
->>>>>>> refs/remotes/central/main
         return Class::GitTransfer;
     }
     if let Some(class) = profiled_class(path) {

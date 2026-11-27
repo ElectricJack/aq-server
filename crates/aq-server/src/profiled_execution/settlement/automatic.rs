@@ -4,13 +4,8 @@
 //! Attempts with a Git grant are settled by the delivery playbook.
 use super::facts;
 use super::{completion, owner::*};
-<<<<<<< HEAD
-use crate::{AppState, profiled_execution::results};
-=======
 use crate::execution::authority::{self, Policy};
 use crate::{AppState, error::AppError, profiled_execution::results};
-#[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
 use aq_playbook_domain::delivery_decisions::Settled;
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
 use aq_profiled_state::graph_completion::{
@@ -22,7 +17,6 @@ use serde_json::{Value, json};
 use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-#[cfg(feature = "delivery_playbook")]
 pub(super) mod publication_retry;
 
 const OWNER: &str = "aq.settlement-owner.auto.1";
@@ -133,7 +127,6 @@ pub async fn settle_after_record(
         Some((reason, evidence)) => (Verdict::Hold(reason), evidence),
         None => evaluate_locked(state, &mut tx, &r, delivery).await?,
     };
-    #[cfg(feature = "delivery_playbook")]
     let verdict = if matches!(verdict, Verdict::Complete)
         && !crate::task_workspace_delivery::gate(state, &mut tx, &r, true).await?
     {
@@ -201,7 +194,6 @@ pub async fn record_replacement_facts(
 pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
     recover_held_for_retry_exact(state, task, None, None).await
 }
-#[cfg(feature = "delivery_playbook")]
 pub(crate) async fn recover_held_for_retry_exact(
     state: &AppState,
     task: Uuid,
@@ -254,19 +246,6 @@ async fn replacement_facts(
     aq_profiled_state::result_reads::lock_settlement(&mut tx, report_id)
         .await
         .map_err(db)?;
-<<<<<<< HEAD
-    let reworked = match lock_row(&mut tx, report_id).await? {
-        Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
-        None if owner_retry => {
-            aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
-                .await
-                .map_err(db)?
-                == Some(report_id)
-        }
-        None => false,
-    };
-=======
->>>>>>> refs/remotes/central/main
     let view = authority::load_locked(
         state,
         &mut tx,
@@ -276,15 +255,12 @@ async fn replacement_facts(
     .await?;
     // An owner can request a replacement of a proven stopped cancellation with
     // a pinned failed result. Recheck the exact eligible report under the attempt locks.
-    #[cfg(feature = "delivery_playbook")]
     let cancelled_retry = owner_retry
         && view.cancellation_id.is_some()
         && aq_delivery::git_grant::cancelled_failed_report(&mut *tx, r.spec.task.task_id)
             .await
             .map_err(db)?
             == Some(report_id);
-    #[cfg(not(feature = "delivery_playbook"))]
-    let cancelled_retry = false;
     let settlement = graph_completion::lock_row(&mut tx, report_id)
         .await
         .map_err(db)?
@@ -302,7 +278,6 @@ async fn replacement_facts(
             .is_none();
     let reworked = match settlement {
         Some(ref s) => s.disposition == AutoDisposition::ReworkRequired,
-        #[cfg(feature = "delivery_playbook")]
         None if owner_retry || (!view.revoked && view.cancellation_id.is_none()) => {
             cancelled_retry
                 || aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
@@ -312,15 +287,12 @@ async fn replacement_facts(
         }
         None => false,
     };
-    #[cfg(feature = "delivery_playbook")]
     let publication_retry = match _owner_operation {
         Some(operation) if !reworked && !platform_retry && settlement.is_none() => {
             publication_retry::evidence(&mut tx, &r, operation).await?
         }
         _ => None,
     };
-    #[cfg(not(feature = "delivery_playbook"))]
-    let publication_retry: Option<Value> = None;
     let attempt = r.report.binding.attempt_id;
     let owner_settled = aq_profiled_state::result_reads::owner_settled(&mut tx, attempt)
         .await
@@ -345,58 +317,8 @@ async fn replacement_facts(
         tx.commit().await.map_err(db)?;
         return Ok(facts);
     }
-<<<<<<< HEAD
-    let mut changed = false;
-    if !matches!(hot.retention, Retention::Retained { .. }) {
-        let enrolled = super::super::has_delivery_grant(&mut *tx, attempt).await?;
-        if enrolled
-            && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
-                .await
-                .map_err(db)?
-        {
-            let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
-            hot.retention = Retention::Retained { receipt: reference };
-            changed = true;
-        }
-        if !enrolled {
-            for op in &r.report.source_receipt_ids {
-                match crate::source_retention::load_confirmed_locked(&mut tx, *op, &r).await {
-                    Ok(confirmed) => {
-                        hot.retention = Retention::Retained {
-                            receipt: reference(
-                                format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
-                                &confirmed.acknowledgement,
-                            )?,
-                        };
-                        changed = true;
-                        break;
-                    }
-                    Err(crate::error::AppError::Conflict(_)) => {}
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-    }
-    if !matches!(hot.effects, Effects::Quiescent { .. }) {
-        let ledger = super::effects::inspect_aq_effects_locked(state, &mut tx, &r).await?;
-        // Quiescence (every operation final), not the read-only acceptance verdict: a
-        // messaging or write profile's finished, returned attempt is replaceable too.
-        if ledger.quiescent() {
-            let mut fact = json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR});
-            if ledger.disposition() != super::effects::LedgerDisposition::Settled {
-                fact["ledger_disposition"] = json!(ledger.disposition().name());
-            }
-            let id = format!("aq.replacement-effects/{report_id}");
-            hot.effects = Effects::Quiescent {
-                receipt: reference(id, &fact)?,
-            };
-            changed = true;
-        }
-    }
-=======
     let mut changed = retain_replacement_source_locked(&mut tx, &r, &mut hot).await?;
     changed |= settle_replacement_effects_locked(state, &mut tx, &r, &mut hot).await?;
->>>>>>> refs/remotes/central/main
     if changed {
         hot.validate_against(&r.report.binding)
             .map_err(|_| crate::error::AppError::Internal)?;
@@ -408,7 +330,6 @@ async fn replacement_facts(
         changed,
         ..current(&hot)
     };
-    #[cfg(feature = "delivery_playbook")]
     if let Some(evidence) = publication_retry
         && facts.source_retained
         && facts.effects_quiescent
@@ -440,7 +361,6 @@ async fn replacement_facts(
         )
         .await
         .map_err(db)?;
-        #[cfg(feature = "delivery_playbook")]
         if super::super::has_delivery_grant(&mut *tx, attempt).await? {
             aq_playbook_domain::delivery_decisions::record_platform_return(
                 &mut tx,
@@ -463,13 +383,11 @@ async fn retain_replacement_source_locked(
 ) -> Result<bool> {
     use crate::execution::profiled::Retention;
     let attempt = r.report.binding.attempt_id;
-    #[cfg(feature = "delivery_playbook")]
     let report_id = r.report.report_id;
     if matches!(hot.retention, Retention::Retained { .. }) {
         return Ok(false);
     }
     let enrolled = super::super::has_delivery_grant(&mut **tx, attempt).await?;
-    #[cfg(feature = "delivery_playbook")]
     if enrolled
         && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, report_id)
             .await
@@ -865,7 +783,6 @@ pub async fn return_by_playbook(
     return_once(state, report_id, reason).await
 }
 
-#[cfg(feature = "delivery_playbook")]
 async fn return_once(state: &AppState, report_id: Uuid, reason: &str) -> Result<Settled> {
     let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
     let existing = existing.as_ref().map(status).transpose()?;

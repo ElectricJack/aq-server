@@ -805,7 +805,6 @@ async fn a_pruned_environment_is_no_longer_listed_or_offered() {
 /// Requalifying a ticket after environment admission uses the current binding
 /// and a worker that has pulled its image. The ticket keeps the exact branch
 /// checkpoint that its stopped attempt already pushed.
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn a_fresh_retry_in_a_newly_admitted_environment_keeps_the_task_branch_lease() {
     use super::git_grant::granted_offer;

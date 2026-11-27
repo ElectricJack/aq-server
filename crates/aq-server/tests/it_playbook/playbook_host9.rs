@@ -177,9 +177,9 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
     // The first number after the last profile is none.
-    #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+    #[cfg(not(feature = "project_environments"))]
     assert_eq!(CatalogProfile::from_number(12), None);
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     assert_eq!(CatalogProfile::from_number(13), None);
 }
 
@@ -251,7 +251,7 @@ mod adapters {
         pub attempts: Mutex<(u32, u32)>,
         pub options: Mutex<Options>,
         pub writes: Mutex<Vec<(Uuid, Option<Route>)>>,
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         pub environments: Mutex<aq_server::playbooks::domain::host10::Environments>,
     }
     #[async_trait::async_trait]
@@ -268,7 +268,7 @@ mod adapters {
         async fn options(&self) -> Result<Options> {
             Ok(self.options.lock().unwrap().clone())
         }
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         async fn environments(
             &self,
             _: Uuid,
@@ -376,7 +376,7 @@ mod adapters {
                 described: BTreeMap::new(),
             }),
             writes: Mutex::default(),
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             environments: Mutex::default(),
         });
         let service = Service::new_host2(
@@ -1927,7 +1927,7 @@ mod delivery {
             attempts: Mutex::new((1, 2)),
             options: Mutex::new(Options::default()),
             writes: Mutex::default(),
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             environments: Mutex::default(),
         });
         let port = Arc::new(Port::default());
@@ -2694,11 +2694,8 @@ mod delivery {
             ) -> GitHubResult<PullRequest> {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
-<<<<<<< HEAD
-=======
                     head_sha: self.pr_head.lock().unwrap().clone(),
                     base_sha: self.pr_base.lock().unwrap().clone(),
->>>>>>> refs/remotes/central/main
                     ..pull(*self.pr_state.lock().unwrap())
                 })
             }
@@ -3788,7 +3785,7 @@ pub(crate) use delivery::commands::GraphMergeHost;
 /// Catalog 2.5.0 routing on a Host12 namespace (spec 0017 §5.4): `work.read`
 /// gives the facts a routing document chooses an environment from, and
 /// `work.route` records the environment it chose.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 mod environments {
     use super::adapters::{Host, host_as};
     use crate::common;

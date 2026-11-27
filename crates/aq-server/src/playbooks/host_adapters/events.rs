@@ -55,7 +55,6 @@ impl Service {
         let at = self.now()?;
         // `aq.delivery.completed` names no subject or revision: the join
         // correlates it by the operation.
-        #[cfg(feature = "delivery_playbook")]
         let (subject_id, revision) = if subject.is_null() {
             (None, None)
         } else {
@@ -64,11 +63,6 @@ impl Service {
                 Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
             )
         };
-        #[cfg(not(feature = "delivery_playbook"))]
-        let (subject_id, revision) = (
-            Some(text(subject, "id")?.to_string()),
-            Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
-        );
         let event = EventEnvelope {
             producer: "aq.host.bridge@1".into(),
             event_id: event_id.to_string(),

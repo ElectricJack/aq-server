@@ -721,7 +721,6 @@ async fn offers(
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
-                        #[cfg(feature = "delivery_playbook")]
                         if let Some(replacement) = a.replacement() {
                             let mut connection = pool.acquire().await.map_err(db)?;
                             if replacement::pending_publication_owner(

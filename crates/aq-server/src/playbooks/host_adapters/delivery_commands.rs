@@ -217,7 +217,7 @@ impl Service {
         let now = self.now()?;
         #[allow(unused_mut)]
         let mut commands = DELIVERY_COMMANDS.to_vec();
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         commands.extend(aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS);
         let due = delivery::due_operations(
             &mut tx,
@@ -250,7 +250,7 @@ impl Service {
         if op.status != "running" {
             return Ok(true);
         }
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         if aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&op.command.as_str()) {
             let Some(result) = self
                 .environment_step(operation, &op.command, &op.request)

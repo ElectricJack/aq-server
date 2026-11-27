@@ -63,7 +63,6 @@ async fn ready_with_stop_reason(
     (f, report)
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn native_outcome_blocked_is_bound_to_the_current_assignment() {
     use aq_admission::transport::StopReason;

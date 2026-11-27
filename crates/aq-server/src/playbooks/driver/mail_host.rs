@@ -17,7 +17,6 @@ impl DomainHost for MailHost {
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
     }
-    #[cfg(feature = "delivery_playbook")]
     fn reconcile_delivery(&mut self, intent: &Intent) -> Option<DispatchResult> {
         let command = intent.command.name.as_str();
         if !matches!(command, "work.complete" | "work.return") {

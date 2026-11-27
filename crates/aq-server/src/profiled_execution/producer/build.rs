@@ -746,11 +746,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         decision,
         deadline,
         supports_git_author,
-<<<<<<< HEAD
-=======
         workspace: workspace.clone(),
-        #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
         git,
     })
 }

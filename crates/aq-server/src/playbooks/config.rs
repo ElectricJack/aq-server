@@ -56,97 +56,6 @@ struct Configuration {
     #[serde(default)]
     integration: Option<IntegrationInput>,
 }
-<<<<<<< HEAD
-/// Commit identity for central candidates and the publication evidence policy.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct IntegrationInput {
-    commit_name: String,
-    commit_email: String,
-    /// Check ids each needing a passing check receipt before publication.
-    #[serde(default)]
-    checks: Vec<String>,
-    #[serde(default)]
-    review: bool,
-    #[serde(default)]
-    judgment_choices: Vec<String>,
-}
-#[derive(Clone, Debug)]
-pub(crate) struct IntegrationSettings {
-    pub(crate) commit_name: String,
-    pub(crate) commit_email: String,
-    pub(crate) evidence: super::host_adapters::EvidencePolicy,
-}
-impl IntegrationInput {
-    fn load(self) -> Result<IntegrationSettings> {
-        let identity =
-            |s: &str| !s.is_empty() && s.len() <= 256 && !s.contains(['\n', '\r', '\0', '<', '>']);
-        let names = |v: &[String]| {
-            v.len() <= 16
-                && v.iter().enumerate().all(|(i, x)| {
-                    (1..=64).contains(&x.len()) && !x.contains('\0') && !v[..i].contains(x)
-                })
-        };
-        if !identity(&self.commit_name)
-            || !identity(&self.commit_email)
-            || !names(&self.checks)
-            || (self.checks.is_empty() && !self.review && self.judgment_choices.is_empty())
-            || !names(&self.judgment_choices)
-        {
-            return Err("invalid playbook integration policy");
-        }
-        Ok(IntegrationSettings {
-            commit_name: self.commit_name,
-            commit_email: self.commit_email,
-            evidence: super::host_adapters::EvidencePolicy {
-                checks: self.checks,
-                review: self.review,
-                judgment_choices: self.judgment_choices,
-            },
-        })
-    }
-}
-#[derive(Deserialize)]
-enum Profile {
-    #[serde(rename = "human_review_v2")]
-    HumanReview2,
-    #[serde(rename = "graph_events_v3")]
-    GraphEvents3,
-    #[serde(rename = "settlement_events_v4")]
-    SettlementEvents4,
-    #[serde(rename = "monitoring_v6")]
-    Monitoring6,
-    #[serde(rename = "host_v7")]
-    Host7,
-    #[serde(rename = "host_v8")]
-    Host8,
-    #[serde(rename = "host_v9")]
-    Host9,
-    #[serde(rename = "host_v10")]
-    Host10,
-    #[serde(rename = "host_v11")]
-    Host11,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DeploymentInput {
-    artifact_file: PathBuf,
-    binding: String,
-    #[serde(default)]
-    schedules: Vec<BindingSchedule>,
-    grant_id: Uuid,
-    scope: GrantScope,
-    expires_at_ms: i64,
-}
-pub(crate) struct Deployment {
-    pub artifact: Artifact,
-    pub binding: String,
-    pub schedules: Vec<BindingSchedule>,
-    pub grant_id: Uuid,
-    pub scope: GrantScope,
-    pub expires_at_ms: i64,
-}
-=======
 mod local_socket;
 use aq_playbook_domain::config_policy::integration::IntegrationInput;
 pub(crate) use aq_playbook_domain::config_policy::integration::IntegrationSettings;
@@ -154,7 +63,6 @@ use aq_playbook_domain::config_policy::{
     Deployment, DeploymentInput, Profile, load_deployments, valid_binding,
 };
 use local_socket::{LocalSocket, private};
->>>>>>> refs/remotes/central/main
 pub struct Loaded {
     pub(crate) namespace: Namespace,
     pub(crate) keys: Arc<Keyring>,
@@ -192,110 +100,9 @@ impl Drop for EngineKeys {
         }
     }
 }
-<<<<<<< HEAD
-impl Configuration {
-    fn load(self) -> Result<Loaded> {
-        if !self.enabled {
-            return Err("omit playbooks section to disable owner");
-        }
-        let profile = match self.profile {
-            Profile::HumanReview2 => CatalogProfile::HumanReview2,
-            Profile::GraphEvents3 => CatalogProfile::GraphEvents3,
-            Profile::SettlementEvents4 => CatalogProfile::SettlementEvents4,
-            Profile::Monitoring6 => CatalogProfile::Monitoring6,
-            Profile::Host7 => CatalogProfile::Host7,
-            Profile::Host8 => CatalogProfile::Host8,
-            Profile::Host9 => CatalogProfile::Host9,
-            Profile::Host10 => CatalogProfile::Host10,
-            Profile::Host11 => CatalogProfile::Host11,
-        };
-        if self.installation_routing && !profile.has_routing() {
-            return Err(
-                "playbook installation_routing requires the host_v9 profile or a later routing profile",
-            );
-        }
-        if self.integration.is_some() && !profile.is_host2() {
-            return Err("playbook integration requires the host_v7 or host_v8 profile");
-        }
-        let integration = self.integration.map(IntegrationInput::load).transpose()?;
-        let n = &self.namespace;
-        if [
-            n.namespace_id,
-            n.project_id,
-            n.workspace_id,
-            n.owner_user_id,
-        ]
-        .iter()
-        .any(Uuid::is_nil)
-            || n.generation <= 0
-            || n.name.is_empty()
-            || n.name.len() > 128
-            || n.name.contains('\0')
-            || !(250..=60000).contains(&self.drive_interval_ms)
-            || !self.engine_timeouts.valid()
-            || !self.retention.valid()
-            || !self.engine_retention.valid()
-            || self.deployments.len() > 4
-        {
-            return Err("invalid playbook owner identity or bounds");
-        }
-        let dsn = private(&self.engine_connection_file, 4096)?;
-        let parsed: pg::Config = std::str::from_utf8(&dsn)
-            .map_err(|_| "invalid playbook connection file")?
-            .trim()
-            .parse()
-            .map_err(|_| "invalid playbook connection file")?;
-        let directory_path = match parsed.get_hosts() {
-            [Host::Unix(p)] if p.is_absolute() => p.clone(),
-            _ => return Err("playbook owner requires one Unix socket endpoint"),
-        };
-        if parsed.get_ssl_mode() != SslMode::Disable
-            || !parsed.get_hostaddrs().is_empty()
-            || parsed.get_ports().len() != 1
-            || parsed.get_ports()[0] == 0
-            || parsed.get_options().is_some()
-            || parsed
-                .get_user()
-                .is_none_or(|s| s.is_empty() || s.len() > 128)
-            || parsed
-                .get_dbname()
-                .is_none_or(|s| s.is_empty() || s.len() > 128)
-        {
-            return Err("invalid local playbook connection policy");
-        }
-        let directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
-            .open(&directory_path)
-            .map_err(|_| "playbook socket directory unavailable")?;
-        let m = directory
-            .metadata()
-            .map_err(|_| "playbook socket directory unavailable")?;
-        if !m.is_dir()
-            || m.mode() & 0o022 != 0
-            || (m.uid() != 0 && m.uid() != self.socket_owner_uid)
-        {
-            return Err("untrusted playbook socket directory");
-        }
-        let port = parsed.get_ports()[0];
-        let mut connection = pg::Config::new();
-        connection
-            .host_path(format!("/proc/self/fd/{}", directory.as_raw_fd()))
-            .port(port)
-            .user(parsed.get_user().unwrap())
-            .dbname(parsed.get_dbname().unwrap())
-            .ssl_mode(SslMode::Disable)
-            .connect_timeout(Duration::from_millis(1000))
-            .application_name("aq-playbook-owner");
-        if let Some(password) = parsed.get_password() {
-            connection.password(password);
-        }
-        let raw = private(&self.engine_keyring_file, 4096)?;
-=======
 impl EngineKeys {
     fn load(file: &Path) -> Result<ProtectionKeyring> {
         let raw = private(file, 4096)?;
->>>>>>> refs/remotes/central/main
         let mut input: EngineKeys =
             serde_json::from_slice(&raw).map_err(|_| "invalid playbook engine keys")?;
         let bounded_names = input.keys.keys().all(|key| (1..=64).contains(&key.len()));

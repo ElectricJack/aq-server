@@ -3,7 +3,6 @@ use aq_playbook_domain::manual_admission::{EncodedAdmission, replay_admission, v
 
 impl Service {
     pub async fn prepare(&self, actor: Uuid, request: PrepareRequest) -> Result<AdmissionStatus> {
-        #[cfg(feature = "delivery_playbook")]
         if self.profile.is_delivery()
             && request.binding == crate::playbooks::domain::host10::DELIVERY_BINDING
         {

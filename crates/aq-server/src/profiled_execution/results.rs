@@ -77,8 +77,6 @@ pub async fn record(
         }
         recorded => recorded?,
     };
-<<<<<<< HEAD
-=======
     if checkpoint {
         if let Err(error) =
             super::settlement::record_replacement_facts(state, report.report_id).await
@@ -87,8 +85,6 @@ pub async fn record(
         }
         return Ok(receipt);
     }
-    #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
     if enrolled {
         if let Err(error) = super::settlement::record_facts(state, report.report_id).await {
             tracing::warn!(report_id = %report.report_id, ?error, "result facts deferred");

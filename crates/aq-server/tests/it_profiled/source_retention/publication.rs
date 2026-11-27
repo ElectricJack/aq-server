@@ -16,25 +16,6 @@ use std::sync::Mutex;
 struct FakeGitHub {
     calls: Mutex<Vec<&'static str>>,
 }
-<<<<<<< HEAD
-=======
-#[cfg(not(feature = "delivery_playbook"))]
-#[async_trait::async_trait]
-impl GitHubAdapter for FakeGitHub {
-    async fn open_pull_request(
-        &self,
-        _: &PullRequestSpec,
-    ) -> std::result::Result<PullRequest, GitHubError> {
-        self.calls.lock().unwrap().push("open_pull_request");
-        Err(GitHubError("fake".into()))
-    }
-    async fn checks(&self, _: &PullRequest) -> std::result::Result<ChecksState, GitHubError> {
-        self.calls.lock().unwrap().push("checks");
-        Ok(ChecksState::Pending)
-    }
-}
-#[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
 impl FakeGitHub {
     fn call<T>(&self, operation: &'static str) -> GitHubResult<T> {
         self.calls.lock().unwrap().push(operation);

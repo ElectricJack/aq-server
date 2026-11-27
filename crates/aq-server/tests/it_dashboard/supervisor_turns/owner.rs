@@ -708,10 +708,8 @@ async fn project_supervisor_cannot_send_playbook_actions() {
     assert_eq!(out["message"], REFUSAL, "{out}");
 }
 
-/// Read-only code access (`/v1/supervisor/git`), with feature
-/// `delivery_playbook`: aq-git's git socket is a fake served by
+/// Read-only code access (`/v1/supervisor/git`): aq-git's git socket is a fake served by
 /// `git http-backend` that holds both bound projects' repositories.
-#[cfg(feature = "delivery_playbook")]
 mod git {
     use super::*;
     use aq_delivery::git_grant::fake::{FakeGitHttp, git};
@@ -954,7 +952,6 @@ mod git {
     }
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn project_supervisor_cannot_attest_or_publish_a_sibling_workspace() {
     let o = project_owner().await;

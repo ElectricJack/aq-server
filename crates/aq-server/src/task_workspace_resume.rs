@@ -31,9 +31,7 @@ pub(crate) struct Scope {
 impl Scope {
     pub(crate) fn blocker(&self, capable: bool) -> Option<&'static str> {
         self.blocker.or_else(|| {
-            if self.requires_workspace && !cfg!(feature = "delivery_playbook") {
-                Some(SERVER_UNSUPPORTED)
-            } else if self.requires_workspace && !capable {
+            if self.requires_workspace && !capable {
                 Some(UNSUPPORTED)
             } else if !cfg!(feature = "project_environments") && self.has_services() {
                 Some("workspace_expansion_service_capability_unavailable")

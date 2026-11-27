@@ -15,10 +15,7 @@ fn check_registration(f: &Fake) {
         assert_eq!(p[field], json!(["refs/heads/trunk"]), "{field}");
     }
     // Spec 0016 §5.2: every task's branch is a prefix-scoped target.
-    #[cfg(feature = "delivery_playbook")]
     assert_eq!(p["allowed_target_prefixes"], json!(["refs/heads/aq/"]));
-    #[cfg(not(feature = "delivery_playbook"))]
-    assert!(p.get("allowed_target_prefixes").is_none());
     assert!(p.get("credential_profile").is_none());
     assert_eq!(f.syncs[0]["refs"], json!(["refs/heads/trunk"]));
 }

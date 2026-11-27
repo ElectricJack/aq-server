@@ -192,7 +192,6 @@ impl authoring::Server for AppState {
             )
         })
     }
-    #[cfg(feature = "delivery_playbook")]
     fn delivery(&self) -> Option<SourceRecord> {
         let driver = self.internal_work.authoring().driver().ok()?;
         let environments = driver.service.profile.has_environments();

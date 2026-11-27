@@ -47,7 +47,6 @@ pub trait Server: Host + Deployer {
     }
     /// The built-in delivery record for the namespace the engine runs
     /// ([`crate::builtin::delivery`]); none while the engine is closed.
-    #[cfg(feature = "delivery_playbook")]
     fn delivery(&self) -> Option<crate::SourceRecord> {
         Some(crate::builtin::delivery(false))
     }

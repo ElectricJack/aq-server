@@ -255,13 +255,11 @@ fn install_git(
     ));
     (dir, socket, listener)
 }
-#[cfg(feature = "delivery_playbook")]
 struct MovingMain {
     remote: Arc<std::sync::Mutex<String>>,
     operations: Arc<std::sync::Mutex<Vec<String>>>,
     task: tokio::task::JoinHandle<()>,
 }
-#[cfg(feature = "delivery_playbook")]
 impl MovingMain {
     fn serve(
         listener: tokio::net::UnixListener,
@@ -361,7 +359,6 @@ impl MovingMain {
             .count()
     }
 }
-#[cfg(feature = "delivery_playbook")]
 async fn check_handles(
     pool: &sqlx::PgPool,
     scope: &aq_delivery::main_sync::Scope,
@@ -382,7 +379,6 @@ async fn check_handles(
         assert_eq!(verdict.unwrap(), accepted, "{handle} for {head}");
     }
 }
-#[cfg(feature = "delivery_playbook")]
 fn assert_synced_head(sync: &aq_delivery::main_sync::MainSync, expected: &str, at: u64) {
     assert_eq!((sync.head.as_str(), sync.synced_at_ms), (expected, at));
 }

@@ -15,9 +15,7 @@ use uuid::Uuid;
 mod agent;
 mod harnesses;
 pub use harnesses::{Running, boot_adapter, listed};
-#[cfg(feature = "delivery_playbook")]
 pub mod commands;
-#[cfg(feature = "delivery_playbook")]
 pub mod git;
 mod store;
 pub mod worker;

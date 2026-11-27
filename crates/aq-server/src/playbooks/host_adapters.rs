@@ -32,12 +32,8 @@ fn host_result(outcome: &str, output: Value) -> HostResult {
 
 mod activate;
 mod assess;
-<<<<<<< HEAD
-=======
 mod cancellation;
 mod context;
-#[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
 mod delivery_commands;
 mod delivery_decisions;
 mod delivery_port;
@@ -45,21 +41,17 @@ mod effects;
 mod events;
 use events::HostEvent;
 pub(super) use events::OutboxEntry;
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 mod environment_commands;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
-<<<<<<< HEAD
-=======
 mod work;
-#[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
 pub use delivery_commands::{DeliveryOps, ServerDelivery};
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub use environment_commands::ServerEnvironments;
 pub use integration::*;
 pub use requests::*;
@@ -81,7 +73,7 @@ pub struct HostPorts {
     /// delivered, and the commands over the forge and central aq-git.
     pub delivery_ops: Arc<dyn DeliveryOps>,
     /// Catalog 2.5.0: the project's recipes on aq-git and its binding.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     pub environment_ops: Arc<dyn aq_environments::commands::EnvironmentOps>,
 }
 
@@ -232,31 +224,12 @@ impl Service {
             "work.read" | "work.route" | "work.unroutable" => {
                 self.work_routing(owner, command).await
             }
-<<<<<<< HEAD
-            "work.complete" | "work.return" => self.work_decide(owner, id, revision, intent).await,
-            "work.hold" => self.work_hold(owner, id, revision, intent).await,
-            "supervisor.notify" => self.supervisor_notify(owner, id, revision, intent).await,
-            "operation.cancel" => self.operation_cancel(owner, id, revision, intent).await,
-            "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
-            "judgment.assess" => self.judgment_assess(owner, id, revision, intent).await,
-            "check.request" => self.check_request(owner, id, revision, intent).await,
-            "operation.get" => self.host_operation_get(owner, id, revision, intent).await,
-            "candidate.prepare" => self.candidate_prepare(owner, id, revision, intent).await,
-            "candidate.publish" => self.candidate_publish(owner, id, revision, intent).await,
-            "message.send" => self.host_message_send(owner, id, revision, intent).await,
-            "decision.request" => {
-                self.host_decision_request(owner, id, revision, intent)
-                    .await
-=======
             "context.read" => self.context_read(owner, command).await,
             "work.ensure" => self.work_ensure(owner, command).await,
             "work.change" => self.work_change(owner, command).await,
             super::review_domain::WORK_ACTIVATE => self.work_activate(owner, command).await,
-            #[cfg(feature = "delivery_playbook")]
             "work.complete" | "work.return" => self.work_decide(owner, command, false).await,
-            #[cfg(feature = "delivery_playbook")]
             "work.hold" => self.work_hold(owner, command).await,
-            #[cfg(feature = "delivery_playbook")]
             "supervisor.notify" => self.supervisor_notify(owner, command).await,
             "operation.cancel" => self.operation_cancel(owner, command).await,
             "judgment.request" => self.judgment_request(owner, command).await,
@@ -267,12 +240,11 @@ impl Service {
             "candidate.publish" => self.candidate_publish(owner, command).await,
             "message.send" => self.host_message_send(owner, command).await,
             "decision.request" => self.host_decision_request(owner, command).await,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             name if self.profile.has_environments()
                 && aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&name) =>
             {
                 self.environment_command(owner, id, revision, intent).await
->>>>>>> refs/remotes/central/main
             }
             name if self.profile.is_delivery()
                 && aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) =>
@@ -437,111 +409,6 @@ impl Service {
         Ok(())
     }
 
-<<<<<<< HEAD
-    /// Seals one aq.work.changed event into the outbox in the caller's tx.
-    async fn work_event(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        intent: &Intent,
-        outcome: &str,
-        output: &Value,
-    ) -> Result<()> {
-        let event_id = stable_id(
-            &format!("aq.playbook.{}.event", intent.command.name),
-            self.namespace.namespace_id,
-            self.namespace.generation,
-            &intent.id,
-        )?;
-        self.seal_event(
-            tx,
-            "aq.work.changed",
-            event_id,
-            self.operation(intent)?,
-            &intent.id,
-            &output["subject"],
-            json!({"outcome": outcome, "reference": output["reference"], "subject": output["subject"]}),
-        )
-        .await
-    }
-
-    /// Seals one trusted host-bridge event into the outbox in the caller's
-    /// tx, validated against the pinned catalog event contract.
-    #[allow(clippy::too_many_arguments)]
-    async fn seal_event(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        contract: &str,
-        event_id: Uuid,
-        operation: Uuid,
-        causation: &str,
-        subject: &Value,
-        payload: Value,
-    ) -> Result<()> {
-        let registry = self.registry();
-        let c = registry.events.get(contract).ok_or(Error::Invalid)?;
-        let at = self.now()?;
-        // `aq.delivery.completed` names no subject or revision: the join
-        // correlates it by the operation.
-        let (subject_id, revision) = if subject.is_null() {
-            (None, None)
-        } else {
-            (
-                Some(text(subject, "id")?.to_string()),
-                Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
-            )
-        };
-        let event = EventEnvelope {
-            producer: "aq.host.bridge@1".into(),
-            event_id: event_id.to_string(),
-            contract: ContractRef {
-                name: c.name.clone(),
-                fingerprint: c.fingerprint().map_err(|_| Error::Invalid)?,
-            },
-            scope: "project".into(),
-            correlation: BTreeMap::from([("operation".into(), operation.to_string())]),
-            subject: subject_id,
-            revision,
-            causation: Some(causation.to_string()),
-            occurred_at_ms: Some(at),
-            observed_at_ms: Some(at),
-            payload,
-        };
-        aq_playbook_host::model::validate_event(&event, registry).map_err(|_| Error::Invalid)?;
-        self.seal_outbox(tx, event_id, &event, at, None).await
-    }
-
-    pub(super) async fn seal_outbox(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        row_id: Uuid,
-        event: &EventEnvelope,
-        at: i64,
-        retention: Option<i64>,
-    ) -> Result<()> {
-        let event_digest = digest(event)?;
-        let bytes = canonical_bytes(event).map_err(|_| Error::Invalid)?;
-        let aad = self.aad("aq.playbooks.outbox", row_id, &event_digest)?;
-        let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,plugin_event_id,plugin_retain_until_ms) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12)")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&event.producer)
-            .bind(row_id)
-            .bind(event_digest)
-            .bind(sealed.version as i32)
-            .bind(sealed.key_id)
-            .bind(sealed.nonce)
-            .bind(sealed.ciphertext)
-            .bind(at)
-            .bind(retention.map(|_| &event.event_id))
-            .bind(retention)
-            .execute(&mut **tx)
-            .await?;
-        Ok(())
-    }
-
-=======
->>>>>>> refs/remotes/central/main
     /// Settles a pending row: the final outcome and its outbox event commit
     /// together. A row already settled by another resume is returned as is.
     async fn finish(

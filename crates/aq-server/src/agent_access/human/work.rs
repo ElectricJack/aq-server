@@ -121,7 +121,6 @@ impl TaskWork<'_> {
         }
         crate::role_settings::level_hold(self.state, self.pool, &self.record.binding, node).await
     }
-    #[cfg(feature = "delivery_playbook")]
     async fn delivery_hold(
         &self,
         hold: Option<&aq_human_work::Hold>,
@@ -175,76 +174,13 @@ pub(super) async fn work(
         record: &a.record,
     };
     let open = root["task_state"] == "active" && root["retired"] != true;
-<<<<<<< HEAD
-    if !open {
-        aq_machine_control::holds::clear_closed(&r.pool, id, (s.clock)()).await;
-    }
-    let held = aq_machine_control::holds::current(&r.pool, p, id).await;
-    let mut held = held.map_err(|_| unavailable())?;
-    if let Some(h) = held
-        .as_mut()
-        .filter(|h| aq_machine_control::holds::is_budget_hold(&h.reason))
-    {
-        let current = a.record.revision;
-        let pinned =
-            aq_profiled_state::replacement_sql::predecessor_project_revision(&r.pool, h.attempt_id)
-                .await
-                .map_err(|_| unavailable())?;
-        if pinned != Some(current) {
-            let now = u64::try_from((s.clock)().timestamp_millis()).map_err(|_| unavailable())?;
-            if let Some(code) =
-                crate::profiled_execution::replacement::retry_hold(&s, id, now, current).await?
-            {
-                h.reason = code.into();
-            }
-        }
-    }
-    let held = aq_human_work::recorded_hold(&r.pool, p, id, held.as_ref()).await;
-    // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
-    let role = aq_role_settings::tasks::effective_role(
-        &raw["node"]["metadata"],
-        &a.record.binding.default_role,
-    );
-    let role_hold = crate::role_settings::hold(&s, &r.pool, &role).await?;
-    // Spec 0014 §5.2: so is a task whose level has no document.
-    let level_hold = match role_hold {
-        Some(_) => None,
-        None => {
-            let binding = &a.record.binding;
-            crate::role_settings::level_hold(&s, &r.pool, binding, &raw["node"]).await?
-        }
-    };
-    // Spec 0014 §6.1: and one whose last offer was refused before any attempt.
-    let offer_hold = match open && execution.is_null() && crate::role_settings::tables(&s) {
-        true => aq_role_settings::refusals::shown(&r.pool, id).await,
-        false => None,
-    };
-    let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-    // Epic 0 (spec 0016 section 7): a stopped attempt's undecided result waits
-    // for a playbook, and the read says whether one is active to decide it.
-    let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => {
-            let namespace = s
-                .config
-                .playbooks
-                .as_deref()
-                .filter(|pb| {
-                    pb.profile.is_delivery()
-                        && (pb.installation_routing || pb.namespace.project_id == p)
-                })
-                .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
-            aq_human_work::delivery::waiting(&r.pool, namespace, h).await
-        }
-=======
     let held = task.recorded_hold(open).await?;
     let role_hold = task.role_hold(&raw["node"]).await?;
     let offer_hold = task.offer_hold(open, &execution).await;
     let graph_wait = match (&hold, open) {
         (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
->>>>>>> refs/remotes/central/main
         _ => None,
     };
-    #[cfg(feature = "delivery_playbook")]
     let graph_wait = aq_human_work::delivery::completion_wait(
         graph_wait,
         task.delivery_hold(hold.as_ref(), open, a.requested).await,
@@ -290,7 +226,6 @@ pub(super) async fn work(
     )
     .await
     .map_err(|_| unavailable())?;
-    #[cfg(feature = "delivery_playbook")]
     aq_human_work::delivery::show_followup(&r.pool, p, id, &mut readiness).await;
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],

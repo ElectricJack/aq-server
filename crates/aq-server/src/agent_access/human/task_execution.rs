@@ -232,92 +232,7 @@ impl ActionKind for TaskRetry {
         request: &ActionRequest,
         p: Retry,
     ) -> Outcome {
-<<<<<<< HEAD
-        let run = async {
-            let (task, raw, revision, workspace) =
-                match fresh(state, &self.0, user, request, &p).await? {
-                    Ok(fresh) => fresh,
-                    Err(outcome) => return Ok(outcome),
-                };
-            if raw["task_state"] != "active" {
-                return Ok(rejected());
-            }
-            // B4 decides admissibility, as the scheduler does: an unsettled predecessor is a
-            // rejection. A limit hold alone (the assessment's, or one selection recorded) is
-            // overridden with the owner's reason; never a confirmation the offer path refuses.
-            use aq_machine_control::holds;
-            let now = now(state)?;
-            let mut assessment =
-                replacement::assess_task_for_revision(state, task, now, revision).await?;
-            if !p.fresh
-                && matches!(
-                    assessment,
-                    replacement::Assessment::Blocked(
-                        "replacement_effects_unreconciled" | "replacement_source_retention_unknown"
-                    )
-                )
-            {
-                Box::pin(
-                    crate::profiled_execution::settlement::recover_held_for_retry(state, task),
-                )
-                .await?;
-                assessment =
-                    replacement::assess_task_for_revision(state, task, now, revision).await?;
-            }
-            if p.fresh {
-                return fresh_start(state, user, request, &p, (task, revision), assessment).await;
-            }
-            let recorded = holds::current(&state.store.pool, p.project_id, task).await;
-            let recorded = recorded.map_err(|_| AppError::Internal)?;
-            let limit = match assessment {
-                replacement::Assessment::Blocked(code) => Some(code),
-                _ => recorded.and_then(|h| holds::budget_code(&h.reason)),
-            };
-            if let Some(code) = limit {
-                let reason = request.reason.as_deref().map(str::trim);
-                let lineage =
-                    aq_admission::transport::task_lineage_id(p.project_id, workspace, task);
-                let spent = match lineage {
-                    Ok(l) => crate::observations::budget::lineage(state, l, None)
-                        .await
-                        .ok(),
-                    Err(_) => None,
-                };
-                let spent = spent.flatten().and_then(|b| b.snapshot().spent_microunits);
-                let o = holds::Override {
-                    operation_id: p.operation_id,
-                    attempt_id: Uuid::nil(),
-                    hold_code: String::new(),
-                    reason: reason.filter(|r| !r.is_empty()).unwrap_or(NO_REASON).into(),
-                    actor: user.email.clone(),
-                    recorded_at_ms: i64::try_from(now).map_err(|_| AppError::Internal)?,
-                    spent_microunits: spent.and_then(|s| i64::try_from(s).ok()),
-                };
-                let at = (p.project_id, task);
-                assessment = replacement::override_budget(state, at, code, o, revision).await?;
-            }
-            // Review M-5: a refusal names its reason code on the receipt (spec 0004 item 10).
-            let r = match &assessment {
-                replacement::Assessment::Replace(r) => r,
-                replacement::Assessment::Blocked(code) => return Ok(Outcome::refused(code)),
-                replacement::Assessment::Fresh if limit.is_some() => {
-                    let task = existing::entity("task", task, None);
-                    return Ok(Outcome::confirmed(vec![], vec![task]));
-                }
-                replacement::Assessment::Fresh => {
-                    return Ok(Outcome::refused("task_has_no_attempt"));
-                }
-            };
-            replacement::release(state, task, r).await?;
-            Ok::<_, AppError>(Outcome::confirmed(
-                vec![existing::entity("replacement_release", r.predecessor, None)],
-                vec![existing::entity("execution_attempt", r.predecessor, None)],
-            ))
-        };
-        run.await.unwrap_or_else(existing::failure)
-=======
         execute(state, &self.0, user, request, p).await
->>>>>>> refs/remotes/central/main
     }
 }
 
@@ -422,7 +337,6 @@ async fn execute(
         let now = now(state)?;
         let mut assessment =
             replacement::assess_task_for_revision(state, task, now, revision).await?;
-        #[cfg(feature = "delivery_playbook")]
         if !p.fresh
             && matches!(
                 assessment,

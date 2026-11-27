@@ -872,10 +872,6 @@ pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool 
     if current == Some(contract) {
         return true;
     }
-<<<<<<< HEAD
-    if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.3.0") {
-=======
-    #[cfg(feature = "delivery_playbook")]
     if contract.name == "work.read" {
         let pinned = |catalog: &'static OnceLock<Registry>, json: &str| {
             catalog
@@ -886,7 +882,6 @@ pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool 
                 .get(&contract.name)
                 == Some(contract)
         };
->>>>>>> refs/remotes/central/main
         static HOST9: OnceLock<Registry> = OnceLock::new();
         static DELIVERY: OnceLock<Registry> = OnceLock::new();
         let host9 = include_str!("../../../vendor/aq-host-catalog-2.2.0/registry.json");
@@ -908,73 +903,6 @@ pub fn plugins_match(registry: &Registry, artifact: &Registry) -> bool {
         plugins::command_plugin(name).is_none() || registry.events.get(name) == Some(contract)
     })
 }
-<<<<<<< HEAD
-fn validate_registry(registry: &Registry) -> Result<(), Error> {
-    // Base host commands through catalog 2.4.0.
-    const COMMANDS: [&str; 17] = [
-        "work.read",
-        "work.route",
-        "work.unroutable",
-        "judgment.assess",
-        "context.read",
-        "work.ensure",
-        "work.change",
-        "work.activate",
-        "judgment.request",
-        "decision.request",
-        "check.request",
-        "candidate.prepare",
-        "candidate.publish",
-        "message.send",
-        "findings.reconcile",
-        "operation.get",
-        "operation.cancel",
-    ];
-    // Host catalog 2.3.0 (Epic 0, spec 0016): the ten delivery commands.
-    const DELIVERY: [&str; 10] = [
-        "work.complete",
-        "work.return",
-        "work.hold",
-        "supervisor.notify",
-        "main.sync",
-        "branch.publish",
-        "pull_request.open",
-        "pull_request.await_checks",
-        "pull_request.merge",
-        "pull_request.close",
-    ];
-    let admitted = |name: &str| COMMANDS.contains(&name) || DELIVERY.contains(&name);
-    let base_event_count = registry
-        .events
-        .keys()
-        .filter(|name| plugins::command_plugin(name).is_none())
-        .count();
-    let has_extensions = registry
-        .commands
-        .keys()
-        .any(|name| plugins::command_plugin(name).is_some())
-        || registry.events.len() != base_event_count;
-    let byte_limit = if has_extensions { 1_048_576 } else { 262_144 };
-    if base_event_count > 16
-        || !bounded_json(registry, byte_limit)
-        || registry.commands.iter().any(|(name, c)| {
-            (!admitted(name) && !plugins::extension_command(name, c))
-                || name != &c.name
-                || !matches!(
-                    c.recovery,
-                    model::Recovery::Observation
-                        | model::Recovery::KeyedIdempotent
-                        | model::Recovery::Reconcilable
-                )
-        })
-        || registry.events.iter().any(|(name, c)| name != &c.name)
-    {
-        return Err(Error::Invalid);
-    }
-    Ok(())
-}
-=======
->>>>>>> refs/remotes/central/main
 
 fn cancel_effect<S: Storage>(
     engine: &Engine<S>,

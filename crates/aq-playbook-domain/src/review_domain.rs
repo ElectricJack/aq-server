@@ -43,8 +43,8 @@ pub enum CatalogProfile {
     Host11,
     /// AQ host catalog 2.5.0 (spec 0017): Host10's delivery lineage plus
     /// Host11's changes and the environment commands. Compiled in only with
-    /// the cargo features `delivery_playbook` and `project_environments`.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    /// the cargo feature `project_environments`.
+    #[cfg(feature = "project_environments")]
     Host12,
 }
 pub const HOST9_VERSION: &str = "2.2.0";
@@ -216,45 +216,13 @@ pub const HOST10_COMMANDS: [&str; 26] = [
     "pull_request.close",
 ];
 /// The asynchronous delivery commands: each completes by `aq.delivery.completed`.
-<<<<<<< HEAD
-pub const DELIVERY_COMMANDS: [&str; 6] = [
-    "main.sync",
-    "branch.publish",
-    "pull_request.open",
-    "pull_request.await_checks",
-    "pull_request.merge",
-    "pull_request.close",
-];
-fn host10_registry() -> Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.3.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.3.0 parses");
-            assert_eq!(
-                aq_playbook_host::model::digest(&(HOST10_VERSION, &registry))
-                    .ok()
-                    .as_deref(),
-                Some(HOST10_FINGERPRINT),
-                "vendored AQ host catalog 2.3.0 fingerprint"
-            );
-            registry
-        })
-        .clone()
-}
-=======
-#[cfg(feature = "delivery_playbook")]
 pub use aq_playbook_host::ASYNC_DELIVERY_COMMANDS as DELIVERY_COMMANDS;
-#[cfg(feature = "delivery_playbook")]
 static HOST10_CATALOG: CatalogSource = CatalogSource::new(
     HOST10_VERSION,
     HOST10_FINGERPRINT,
     "vendored AQ host catalog 2.3.0",
     include_str!("../../../vendor/aq-host-catalog-2.3.0/registry.json"),
 );
->>>>>>> refs/remotes/central/main
 pub const HOST11_VERSION: &str = "2.4.0";
 pub const HOST11_FINGERPRINT: &str =
     "sha256:d655322de4c8df54aee8df2eaa097343833aff582452a71d50abed934e0916ac";
@@ -269,15 +237,15 @@ static HOST11_CATALOG: CatalogSource = CatalogSource::new(
 pub const WORK_ACTIVATE: &str = "work.activate";
 
 /// AQ host catalog 2.5.0.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub const HOST12_VERSION: &str = "2.5.0";
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub const HOST12_FINGERPRINT: &str =
     "sha256:d51ac465281614d241fe0023bafd94aadbaf3e65a1c3464c597da5000c549a7f";
 /// The asynchronous environment commands: each completes by `aq.environment.completed`.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub const ENVIRONMENT_COMMANDS: [&str; 2] = ["environment.build", "environment.admit"];
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 fn host12_registry() -> Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     REGISTRY
@@ -359,32 +327,21 @@ impl CatalogProfile {
             Self::Host9 => 9,
             Self::Host10 => 10,
             Self::Host11 => 11,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => 12,
         }
     }
     /// Catalog 2.3.0 (Epic 0).
     pub fn is_delivery(self) -> bool {
-<<<<<<< HEAD
-        self == Self::Host10
-=======
-        #[cfg(feature = "delivery_playbook")]
-        {
-            self == Self::Host10 || self.has_environments()
-        }
-        #[cfg(not(feature = "delivery_playbook"))]
-        {
-            false
-        }
->>>>>>> refs/remotes/central/main
+        self == Self::Host10 || self.has_environments()
     }
     /// Catalog 2.5.0 (spec 0017): always false without both features.
     pub fn has_environments(self) -> bool {
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         {
             self == Self::Host12
         }
-        #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+        #[cfg(not(feature = "project_environments"))]
         {
             false
         }
@@ -419,15 +376,10 @@ impl CatalogProfile {
         self.is_host2() || self == Self::Monitoring6
     }
     pub fn from_number(number: i16) -> Option<Self> {
-<<<<<<< HEAD
-=======
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         let delivery = [Self::Host10, Self::Host12];
-        #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
+        #[cfg(not(feature = "project_environments"))]
         let delivery = [Self::Host10];
-        #[cfg(not(feature = "delivery_playbook"))]
-        let delivery: [Self; 0] = [];
->>>>>>> refs/remotes/central/main
         [
             Self::Mail1,
             Self::HumanReview2,
@@ -438,10 +390,10 @@ impl CatalogProfile {
             Self::Host7,
             Self::Host8,
             Self::Host9,
-            Self::Host10,
             Self::Host11,
         ]
         .into_iter()
+        .chain(delivery)
         .find(|p| p.number() == number)
     }
     /// The `[playbooks] profile` value that configures this profile.
@@ -458,7 +410,7 @@ impl CatalogProfile {
             Self::Host9 => "host_v9",
             Self::Host10 => "host_v10",
             Self::Host11 => "host_v11",
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => "host_v12",
         }
     }
@@ -496,7 +448,7 @@ impl CatalogProfile {
                 &COMMANDS
             }
             Self::Host10 => &HOST10_COMMANDS,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => {
                 static COMMANDS: std::sync::LazyLock<Vec<&'static str>> =
                     std::sync::LazyLock::new(|| {
@@ -524,38 +476,15 @@ impl CatalogProfile {
                 }
                 registry
             }
-<<<<<<< HEAD
-            return registry;
-        }
-        if self == Self::Host5 {
-            return host5_registry();
-        }
-        if self == Self::Host7 {
-            return host7_registry();
-        }
-        if self == Self::Host8 {
-            return host8_registry();
-        }
-        if self == Self::Host9 {
-            return host9_registry();
-        }
-        if self == Self::Host11 {
-            return host11_registry();
-        }
-        if self == Self::Host10 {
-            return host10_registry();
-=======
             Self::Host5 => HOST5_CATALOG.load(),
             Self::Host7 => HOST7_CATALOG.load(),
             Self::Host8 => HOST8_CATALOG.load(),
             Self::Host9 => HOST9_CATALOG.load(),
             Self::Host11 => HOST11_CATALOG.load(),
-            #[cfg(feature = "delivery_playbook")]
             Self::Host10 => HOST10_CATALOG.load(),
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => host12_registry(),
             _ => self.review_registry(),
->>>>>>> refs/remotes/central/main
         }
     }
     fn review_registry(self) -> Registry {
@@ -578,104 +507,6 @@ impl CatalogProfile {
         }
         registry
     }
-<<<<<<< HEAD
-    pub fn validate_scope(self, scope: &crate::GrantScope) -> Result<()> {
-        self.validate_scope_with_extensions(scope, |_| false)
-    }
-    pub fn validate_scope_with_extensions(
-        self,
-        scope: &crate::GrantScope,
-        installed: impl Fn(&str) -> bool,
-    ) -> Result<()> {
-        let mut base_capabilities = scope.capabilities.clone();
-        base_capabilities.retain(|capability| {
-            !aq_playbook_host::plugins::extension_capability(capability).is_some_and(&installed)
-        });
-        let has_extensions = base_capabilities != scope.capabilities;
-        if has_extensions
-            && (scope.workspace_id.is_nil()
-                || scope.project_id.is_nil()
-                || aq_playbook_host::model::canonical_bytes(scope)
-                    .map_err(|_| Error::Invalid)?
-                    .len()
-                    > 32768)
-        {
-            return Err(Error::Invalid);
-        }
-        if has_extensions && base_capabilities.is_empty() && scope.recipients.is_empty() {
-            return Ok(());
-        }
-        if self == Self::Mail1 {
-            let mut base = scope.clone();
-            base.capabilities = base_capabilities;
-            return base.validate();
-        }
-        if self.is_host() {
-            let mut allowed: BTreeSet<String> = if self.has_routing() {
-                HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect()
-            } else if self.is_host2() {
-                HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()
-            } else {
-                HOST5_CAPABILITIES.iter().map(|c| c.to_string()).collect()
-            };
-            if self == Self::Monitoring6 {
-                allowed.insert("findings.reconcile".into());
-            }
-            if self == Self::Host11 {
-                allowed.insert(WORK_ACTIVATE.into());
-            }
-            if self.is_delivery() {
-                allowed.extend(HOST10_DELIVERY_CAPABILITIES.iter().map(|c| c.to_string()));
-            }
-            if scope.workspace_id.is_nil()
-                || scope.project_id.is_nil()
-                || !scope.recipients.is_empty()
-                || scope.capabilities.is_empty()
-                || !base_capabilities.is_subset(&allowed)
-                || aq_playbook_host::model::canonical_bytes(scope)
-                    .map_err(|_| Error::Invalid)?
-                    .len()
-                    > 32768
-            {
-                return Err(Error::Invalid);
-            }
-            return Ok(());
-        }
-        let mut base = scope.clone();
-        base.capabilities = BTreeSet::from(["message.send".into()]);
-        base.validate()?;
-        let allowed = BTreeSet::from([
-            "message.send".into(),
-            "decision.request".into(),
-            "operation.get".into(),
-        ]);
-        if scope.capabilities.is_empty() || !base_capabilities.is_subset(&allowed) {
-            return Err(Error::Invalid);
-        }
-        Ok(())
-    }
-    pub fn authority(
-        self,
-        id: Uuid,
-        revision: i64,
-        scope: &crate::GrantScope,
-    ) -> Result<Authority> {
-        self.authority_with_extensions(id, revision, scope, |_| false)
-    }
-    pub fn authority_with_extensions(
-        self,
-        id: Uuid,
-        revision: i64,
-        scope: &crate::GrantScope,
-        installed: impl Fn(&str) -> bool,
-    ) -> Result<Authority> {
-        self.validate_scope_with_extensions(scope, installed)?;
-        let mut authority = crate::authority(id, revision);
-        authority.capabilities = scope.capabilities.clone();
-        Ok(authority)
-    }
-=======
->>>>>>> refs/remotes/central/main
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

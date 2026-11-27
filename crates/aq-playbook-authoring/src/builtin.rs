@@ -70,17 +70,12 @@ pub fn routing() -> SourceRecord {
 /// ([`crate::request::pinned_catalog`]). The document is the only thing it
 /// reads besides the task: Settings offers no fact provider to it, and the
 /// numbers it uses (returns allowed, check wait) are the document's own words.
-<<<<<<< HEAD
-pub fn delivery() -> SourceRecord {
-=======
 ///
 /// `environments` is whether the engine's namespace serves the environment
 /// commands (catalog 2.5.0, spec 0017): only then does the record ask them.
 /// A build with `project_environments` may still run a Host10 namespace,
 /// whose grants refuse them.
-#[cfg(feature = "delivery_playbook")]
 pub fn delivery(environments: bool) -> SourceRecord {
->>>>>>> refs/remotes/central/main
     let names =
         |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
     #[allow(unused_mut)]
@@ -102,7 +97,7 @@ pub fn delivery(environments: bool) -> SourceRecord {
     let mut events = names(&["aq.work.result_ready"]);
     // Spec 0017 §6.3-6.4: build and admit environments, and rebuild on a new
     // base (`aq.environment.completed` comes with the commands).
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     if environments {
         commands.extend(names(&["environment.build", "environment.admit"]));
         events.extend(names(&["aq.environment.base_changed"]));
@@ -157,11 +152,7 @@ mod tests {
         docs::catalog(&record.commands, &record.events).unwrap();
     }
 
-<<<<<<< HEAD
-=======
     /// Whatever the build: a Host10 namespace refuses the environment commands.
-    #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
     #[test]
     fn the_delivery_record_may_settle_a_result_and_no_more() {
         let record = delivery(false);
@@ -274,7 +265,7 @@ mod tests {
 
     /// Spec 0017: catalog 2.5.0 adds the environment commands and the base
     /// event, and keeps every 2.6.0 contract the record used.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
         let record = delivery(true);
@@ -344,7 +335,7 @@ mod tests {
     /// Spec 0017 §5.4: the routing record is authored against catalog 2.5.0,
     /// whose `work.read` gives needs and environments and whose `work.route`
     /// takes the chosen environment; its other commands are 2.2.0's.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_routing_record_chooses_environments_on_catalog_2_5_0() {
         let record = routing();
@@ -378,7 +369,7 @@ mod tests {
     /// The published routing example of spec 0017 §5.4 (vendored byte for
     /// byte) seals as a playbook of this record against its catalog, and its
     /// cases pass.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_route_to_environment_example_seals_as_the_routing_record() {
         let root = format!(
@@ -423,7 +414,7 @@ mod tests {
     }
 
     /// The published 2.5.0 delivery example seals as a playbook of this record.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_environment_delivery_example_seals_as_the_delivery_record() {
         const DIR: &str = "../../vendor/aq-host-catalog-2.5.0/examples/deliver-with-environments";

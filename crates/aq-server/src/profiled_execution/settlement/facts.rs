@@ -77,20 +77,12 @@ async fn gather_source_locked(
 ) -> Result<SourceFacts> {
     // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
     // head when the report was recorded; the report id keys its evidence.
-<<<<<<< HEAD
-    if enrolled
-        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
-            .await
-            .map_err(db)?
-=======
     if !enrolled {
         return gather_confirmed_source_locked(tx, r).await;
     }
-    #[cfg(feature = "delivery_playbook")]
     if let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
         .await
         .map_err(db)?
->>>>>>> refs/remotes/central/main
     {
         let start = &r.spec.source.resolved_object.hex;
         let base = aq_machine_control::lineage_base(tx, r.spec.task.task_id, start).await?;
@@ -99,7 +91,6 @@ async fn gather_source_locked(
     Ok(SourceFacts::default())
 }
 
-#[cfg(feature = "delivery_playbook")]
 pub(crate) async fn retained_bundle_head(
     tx: &mut Transaction<'_, Postgres>,
     result: &results::RecordedResult,

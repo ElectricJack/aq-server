@@ -166,15 +166,10 @@ pub enum Change {
     /// The delivery document. It is not part of a snapshot.
     DeliveryDocument(String),
     /// The delivery limits. They are not part of a snapshot.
-<<<<<<< HEAD
-    DeliveryLimits(delivery::DeliveryLimits),
-=======
-    #[cfg(feature = "delivery_playbook")]
     DeliveryLimits(delivery::DeliveryLimitsChange),
     /// The environment limits (spec 0017 §6.7). They are not part of a snapshot.
     #[cfg(feature = "project_environments")]
     EnvironmentLimits(environments::EnvironmentLimits),
->>>>>>> refs/remotes/central/main
 }
 /// Owner and clock for a change in this settings store.
 #[derive(Clone, Copy)]

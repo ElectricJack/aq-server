@@ -39,7 +39,6 @@ impl Service {
         // delivery outcomes (`synced`, `merged`, ...): a delivery operation is
         // reported while it runs, and once it has completed its answer is the
         // one `aq.delivery.completed` event, which the join already holds.
-        #[cfg(feature = "delivery_playbook")]
         if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&op.command.as_str()) {
             let result = HostResult {
                 outcome: if op.status == "running" {

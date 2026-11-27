@@ -45,7 +45,6 @@ pub mod source_retention;
 pub mod stall;
 pub mod store;
 mod swarm_settings;
-#[cfg(feature = "delivery_playbook")]
 mod task_workspace_delivery;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
@@ -395,10 +394,7 @@ pub fn build_worker_router_with_closure_policy(
     build_worker_router_inner(state, Some(policy), None)
 }
 fn task_workspace_delivery_admin_routes() -> Router<AppState> {
-    #[cfg(feature = "delivery_playbook")]
-    return task_workspace_delivery::admin_routes();
-    #[cfg(not(feature = "delivery_playbook"))]
-    Router::new()
+    task_workspace_delivery::admin_routes()
 }
 
 fn build_worker_router_inner(
@@ -410,16 +406,11 @@ fn build_worker_router_inner(
         Some(policy) => profiled_execution::closure::api::routes(state.clone(), policy),
         None => Router::new(),
     };
-<<<<<<< HEAD
-    let closure = closure.merge(profiled_execution::git_grant::routes(state.clone()));
-=======
-    #[cfg(feature = "delivery_playbook")]
     let closure = closure
         .merge(profiled_execution::git_grant::routes(state.clone()))
         .merge(task_workspace_delivery::worker_routes());
     #[cfg(feature = "project_environments")]
     let closure = closure.merge(aq_environments::worker::routes(&state.config.projects));
->>>>>>> refs/remotes/central/main
     let router = Router::new()
         .merge(closure)
         .merge(worker_api::worker_routes(state.clone()))

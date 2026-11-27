@@ -201,11 +201,7 @@ pub(super) async fn publish(
         _ => return Err(refused()),
     };
     sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)").bind(binding.attempt_id).bind(built.spec.task.task_id).bind(node).bind(binding.offer_id).bind(session_id).bind(serde_json::to_value(&built.state).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
-<<<<<<< HEAD
-=======
     crate::task_workspace_resume::freeze(&mut tx, binding.attempt_id, scope).await?;
-    #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
     if let Some(git) = &built.git {
         let record = aq_delivery::git_grant::record_locked(&mut tx, binding.attempt_id, git);
         record.await.map_err(|_| refused())?;

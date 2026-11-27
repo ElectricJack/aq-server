@@ -114,7 +114,6 @@ async fn allows_handle(
     let published = head.is_some_and(|h| h.oid == request.base.hex && h.retention_handle == handle);
     let allowed = configured_handle || published;
     // Spec 0016 §4: a handle `repo.retain_ref` returned for this exact head.
-    #[cfg(feature = "delivery_playbook")]
     if !allowed {
         let scope = aq_delivery::main_sync::Scope::new(
             request.project_id,

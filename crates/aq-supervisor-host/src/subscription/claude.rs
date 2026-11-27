@@ -139,10 +139,7 @@ fn arguments(
     ]
     .map(String::from)
     .to_vec();
-    if cfg!(all(
-        feature = "supervisor_full_access",
-        feature = "delivery_playbook"
-    )) {
+    if cfg!(feature = "supervisor_full_access") {
         args.extend(["mcp__aq__repo_sync".into(), "mcp__aq__repo_read".into()]);
     }
     if EFFORTS.contains(&reasoning) {
