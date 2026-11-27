@@ -228,6 +228,27 @@ and the publication lease. If the branch already contains the exact result
 head or the lease is usable again, the host announces the same result. The
 delivery playbook owns the next decision and its normal checks still apply.
 
+A refused `branch.publish` (`refused`, reason `unreachable`) keeps its result
+and claim too, and the result is announced again on the same interval. Three
+rules keep that safe:
+- Before it answers `conflict` or `refused`, the command observes the forge
+  branch. If it is already at the exact result head, the command completes
+  `published` with that head and pushes nothing, so a push whose answer was
+  lost, or whose lease moved because it had landed, recovers its receipt.
+- It never forces. Every retry is a new operation under the lease frozen from
+  the last recorded publication; a branch that moved elsewhere stays a
+  `conflict`.
+- The refused operation keeps a bounded, static diagnostic (`remote_rejected`,
+  `rejected`, `git_transport`, `git_protocol`, `git_error`; none on older
+  hosts). `task.work` (`waiting.message`) and the supervisor's
+  `branch_publication_refused` notice name the original operation, the
+  diagnostic, the lease, how often the exact result and commit were refused,
+  and the next step. AQ Git reports no message of the remote's own for a
+  rejection; what the remote refused for (branch protection, push rules, the
+  publisher's permissions) is read on the forge, and what needs a permission
+  change is escalated to the owner. The retained result and commit are not
+  touched by any of this.
+
 Payload: `{task_id, project_id, attempt_id, result_id, version}`. Everything
 else is read through `work.read`.
 

@@ -201,7 +201,7 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
         ("refused", json!({"reason":"unreachable"}))
     );
     let c = publish(Some(&sha('3'))).await;
-    assert!(c.diagnostic.is_none());
+    assert_eq!(c.diagnostic, Some("git_error"));
     assert_eq!(
         (c.outcome, c.output),
         ("refused", json!({"reason": "unreachable"}))
@@ -301,4 +301,109 @@ async fn aq_git_is_never_asked_to_publish_or_delete_outside_the_task_prefix() {
         assert_eq!(deleted.unwrap_err().code, "invalid_ref", "{reference}");
     }
     assert!(git.operations().is_empty());
+}
+
+#[tokio::test]
+async fn a_publish_without_a_publication_recovers_the_exact_result_the_forge_already_has() {
+    // aq-git answers: the lease moved, the remote refused, the call failed.
+    let git = FakeGit::start(|r| match r["params"]["expected_old"]["hex"].as_str() {
+        Some(old) if old == "0".repeat(40) => {
+            json!({"error": {"code": "target_moved", "message": "moved"}})
+        }
+        Some(old) if old == sha('4') => json!({"outcome":"rejected","reason":"remote_rejected"}),
+        _ => json!({"error": {"code": "remote_unreachable", "message": "x"}}),
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let reference = task_branch(TASK);
+    let at = |head| json!([{"ref": reference, "object":{"type":"commit","sha":sha(head)}}]);
+    let publish = async |old: Option<&str>| {
+        done(
+            delivery
+                .branch_publish(
+                    TaskOperation::new(Uuid::new_v4(), &target(), TASK),
+                    old,
+                    Some(&sha('a')),
+                )
+                .await,
+        )
+    };
+    // Each refusal that is not a publication observes the forge once.
+    for old in [None, Some(sha('4')), Some(sha('3'))] {
+        mock.reply(200, vec![], at('a'));
+        let c = publish(old.as_deref()).await;
+        assert_eq!(
+            (c.outcome, c.output),
+            ("published", json!({"head": sha('a')})),
+            "{old:?}"
+        );
+    }
+    // The branch is elsewhere, absent or unobservable: the original answer stands.
+    mock.reply(200, vec![], at('b'));
+    mock.reply(200, vec![], json!([]));
+    let moved = publish(None).await;
+    assert_eq!((moved.outcome, moved.output), ("conflict", json!({})));
+    let rejected = publish(Some(&sha('4'))).await;
+    assert_eq!(rejected.outcome, "refused");
+    assert_eq!(rejected.diagnostic, Some("remote_rejected"));
+    let unobserved = publish(Some(&sha('3'))).await;
+    assert_eq!(unobserved.diagnostic, Some("git_error"));
+    assert_eq!(
+        delivery.observe_task_branch(&target(), TASK).await,
+        Err(()),
+        "no scripted reply is an unobservable forge"
+    );
+    mock.reply(200, vec![], at('c'));
+    assert_eq!(
+        delivery.observe_task_branch(&target(), TASK).await,
+        Ok(Some(sha('c')))
+    );
+    // Recovering a receipt never pushes again: one aq-git publish per operation.
+    assert_eq!(git.operations().len(), 6);
+}
+
+// An exact retained result cannot clear another publisher's uncertainty as a side effect.
+#[tokio::test]
+async fn retained_result_does_not_resolve_a_destination_hold_or_redispatch() {
+    let blocker = Uuid::from_u128(9);
+    let git = FakeGit::start(move |r| match r["operation"].as_str().unwrap() {
+        "publish" => json!({"error":{"code":"operation_indeterminate",
+            "message":"destination has an unresolved publication",
+            "details":{"blocking_operation_id":blocker,"target":task_branch(TASK)}}}),
+        "operation.show" => json!({"generation":2,"status":"pending","phase":"dispatched",
+            "metadata":{"expected_old":sha('2'),"target":task_branch(TASK)}}),
+        "operation.reconcile" => json!({"target_operation_id":blocker,"outcome":"indeterminate",
+            "observed_target":{"algorithm":"sha1","hex":sha('2')}}),
+        "operation.resolve" => json!({"target_operation_id":blocker,
+            "resolution":{"outcome":"resolved"}}),
+        other => panic!("unexpected operation {other}"),
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let operation = Uuid::from_u128(4);
+    let completion = done(
+        delivery
+            .branch_publish(
+                TaskOperation::new(operation, &target(), TASK),
+                Some(&sha('2')),
+                Some(&sha('a')),
+            )
+            .await,
+    );
+    assert_eq!(git.operations(), ["publish"]);
+    assert_eq!(completion.diagnostic, Some("publication_indeterminate"));
+    assert_eq!(
+        (completion.outcome, completion.output),
+        ("refused", json!({"reason":"unreachable"}))
+    );
+    let request = git.request(0);
+    assert_eq!(request["operation_id"], operation.to_string());
+    assert_eq!(
+        request["repository_id"],
+        target().git.repository_id.to_string()
+    );
+    assert_eq!(request["expected_binding_generation"], 3);
+    assert_eq!(request["params"]["expected_old"]["hex"], sha('2'));
+    assert_eq!(request["params"]["expected_source"]["hex"], sha('a'));
+    assert!(request["params"].get("force").is_none());
+    // A failed observation leaves the existing hold and diagnostic intact.
+    assert_eq!(paths(&mock).len(), 1);
 }

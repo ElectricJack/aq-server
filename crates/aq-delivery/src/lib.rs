@@ -25,6 +25,8 @@ mod reconcile;
 pub mod repository_onboarding;
 pub mod result_patch;
 pub mod result_work;
+#[cfg(feature = "delivery_playbook")]
+pub mod retained_publication;
 mod retained_source;
 pub mod source_checks;
 pub mod source_transport;

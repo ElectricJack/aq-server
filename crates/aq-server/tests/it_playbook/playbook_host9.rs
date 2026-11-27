@@ -2215,6 +2215,8 @@ mod delivery {
 
     // `work.complete`, `work.return`, `work.hold` and `supervisor.notify`.
     mod decisions;
+    #[cfg(feature = "delivery_playbook")]
+    mod publication_fixture;
 
     #[tokio::test]
     async fn a_stopped_result_is_announced_once_and_again_after_the_decision_repeat_setting() {
@@ -2950,9 +2952,9 @@ mod delivery {
         }
 
         #[tokio::test]
-        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
+        async fn a_publication_hold_rejoins_delivery_only_after_scoped_recovery_receipt() {
             let (h, forge) = harness().await;
-            let (attempt, task, result, branch) =
+            let (attempt, task, result, _branch) =
                 seed_recoverable_hold(&h, "publish_conflict").await;
             let pool = h.pool().await;
 
@@ -2964,6 +2966,31 @@ mod delivery {
                 0,
                 "forge probes are spaced by the delivery interval"
             );
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "a matching forge head alone cannot authorize publication replay"
+            );
+            // This is the immutable observation receipt the separately authorized
+            // recovery route writes. No worker retry or hold override is involved.
+            let original = Uuid::new_v4();
+            let recovery = Uuid::new_v4();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL session_replication_role=replica")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let ns: Uuid = sqlx::query_scalar("SELECT namespace_id FROM playbook_namespaces WHERE project_id=$1 ORDER BY generation DESC LIMIT 1")
+                .bind(h.scope.project_id).fetch_one(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,'{}','refused','{\"reason\":\"unreachable\"}',$5,$5)")
+                .bind(original).bind(ns).bind(original.to_string()).bind(task.to_string()).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO retained_publication_recovery_requests(operation_id,publication_operation_id,report_id,request,publisher) VALUES($1,$2,$3,'{}','{}')")
+                .bind(recovery).bind(original).bind(result).execute(&mut *tx).await.unwrap();
+            let evidence = json!({"identity":{"task_id":task,"head":oid('a')},"observation":{"state":"published","head":oid('a')}});
+            sqlx::query("INSERT INTO retained_publication_recoveries(operation_id,publication_operation_id,report_id,request,evidence) VALUES($1,$2,$3,'{}',$4)")
+                .bind(recovery).bind(original).bind(result).bind(evidence).execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
             h.later(120_000);
             assert_eq!(h.asked().await, 1);
             assert_eq!(
@@ -2977,9 +3004,9 @@ mod delivery {
                 0,
                 "the queued event owns the resumed result"
             );
-            assert_eq!(
-                &*forge.log.lock().unwrap(),
-                &vec![format!("observe {branch}"); 3]
+            assert!(
+                forge.log.lock().unwrap().is_empty(),
+                "held probing does not substitute a forge read for a publisher receipt"
             );
             let hold: String =
                 sqlx::query_scalar("SELECT decision FROM delivery_decisions WHERE result_id=$1")
@@ -3132,6 +3159,15 @@ mod delivery {
                 result.output["handle"].as_str().unwrap().to_owned()
             }
             async fn pass(&self) -> usize {
+                let requests: Vec<Value> = sqlx::query_scalar(
+                    "SELECT request FROM playbook_host_operations WHERE command_name='branch.publish' AND status='running'",
+                )
+                .fetch_all(&self.pool().await)
+                .await
+                .unwrap();
+                for request in requests {
+                    self.seed_publication_result(&request).await;
+                }
                 (self
                     .service
                     .collect_delivery_operations(&self.runtime, 4)
@@ -3360,7 +3396,7 @@ mod delivery {
             async fn run(&self, task: Uuid, command: &str, deadline: i64) -> Option<String> {
                 use aq_delivery::commands::{accepted_head, published_head};
                 let pool = &self.pool;
-                let request = json!({
+                let mut request = json!({
                     "command": command, "project": self.h.scope.project_id, "task": task,
                     "pull_request": 7, "result_head": oid('a'), "check_target": self.target,
                     "merge_target": self.target, "method": "merge", "expected_head_sha": oid('a'),
@@ -3368,6 +3404,13 @@ mod delivery {
                     "expected_old": published_head(pool, task).await.unwrap(),
                     "pull_request_head": accepted_head(pool, Some(task), &oid('a')).await.unwrap(),
                 });
+                if command == "branch.publish" {
+                    let latest = self.h.port.latest.lock().unwrap()[&task].clone();
+                    request["publication_target"] = json!(self.target);
+                    request["result_ready"] = json!({"task_id":task,"project_id":latest.project_id,
+                        "attempt_id":latest.attempt_id,"result_id":latest.result_id});
+                    self.h.seed_publication_result(&request).await;
+                }
                 let frozen =
                     aq_delivery::commands::FrozenCommand::new(Uuid::new_v4(), command, &request);
                 let runtime = aq_delivery::commands::DeliveryRuntime {
@@ -3696,6 +3739,15 @@ mod delivery {
             h.accepted("branch.publish", task_input.clone()).await;
             assert_eq!(h.pass().await, 1);
             assert_eq!(h.completions().await[0].1["outcome"], "refused");
+            let pool = h.pool().await;
+            let dispatches: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM retained_publication_dispatches WHERE report_id=$1",
+            )
+            .bind(original.result_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(dispatches, 0, "closed PR preflight never reaches Git");
             let checks = json!({"task": task, "deadline_ms": 1000});
             h.accepted("pull_request.await_checks", checks.clone())
                 .await;

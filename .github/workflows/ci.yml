@@ -244,9 +244,9 @@ jobs:
       - name: Recovery authority and reserved control capacity regressions
         run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features recovery-test-support --test it_server -E 'test(/^execution::/) | test(/^readiness::/)'
       - name: Supervisor full-access command registry, control, internal work and host
-        run: cargo nextest run -p aq-command-registry -p aq-supervisor-control -p aq-internal-work -p aq-supervisor-host --lib --locked --profile ci --features supervisor_full_access
+        run: cargo nextest run -p aq-command-registry -p aq-supervisor-control -p aq-internal-work -p aq-supervisor-host --lib --locked --profile ci --features delivery_playbook,supervisor_full_access
       - name: Supervisor full-access server commands
-        run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features supervisor_full_access --test it_server -E 'test(/^commands::/)'
+        run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features delivery_playbook,supervisor_full_access --test it_server -E 'test(/^commands::/)'
       - name: Supervisor full-access turns
         run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features supervisor_full_access --test it_dashboard -E 'test(/^supervisor_turns::/)'
 

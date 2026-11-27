@@ -548,9 +548,8 @@ async fn recover_held_delivery(
             return Ok(false);
         };
         if reason == "publish_conflict" {
-            return Ok(commands
-                .publish_lease_usable(&target, task, head, old.as_deref())
-                .await);
+            return Ok(sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM retained_publication_recoveries WHERE report_id=$1 AND evidence#>>'{observation,state}'='published' AND evidence#>>'{identity,head}'=$2)")
+                .bind(row.get::<Uuid,_>("report_id")).bind(head).fetch_one(&mut *db).await?);
         }
         let Some(request) = check_request.filter(|request| {
             old.as_deref() == Some(accepted)
@@ -668,31 +667,105 @@ pub async fn rework_wait(
     .await?)
 }
 
-/// The latest refused publication for the claimed task, result and retained head.
+/// The latest refused publication for the claimed task, result and retained head, with the
+/// bounded evidence a supervisor needs: the original operation, its recorded diagnostic, the
+/// lease it ran under, how often the exact result was refused, and the safe next step.
 /// Older hosts recorded only the catalog reason. A later success supersedes all refusals.
 pub async fn publication_refusal(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
-    let refusal: Option<(Uuid, String, bool)> = sqlx::query_as(
-        "SELECT o.operation_id,p.head,COALESCE(o.request->>'answer_note'='remote_rejected',false)
+    let refusal = sqlx::query(
+        "SELECT o.operation_id,p.head,o.request->>'answer_note' AS note,o.request->>'expected_old' AS lease,
+                o.completed_at_ms,count(*) OVER() AS refused,min(o.completed_at_ms) OVER() AS first_ms
          FROM delivery_pushed_results p JOIN profiled_result_heads h USING(report_id,attempt_id)
          JOIN execution_attempts a USING(attempt_id)
          JOIN playbook_host_operations o ON o.subject_id=a.task_id::text AND o.command_name='branch.publish'
            AND o.request#>>'{result_ready,result_id}'=p.report_id::text
            AND o.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND o.request->>'result_head'=p.head
          WHERE p.report_id=$1 AND a.holds_task AND o.status='refused' AND o.output->>'reason'='unreachable'
+         AND NOT EXISTS(SELECT 1 FROM retained_publication_recoveries rr WHERE rr.report_id=p.report_id AND rr.evidence#>>'{observation,state}'='published')
          AND NOT EXISTS(SELECT 1 FROM playbook_host_operations ok WHERE ok.subject_id=o.subject_id
              AND ok.command_name='branch.publish' AND ok.status='published'
              AND ok.request#>>'{result_ready,result_id}'=p.report_id::text
              AND ok.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND ok.output->>'head'=p.head)
          ORDER BY o.completed_at_ms DESC,o.operation_id LIMIT 1",
-    ).bind(result).fetch_optional(db).await?;
-    Ok(refusal.map(|(id, head, rejected)| {
-        let cause = if rejected {
-            "AQ Git recorded a rejection from the remote"
-        } else {
-            "the delivery host recorded an unreachable response"
-        };
-        format!("Publication of commit {head} failed ({cause}). AQ Git operation {id}.")
+    )
+    .bind(result)
+    .fetch_optional(db)
+    .await?;
+    Ok(refusal.map(|row| {
+        let (id, head): (Uuid, String) = (row.get("operation_id"), row.get("head"));
+        let note: Option<String> = row.get("note");
+        let lease: Option<String> = row.get("lease");
+        let (refused, first, last): (i64, Option<i64>, Option<i64>) = (
+            row.get("refused"),
+            row.get("first_ms"),
+            row.get("completed_at_ms"),
+        );
+        publication_refusal_text(&Refusal {
+            id,
+            head: &head,
+            note: note.as_deref(),
+            lease: lease.as_deref(),
+            refused,
+            window: first.zip(last),
+        })
     }))
+}
+
+struct Refusal<'a> {
+    id: Uuid,
+    head: &'a str,
+    note: Option<&'a str>,
+    lease: Option<&'a str>,
+    refused: i64,
+    window: Option<(i64, i64)>,
+}
+
+/// What the recorded diagnostic of a refused publication means and what to do about it.
+fn publication_refusal_text(r: &Refusal<'_>) -> String {
+    let (cause, action) = match r.note {
+        Some("remote_rejected") => (
+            "AQ Git recorded a rejection from the remote",
+            "Inspect the bound original publisher journal for the recorded rejection class. Any permission or remote-policy correction requires an operator decision. Do not force-push or abandon the attempt.",
+        ),
+        Some("rejected") => (
+            "AQ Git recorded a rejection",
+            "AQ Git refused the publication for a reason other than the remote; read its operation record with the operation ID.",
+        ),
+        Some("git_transport" | "git_protocol") => (
+            "AQ Git did not answer or answered invalidly",
+            "The push may or may not have happened. Check that AQ Git is running; no action on the result is needed.",
+        ),
+        Some("publication_indeterminate") => (
+            "AQ Git holds the destination for a publication with an unknown effect",
+            "Keep the original publication held. Inspect its bound publisher journal before separately authorized observation-only recovery; do not resolve the hold or republish automatically.",
+        ),
+        Some("git_error") => (
+            "AQ Git reported an error",
+            "Read its original publisher journal with the operation ID; the remote effect may still be unknown.",
+        ),
+        _ => (
+            "the delivery host recorded an unreachable response",
+            "The remote or AQ Git was unreachable.",
+        ),
+    };
+    let mut text = format!(
+        "Publication of commit {} failed ({cause}). AQ Git operation {}.",
+        r.head, r.id
+    );
+    if let Some(note) = r.note {
+        text.push_str(&format!(" Diagnostic: {note}."));
+    }
+    let lease = r.lease.unwrap_or("none, the branch was never published");
+    text.push_str(&format!(" Expected remote head (lease): {lease}."));
+    if let Some((first, last)) = r.window {
+        text.push_str(&format!(
+            " {} refused publications of this exact result and commit are recorded (first at {first} ms, latest at {last} ms)."
+        , r.refused));
+    }
+    text.push_str(&format!(
+        " {action} Use result.publication.show for the exact result revision and operation history, then result.publication.reconcile to observe and recover the receipt. Recovery never forces the push and records the receipt without pushing when the exact commit is already there. A refusal requires operator inspection before any separately authorized retry."
+    ));
+    text
 }
 
 /// A check operation still running for this exact result, attempt and published head.
@@ -1147,6 +1220,66 @@ pub async fn sent(db: &mut PgConnection, due: &Due, now_ms: i64) -> Result<()> {
         .execute(db)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    fn text(note: Option<&str>, lease: Option<&str>) -> String {
+        publication_refusal_text(&Refusal {
+            id: Uuid::from_u128(9),
+            head: &"a".repeat(40),
+            note,
+            lease,
+            refused: 3,
+            window: Some((10, 30)),
+        })
+    }
+
+    #[test]
+    fn a_remote_rejection_names_its_operation_lease_count_and_safe_next_step() {
+        let lease = "b".repeat(40);
+        let body = text(Some("remote_rejected"), Some(&lease));
+        for part in [
+            "Publication of commit aaaaaaaa",
+            "a rejection from the remote",
+            &Uuid::from_u128(9).to_string(),
+            "Diagnostic: remote_rejected.",
+            &format!("Expected remote head (lease): {lease}."),
+            "3 refused publications of this exact result and commit",
+            "first at 10 ms, latest at 30 ms",
+            "Do not force-push or abandon the attempt.",
+            "never forces the push",
+            "records the receipt without pushing",
+        ] {
+            assert!(body.contains(part), "{part}: {body}");
+        }
+        assert!(body.len() < 1536, "bounded: {}", body.len());
+    }
+
+    #[test]
+    fn every_recorded_diagnostic_has_its_own_cause_and_older_hosts_stay_readable() {
+        let causes = [
+            (None, "the delivery host recorded an unreachable response"),
+            (Some("rejected"), "AQ Git recorded a rejection)"),
+            (Some("git_transport"), "did not answer"),
+            (Some("git_protocol"), "answered invalidly"),
+            (Some("git_error"), "AQ Git reported an error"),
+            (Some("publication_indeterminate"), "unknown effect"),
+        ];
+        for (note, cause) in causes {
+            let body = text(note, None);
+            assert!(body.contains(cause), "{note:?}: {body}");
+            assert!(body.contains("none, the branch was never published"));
+            assert_eq!(body.contains("Diagnostic:"), note.is_some());
+        }
+        let held = text(Some("publication_indeterminate"), None);
+        assert!(held.contains("do not resolve the hold or republish automatically"));
+        assert!(!held.contains("rejection from the remote"));
+        // Not a rejection from the remote: the notice never claims one.
+        assert!(!text(Some("git_error"), None).contains("rejection from the remote"));
+    }
 }
 
 #[cfg(test)]

@@ -111,3 +111,4 @@ async fn close_closes_the_pull_request_and_deletes_the_branch() {
     ));
     assert_eq!(git.operations(), ["ref.delete"]);
 }
+mod retained_publication;

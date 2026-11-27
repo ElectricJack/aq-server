@@ -2,6 +2,28 @@
 use super::*;
 
 pub(super) const COMMANDS: &[CommandSpec] = &[
+    #[cfg(feature = "delivery_playbook")]
+    read(
+        "result.publication.show",
+        op::RESULT_READ,
+        TargetRule::Own,
+        "Bounded publication requests and outcomes for an exact retained result; never pushes",
+    )
+    .with_owner(Some(Route::get(
+        "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/publication",
+        &[],
+    ))),
+    #[cfg(feature = "delivery_playbook")]
+    owner_write(
+        "result.publication.reconcile",
+        "result.publication.reconcile",
+        "Recover a receipt for an exact retained result by observation only; never publishes, forces, releases or accepts",
+        post_route(
+            "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/publication/reconcile",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","report_id","revision","repository_id","operation_id","publication_operation_id"],"properties":{"project_id":{"type":"string","format":"uuid"},"report_id":{"type":"string","format":"uuid"},"revision":{"type":"string","pattern":"^[0-9a-f]{64}$"},"repository_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid"},"publication_operation_id":{"type":"string","format":"uuid"}}}"#,
+        ),
+    ),
     owner(
         "result.list",
         op::RESULT_READ,

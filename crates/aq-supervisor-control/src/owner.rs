@@ -226,6 +226,26 @@ mod tests {
     }
 
     #[test]
+    fn retained_publication_inspection_and_recovery_stay_in_the_supervisors_project() {
+        let result = Uuid::from_u128(3);
+        for suffix in ["publication", "publication/reconcile"] {
+            let path = |project| {
+                format!(
+                    "/api/projects/{project}/results/{result}/revisions/{}/{suffix}",
+                    "a".repeat(64)
+                )
+            };
+            let method = if suffix == "publication" {
+                Method::GET
+            } else {
+                Method::POST
+            };
+            assert!(names_only(P, &method, &path(P), None));
+            assert!(!names_only(P, &method, &path(Q), None));
+        }
+    }
+
+    #[test]
     fn names_only_matches_case_insensitively() {
         let path = format!("/api/human/projects/{}/tasks", P.to_string().to_uppercase());
         assert!(names_only(P, &Method::GET, &path, None));
