@@ -259,7 +259,9 @@ pub(super) async fn filter(runtime: &Runtime, principal: Uuid, data: &mut Overvi
         .iter()
         .filter_map(|id| id.strip_prefix("internal_work:")?.parse().ok())
         .collect();
-    let protected: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM internal_tasks WHERE id=ANY($1) AND affected_kind IN ('decision','question')")
+    // Some affected records open the internal run rather than the record itself.
+    // Protect their gates too, exactly as clear() checks affected_id on writes.
+    let protected: Vec<Uuid> = sqlx::query_scalar("SELECT t.id FROM internal_tasks t WHERE t.id=ANY($1) AND (t.affected_kind IN ('decision','question') OR EXISTS(SELECT 1 FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) WHERE d.state='pending' AND t.affected_id IN (s.report_id::text,s.task_id::text,d.decision_id::text)))")
         .bind(&internal).fetch_all(&mut *tx).await?;
     let protected: std::collections::BTreeSet<String> = protected
         .into_iter()

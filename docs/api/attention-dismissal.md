@@ -41,6 +41,10 @@ internal notifications, offline workers and uncertain-operation notifications
 can otherwise be dismissed. Dismissing an uncertain operation only hides its
 notification; use its original operation ID to inspect the operation's status.
 
+Internal notifications remain visible when their affected record has a pending
+review, including notifications that link to the internal run rather than the
+affected record. This protection also overrides an earlier saved dismissal.
+
 Dismissal only writes the per-principal dismissal ledger. It never approves,
 releases, cancels, resolves, retries, or changes the underlying subject. Dismissed
 revisions are excluded from both `attention[]` and `counts.needs_you` in

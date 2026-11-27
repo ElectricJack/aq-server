@@ -650,6 +650,70 @@ async fn view_all_matches_the_overview_and_clearing_never_touches_a_decision() {
     env.peer.abort();
 }
 
+#[tokio::test]
+async fn saved_internal_dismissals_cannot_hide_affected_review_gates() {
+    let env = Box::pin(review_env_for_outcome(1, None, false, true)).await;
+    let pool = env.f.db.pool().await;
+    let run = Uuid::new_v4();
+    // A result is not an openable internal-work subject: its notification links
+    // to the internal run. Gate checks must still follow its affected_id.
+    sqlx::query("INSERT INTO internal_tasks(id,purpose,request,candidates,status,blocking,deadline_at_ms,created_at_ms,affected_kind,affected_id,escalate,escalation,escalated_at_ms) VALUES($1,'routing_classification','{}','[]','failed',false,60000,1000,'result',$2,true,'owner',2000)")
+        .bind(run).bind(env.report.report_id.to_string()).execute(&pool).await.unwrap();
+    let id = format!("internal_work:{run}");
+    let app = aq_server::build_admin_router_with_policy_owners(
+        env.f.state.clone(),
+        None,
+        Some(Arc::new(env.service.clone())),
+    );
+    let owner = "owner@localhost";
+    let before = overview_as(&app, "/api/v1/overview", owner).await;
+    let item = before["data"]["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    assert_eq!(item["subject"]["id"], json!(run));
+    assert_eq!(item["dismissible"], true);
+    let path = format!("/api/v1/attention/{id}/dismiss");
+    let body = json!({"expected_revision": item["subject"]["revision"]});
+    assert_eq!(
+        send(&app, "POST", &path, owner, Some(body.clone())).await.0,
+        200
+    );
+    let hidden = overview_as(&app, "/api/v1/overview", owner).await;
+    assert!(!attention_ids(&hidden["data"]["attention"]).contains(&id));
+
+    let request = admit_decision(&env).await;
+    let after = overview_as(&app, "/api/v1/overview", owner).await;
+    let list = overview_as(&app, "/api/v1/attention", owner).await;
+    let restored = after["data"]["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .expect("new gate overrides saved dismissal");
+    assert!(restored.get("dismissible").is_none());
+    assert_eq!(
+        attention_ids(&after["data"]["attention"]),
+        attention_ids(&list["data"]["items"])
+    );
+    assert_eq!(after["data"]["counts"]["needs_you"], list["data"]["total"]);
+    assert_eq!(
+        after["data"]["counts"]["needs_you"]["value"]
+            .as_u64()
+            .unwrap() as usize,
+        after["data"]["attention"].as_array().unwrap().len()
+    );
+    let (status, refusal) = send(&app, "POST", &path, owner, Some(body)).await;
+    assert_eq!(status, 409, "{refusal}");
+    assert_eq!(refusal["code"], "attention_not_dismissible");
+    let open = env.service.inbox(env.f.actor, &query()).await.unwrap();
+    assert_eq!(open.items[0].decision_id, request.decision_id);
+    assert_eq!(open.items[0].state, "pending");
+    env.peer.abort();
+}
+
 async fn assert_overview_authorization_and_partial_sources(
     env: &ReviewEnv,
     app: &axum::Router,
