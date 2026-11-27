@@ -735,6 +735,10 @@ fn publication_refusal_text(r: &Refusal<'_>) -> String {
             "AQ Git did not answer or answered invalidly",
             "The push may or may not have happened. Check that AQ Git is running; no action on the result is needed.",
         ),
+        Some("publication_indeterminate") => (
+            "AQ Git holds the destination for a publication with an unknown effect",
+            "Keep the original publication held. Inspect its bound publisher journal before separately authorized observation-only recovery; do not resolve the hold or republish automatically.",
+        ),
         Some("git_error") => (
             "AQ Git reported an error",
             "Read its original publisher journal with the operation ID; the remote effect may still be unknown.",
@@ -1219,7 +1223,6 @@ pub async fn sent(db: &mut PgConnection, due: &Due, now_ms: i64) -> Result<()> {
 }
 
 #[cfg(test)]
-<<<<<<< HEAD
 mod refusal_tests {
     use super::*;
 
@@ -1263,6 +1266,7 @@ mod refusal_tests {
             (Some("git_transport"), "did not answer"),
             (Some("git_protocol"), "answered invalidly"),
             (Some("git_error"), "AQ Git reported an error"),
+            (Some("publication_indeterminate"), "unknown effect"),
         ];
         for (note, cause) in causes {
             let body = text(note, None);
@@ -1270,9 +1274,15 @@ mod refusal_tests {
             assert!(body.contains("none, the branch was never published"));
             assert_eq!(body.contains("Diagnostic:"), note.is_some());
         }
+        let held = text(Some("publication_indeterminate"), None);
+        assert!(held.contains("do not resolve the hold or republish automatically"));
+        assert!(!held.contains("rejection from the remote"));
         // Not a rejection from the remote: the notice never claims one.
         assert!(!text(Some("git_error"), None).contains("rejection from the remote"));
-=======
+    }
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn a_checks_comment_keeps_the_front_of_the_log_within_its_bound() {
@@ -1283,6 +1293,5 @@ mod tests {
         let cut = super::checks_comment(uuid::Uuid::nil(), "abc", log, max);
         assert!(cut.len() <= max, "{}", cut.len());
         assert!(cut.ends_with("panicked at a.rs:1:1:\n```"), "{cut}");
->>>>>>> refs/remotes/central/main
     }
 }

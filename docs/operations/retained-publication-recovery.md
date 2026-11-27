@@ -124,7 +124,7 @@ responses containing both an unresolved outcome and a resolution remain uncertai
 A definitive rejection stays
 held with its bounded diagnostic and required operator action.
 
-Migration 0185 records immutable dispatch fences, frozen recovery requests and
+Migration 0189 records immutable dispatch fences, frozen recovery requests and
 receipts. It fences existing publication intents before the upgraded driver runs.
 New dispatches are reserved only after read-only PR preflight succeeds. Historical refusals remain intact. New publication UUIDs cannot evade
 the exact-result dispatch fence. A recovered receipt can re-enter the existing
@@ -132,6 +132,12 @@ result-ready/delivery path, where ordinary checks, review and settlement gates
 still apply. Recovery does not change source retention, report bytes, budgets,
 dependencies, holds or human decisions. There is no forced-publication or
 permission-override parameter, and no automatic retry of a refused push.
+An exact retained-result publication encountering `operation_indeterminate`
+returns the bounded `publication_indeterminate` diagnostic. It never resolves a
+blocking publication, even when its remote head still equals the old lease, and
+never redispatches as a side effect. An unchanged head does not prove the
+original push had no effect. Receipt observation preserves the original hold
+until separately authorized recovery through the bound journal.
 Only a terminal refusal explicitly recorded by the upgraded host as
 `publication_not_dispatched` proves read-only preflight stopped before Git.
 That refusal does not consume permission for the first dispatch. An existing
@@ -152,8 +158,8 @@ not authority to change credentials.
 
 Before release, the operator must approve the reviewed server change/migration
 and verify access to the original private socket and its runtime capability.
-The repair migration was renumbered from 0179 to 0185 after the supplied tree
-introduced another 0179 and migrations through 0184. Recheck that numbering
+The repair migration is now 0189 after the supplied tree introduced another
+0185 and migrations through 0188. Recheck that numbering
 against current main before release; this sandbox has no Git history.
 Before using recovery, obtain a separate decision for the exact original
 operation and result. Any remote-policy correction or later publication retry

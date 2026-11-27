@@ -593,6 +593,9 @@ impl GitPort for SocketGit {
                 // The same operation, never dispatched, goes on once the hold is released.
                 Err(e)
                     if e.code == "operation_indeterminate"
+                        // Exact retained-result requests must preserve every existing hold.
+                        // An unchanged lease does not authorize resolution or another push.
+                        && expected_source.is_none()
                         && !released
                         && self
                             .release_destination(operation, repo, reference, &e.details)

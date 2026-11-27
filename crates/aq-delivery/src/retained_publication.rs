@@ -101,6 +101,7 @@ fn summary(id: Uuid, status: &str, request: &Value, output: &Value) -> Value {
                 | "git_error"
                 | "reconciliation_required"
                 | "publication_not_dispatched"
+                | "publication_indeterminate"
         )
     });
     let reason = output["reason"]
@@ -396,5 +397,11 @@ mod tests {
         assert_eq!(evidence["head"], request["result_head"]);
         assert_eq!(evidence["diagnostic"], "remote_rejected");
         assert_eq!(evidence["reason"], "unreachable");
+        let mut held = request;
+        held["answer_note"] = json!("publication_indeterminate");
+        assert_eq!(
+            summary(Uuid::new_v4(), "refused", &held, &Value::Null)["diagnostic"],
+            "publication_indeterminate"
+        );
     }
 }

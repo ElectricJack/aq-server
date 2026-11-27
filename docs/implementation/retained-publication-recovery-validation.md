@@ -467,3 +467,110 @@ against originals saved under `/tmp`; `build-budget.toml` was not changed.
 The final source/check/limit handoff was queued to the global supervisor as
 message `cf12ed27-8075-4ea0-9aea-cbded3e3be73`, cursor 242. Queueing confirms
 mailbox delivery only, not recipient review, release or task acceptance.
+
+## Retained-result hold preservation after integration, 2026-11-27
+
+The runner labels this input as retained task commit
+`d61c81546774cc16a59e909856ca9d8de3a92e28`. No Git metadata is available
+here, so that label cannot be independently resolved. The supplied snapshot
+has 2607 Rust/SQL/TOML/lock files and initial fingerprint
+`dc3a3a357b85e9bad5381dbb43ec9fff4c92598a38409fcc5ce99c066e05f9c9`.
+The tested source fingerprint, using the algorithm above, is
+`69bcc3a8b13122428ff70f16742b7321fd643169016b6155dbad32090ee046fc`
+(2607 files). The resolved CI workflow SHA256 is
+`f6a2c20a7cd9347ca4d1009f3674a43066b170e44664f0c6d65a0599b67edf78`.
+Earlier validation sections refer to earlier source snapshots.
+
+The four supplied conflicts are resolved. Delivery keeps bounded failure
+reasons and exact-head receipt observation; request acceptance keeps both the
+frozen publication target and main's new check/merge wait settings. Both sets
+of delivery-store tests remain. CI retains main's broader playbook selection,
+which includes the publication recovery module.
+
+The integrated Git adapter could automatically reconcile a blocking publisher,
+resolve its hold when the remote still equaled its lease, then send another
+publish. The new socket regression reproduced that forbidden sequence for an
+exact retained result. Such requests now return `publication_indeterminate`
+without automatic reconciliation, resolution or redispatch. The original
+repository, binding generation, request UUID, source and remote-head leases
+remain unchanged. The bounded inspection summary preserves this diagnostic;
+the refusal notice explains the unknown effect and operator recovery path.
+The legacy adapter path without an exact source is outside this repair and
+retains its existing behavior. No live use of either path occurred here.
+
+The supplied migration catalog failed on duplicate 0185. The ordinary
+`python3 scripts/renumber-migrations.py --check` command returned exit 1 because
+Git metadata/`origin/main` is absent. As in the prior repair, the script's
+`rewriter`, `rewrite_lines` and `apply_changes` helpers were used after asserting
+that all other migrations form exactly 0001–0188. Only this repair's migration
+was renamed to `0189_retained_publication_recovery.sql`; a byte comparison
+confirmed its SQL changed only `value='185'` to `value='189'`. Main's migrations
+and the advisory lock salt are unchanged. Current-main numbering still requires
+normal release verification.
+
+Authenticated reads actually run in this follow-up:
+
+- `aq run result.review.show --param project_id=a22afccc-d61a-5f77-aef8-9fd73311c68a --param report_id=68d19730-4db8-4668-855b-d3e9572d5050 --param revision=f4b26ac1956b58997c0faca587f675453b20c9fb127da61dbf701b038f2b7b19 --json`
+  returned exit 0, confirming the exact original result/revision, repository
+  `97a459e3-e35f-5af0-85c0-1c095b50519c`, retained commit
+  `ac8b015d6dfaaa0aa7850d2e7ff13a2d20285cdd`, and empty source receipts.
+- `aq operation show dfd8cb53-9b5e-833c-bfe8-f32b36408c66 --json` returned
+  exit 1, HTTP 404 `not_found` in the supervisor journal.
+- `aq operation show de4542bf-b430-8e57-a85e-9eb6f957679d --json` separately
+  returned exit 1, HTTP 404 `not_found` in that different journal.
+- `aq commands` returned exit 0 and exposed no private-journal publication
+  bridge. Runtime `publication_rejection_classification_v1`, actual rejection
+  class and access to the original publisher remain unverified. Supervisor
+  journal absence proves neither original-journal absence nor acceptance.
+
+A relay to the global supervisor conversation
+`ea5785f9-3da2-4bf4-8f64-e9558147b2f3` was queued as message
+`840b0e28-2e84-4bf2-a859-83a6c7a16a32`, cursor 246, requesting reuse of
+inspection task `8cb39922` and coordination with aq-git supervisor
+`842211df-4633-4bae-b559-96382fa70912`. No new protocol change is required.
+Queueing is not recipient review or task acceptance.
+
+`DATABASE_URL` is unset; `postgres`, `psql` and `codescene` are unavailable.
+Database-backed recovery integration execution and migration application,
+full-server/workspace checks, CodeScene, main-relative budgets and CI workflow
+execution remain unrun. Required CI must run the existing nine recovery cases
+and held-delivery receipt test. Operator-only release prerequisites remain
+normal review/checks, migration numbering against current main, and authorized
+project-bound access through the existing authenticated bridge to the original
+AQ Git private socket/journal. Runtime capability must be confirmed there.
+A separate operation/result-bound decision is required before live recovery;
+remote-policy changes cannot be specified without original-journal evidence.
+No live reconciliation, publication, hold release, worker retry, permission or
+credential change, host-service change, commit, push, merge or deployment was
+performed. The original retained work and normal delivery/review gates remain
+intact. Source diffs were read against originals saved under `/tmp`.
+
+All Cargo commands below use `CARGO_TARGET_DIR=/tmp/aq-target` and
+`CARGO_HOME=/tmp/aq-cargo`, exported before building. Python helper caches use
+`PYTHONPYCACHEPREFIX=/tmp/aq-pycache`; a cache created by the normal renumbering
+CLI was removed from the worktree. Commands actually run for this snapshot:
+
+| Exact command | Actual outcome |
+| --- | --- |
+| `cargo test -p aq-delivery --features delivery_playbook --lib retained_result_does_not_resolve --locked` | Before the guard: exit 101, the new regression failed; recorded calls were publish/show/reconcile/resolve/publish instead of one publish. |
+| `cargo test -p aq-delivery --features delivery_playbook --lib --locked` | After the guard: exit 0, all 135 passed, including the new regression and all 12 existing private-journal/receipt cases. |
+| `cargo test -p aq-playbook-domain --features delivery_playbook --lib delivery_store:: --locked` | Exit 0, 3 passed, 54 filtered out; refusal diagnostics and main's merged checks-comment regression passed. This also compiled request acceptance with its frozen target and new wait settings. |
+| `cargo test -p aq-command-registry --features delivery_playbook,supervisor_full_access --lib --locked` | Exit 0, all 24 passed, including original identity and scoped recovery routes. |
+| `cargo test -p aq-supervisor-control --features delivery_playbook,supervisor_full_access --lib retained_publication --locked` | Exit 0, 1 passed, 36 filtered out; own-project access allowed, cross-project access refused. |
+| `cargo fmt --all -- --check` | Exit 0 on final Rust source. |
+| `python3 scripts/migration_catalog.py` | Initially exit 1 for duplicate 0185; after repair renumbering, exit 0 with 189 contiguous migrations. |
+| `python3 scripts/renumber-migrations.py --check` | Exit 1; cannot resolve merge-base because this captured workspace has no Git metadata. Numbering against current main remains an operator/release check. |
+
+A separate `python3` assertion checked that the resolved CI command includes
+`--test it_profiled` and the broader `auto_settlement56::playbook::` selector,
+and that the recovery module still defines exactly nine Tokio tests. It passed;
+this static selection check does not execute CI or the database tests.
+
+`cargo clippy -p aq-delivery -p aq-playbook-domain --features delivery_playbook --lib --tests --locked -- -D warnings`
+returned exit 0 on the final source, checking both changed libraries and their
+tests with warnings denied. No further source changes followed these checks.
+
+The final source/check/limit handoff was queued to global supervisor conversation
+`ea5785f9-3da2-4bf4-8f64-e9558147b2f3` as message
+`4e790706-0c14-4608-aaea-49925e3f48dc`, cursor 247. This records mailbox
+queueing only, not recipient review, deployment or task acceptance.

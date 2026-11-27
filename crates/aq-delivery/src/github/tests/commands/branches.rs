@@ -360,3 +360,50 @@ async fn a_publish_without_a_publication_recovers_the_exact_result_the_forge_alr
     // Recovering a receipt never pushes again: one aq-git publish per operation.
     assert_eq!(git.operations().len(), 6);
 }
+
+// An exact retained result cannot clear another publisher's uncertainty as a side effect.
+#[tokio::test]
+async fn retained_result_does_not_resolve_a_destination_hold_or_redispatch() {
+    let blocker = Uuid::from_u128(9);
+    let git = FakeGit::start(move |r| match r["operation"].as_str().unwrap() {
+        "publish" => json!({"error":{"code":"operation_indeterminate",
+            "message":"destination has an unresolved publication",
+            "details":{"blocking_operation_id":blocker,"target":task_branch(TASK)}}}),
+        "operation.show" => json!({"generation":2,"status":"pending","phase":"dispatched",
+            "metadata":{"expected_old":sha('2'),"target":task_branch(TASK)}}),
+        "operation.reconcile" => json!({"target_operation_id":blocker,"outcome":"indeterminate",
+            "observed_target":{"algorithm":"sha1","hex":sha('2')}}),
+        "operation.resolve" => json!({"target_operation_id":blocker,
+            "resolution":{"outcome":"resolved"}}),
+        other => panic!("unexpected operation {other}"),
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let operation = Uuid::from_u128(4);
+    let completion = done(
+        delivery
+            .branch_publish(
+                TaskOperation::new(operation, &target(), TASK),
+                Some(&sha('2')),
+                Some(&sha('a')),
+            )
+            .await,
+    );
+    assert_eq!(git.operations(), ["publish"]);
+    assert_eq!(completion.diagnostic, Some("publication_indeterminate"));
+    assert_eq!(
+        (completion.outcome, completion.output),
+        ("refused", json!({"reason":"unreachable"}))
+    );
+    let request = git.request(0);
+    assert_eq!(request["operation_id"], operation.to_string());
+    assert_eq!(
+        request["repository_id"],
+        target().git.repository_id.to_string()
+    );
+    assert_eq!(request["expected_binding_generation"], 3);
+    assert_eq!(request["params"]["expected_old"]["hex"], sha('2'));
+    assert_eq!(request["params"]["expected_source"]["hex"], sha('a'));
+    assert!(request["params"].get("force").is_none());
+    // A failed observation leaves the existing hold and diagnostic intact.
+    assert_eq!(paths(&mock).len(), 1);
+}

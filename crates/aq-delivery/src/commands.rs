@@ -215,6 +215,7 @@ pub struct Delivery {
 /// The bounded, static reason aq-git did not publish, kept with the refused operation.
 fn failure_diagnostic(failure: &git::GitFailure) -> &'static str {
     match (failure.code.as_str(), failure.message.as_str()) {
+        ("operation_indeterminate", _) => "publication_indeterminate",
         ("rejected", "remote_rejected") => "remote_rejected",
         ("rejected", _) => "rejected",
         ("transport", _) => "git_transport",
@@ -352,7 +353,6 @@ impl Delivery {
                 diagnostic: Some(failure_diagnostic(&e)),
                 ..Completion::refused("unreachable")
             },
-<<<<<<< HEAD
         };
         // An answer that is not a publication does not prove the exact result is absent: the
         // push may have landed before its answer was lost or its lease moved. Observe the
@@ -367,15 +367,6 @@ impl Delivery {
             return Step::Done(Completion::new("published", json!({"head": observed})));
         }
         Step::Done(step)
-=======
-            // An earlier push of the branch with an unknown outcome still holds it.
-            Err(e) if e.code == "operation_indeterminate" => Completion {
-                diagnostic: Some("publication_indeterminate"),
-                ..Completion::refused("unreachable")
-            },
-            Err(_) => Completion::refused("unreachable"),
-        })
->>>>>>> refs/remotes/central/main
     }
 
     /// `pull_request.open`: opens the pull request of the task's branch
