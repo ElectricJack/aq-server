@@ -12,8 +12,11 @@ impl Runtime {
         let quantum = move || {
             let owned = owned.clone();
             async move {
+                // A quantum that reached a bound with work left is followed at
+                // once; a quiet one waits the drive interval.
                 let result = match owned.quantum().await {
-                    Ok(_) | Err(crate::playbooks::domain::Error::Overloaded) => Ok(()),
+                    Ok(done) => Ok(done["more"] == true),
+                    Err(crate::playbooks::domain::Error::Overloaded) => Ok(false),
                     Err(error) => Err(error),
                 };
                 owned.drive_failed(result.is_err());

@@ -60,7 +60,7 @@ impl Service {
     /// rolls back both cursor and outgoing work; no occurrence is dropped.
     pub async fn collect_schedule_events(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         self.monitoring()?;
-        if !(1..=2).contains(&limit) {
+        if !(1..=aq_role_settings::driver::EVENTS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let now = self.now()?;

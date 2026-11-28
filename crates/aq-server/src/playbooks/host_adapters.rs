@@ -335,7 +335,7 @@ impl Service {
         let stage = match retained {
             Some(row) => Some(Stage::restore(row, intent, &identity)?),
             None if owner.is_none() => None,
-            None if intent.deadline_at_ms <= self.now()? => return Err(Error::Forbidden),
+            None if intent.deadline_at_ms <= self.now()? => return Err(Error::DeadlineExpired),
             None => Some(Stage::Fresh),
         };
         Ok((tx, stage, identity))

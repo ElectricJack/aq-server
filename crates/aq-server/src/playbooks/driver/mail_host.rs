@@ -211,9 +211,22 @@ impl MailHost {
             Err(Error::Unknown) => DispatchResult::Unknown {
                 reason: "host effect outcome unknown; retained lookup required".into(),
             },
-            Err(error) => DispatchResult::Rejected {
-                reason: error.to_string(),
-            },
+            Err(error) => {
+                // The engine's receipt of this answer (`operation_rejected`)
+                // carries no reason, so the host's own reason is recorded
+                // here with the command and run it belongs to.
+                let reason = error.to_string();
+                tracing::warn!(
+                    command = %intent.command.name,
+                    intent = %intent.id,
+                    run = %intent.run,
+                    deadline_at_ms = intent.deadline_at_ms,
+                    now_ms = self.service.current_time(),
+                    %reason,
+                    "playbook host rejected a command"
+                );
+                DispatchResult::Rejected { reason }
+            }
         }
     }
     #[cfg(feature = "test-support")]

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 pub mod attempts;
 pub mod delivery;
+pub mod driver;
 #[cfg(feature = "project_environments")]
 pub mod environments;
 pub mod http;
@@ -23,10 +24,10 @@ pub mod suggestions;
 pub mod tasks;
 pub use store::{
     activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, document_of,
-    get, install_defaults, list, node_limits, observation_limits, pin, release_finished_pins,
-    routing_document, save, save_limits, save_routing_document, save_selection_defaults,
-    save_supervisor_document, selection_defaults, settings, snapshot, startup, supervisor_document,
-    unpin,
+    driver_limits, get, install_defaults, list, node_limits, observation_limits, pin,
+    release_finished_pins, routing_document, save, save_limits, save_routing_document,
+    save_selection_defaults, save_supervisor_document, selection_defaults, settings, snapshot,
+    startup, supervisor_document, unpin,
 };
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
 #[cfg(feature = "project_environments")]
@@ -85,6 +86,9 @@ pub struct StoreLimits {
     /// ([`refusals`]); the oldest go first.
     #[serde(default = "default_refusals_kept")]
     pub refusals_kept: u32,
+    /// What one quantum of the playbook driver may do ([`driver`]).
+    #[serde(default)]
+    pub driver: driver::DriverLimits,
 }
 fn default_refusals_kept() -> u32 {
     1000
@@ -96,6 +100,7 @@ impl Default for StoreLimits {
             snapshots_kept: 20,
             operations_kept: 200,
             refusals_kept: default_refusals_kept(),
+            driver: driver::DriverLimits::default(),
         }
     }
 }

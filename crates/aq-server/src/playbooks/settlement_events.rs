@@ -13,7 +13,7 @@ impl Service {
         ) {
             return Ok(0);
         }
-        if !(1..=2).contains(&limit) {
+        if !(1..=aq_role_settings::driver::EVENTS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let mut tx = self.tx().await?;

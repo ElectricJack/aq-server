@@ -507,6 +507,38 @@ as assumed.
 Rollback for this section: switch routing off (5.7). The owner can also set
 or clear a task's route by hand.
 
+### 7.1 Driver limits (a wave of ready tasks)
+
+One drive quantum admits, collects, delivers and ticks within bounds that are
+Settings, the `driver` object of `GET/PUT /api/settings/profiles/limits`. They
+are read at the start of every quantum, so a change applies at once. A quantum
+that reaches a bound with work left is followed after 10 ms, not after
+`drive_interval_ms`.
+
+| `driver` field | Default | Range | What it bounds, per quantum |
+| --- | --- | --- | --- |
+| `admissions` | 8 | 1–16 | Keyed admissions delivered to the engine. |
+| `events` | 8 | 1–16 | Events of each internal kind collected, and expiries. |
+| `outbox_events` | 32 | 1–64 | Outbox events delivered to the engine. |
+| `routing_asks` | 32 | 1–1000 | Waiting tasks asked about (`aq.work.route_needed`). |
+| `announcements` | 16 | 1–1000 | Results and base changes announced. |
+| `delivery_operations` | 8 | 1–8 | Delivery operations collected. |
+| `tick_transitions` | 256 | 1–4096 | Run transitions of the one tick, for the whole server. |
+| `tick_budget_ms` | 15 000 | 1 000–120 000 | The tick starts no new transition after this long. |
+| `route_error_retries` | 3 | 0–20 | Routing runs retired and the task asked about again, per task version. |
+
+A command a transition creates is handed to the host in the same tick, before
+the next transition, so its `deadline_ms` is spent in the host call and not
+waiting for the next quantum. A routing run blocked because a `work.route` or
+`work.unroutable` command was refused for an expired deadline (nothing was
+done) is retired by the delivery recovery, and its task, if still ready and
+unrouted, is asked about again at once, up to `route_error_retries` times for
+the task's current version. After that the task waits as before and is raised
+to the owner after ten minutes. Only a delivery profile (host_v10 and later)
+runs this recovery. The host's refusal reason is logged as
+`playbook host rejected a command`; the engine's `operation_rejected` receipt
+carries no reason.
+
 ## 8. Rolling records
 
 Nothing here refuses work when it is full. Each store keeps its newest

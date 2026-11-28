@@ -103,6 +103,10 @@ pub enum Error {
     Invalid,
     #[error("playbook_scope_refused")]
     Forbidden,
+    /// A fresh command's deadline had passed when the host came to start it.
+    /// Nothing was done. Its text is the reason the engine records.
+    #[error("{}", aq_playbook_host::HOST_DEADLINE_EXPIRED)]
+    DeadlineExpired,
     #[error("playbook_identity_conflict")]
     Conflict,
     #[error("playbook_capacity_exhausted")]
@@ -431,7 +435,7 @@ impl IntoResponse for Error {
         let retryable = self == Error::Overloaded;
         let status = match self {
             Error::Invalid => StatusCode::BAD_REQUEST,
-            Error::Forbidden => StatusCode::NOT_FOUND,
+            Error::Forbidden | Error::DeadlineExpired => StatusCode::NOT_FOUND,
             Error::Conflict | Error::Fenced => StatusCode::CONFLICT,
             Error::Overloaded => StatusCode::TOO_MANY_REQUESTS,
             Error::Unknown => StatusCode::SERVICE_UNAVAILABLE,

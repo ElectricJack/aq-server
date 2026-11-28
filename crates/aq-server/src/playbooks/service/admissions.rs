@@ -143,7 +143,7 @@ impl Service {
         })
     }
     pub async fn pending_admissions(&self, owner: &RuntimeOwner, limit: u32) -> Result<Vec<Uuid>> {
-        if !(1..=16).contains(&limit) {
+        if !(1..=aq_role_settings::driver::ADMISSIONS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let mut tx = self.tx().await?;

@@ -1,8 +1,11 @@
 //! Admit, collect, deliver and tick in the fixed order of one bounded owner quantum.
 use super::*;
 impl Driver {
-    /// At most two admissions, outbox events and interval occurrences each,
-    /// plus one eight-transition tick. Overlap refuses without a waiter queue.
+    /// Admits, collects, delivers and ticks within the bounds of the driver
+    /// Settings ([`DriverLimits`]), read at the start of each quantum. The reply's
+    /// `more` says the tick reached a bound with work left, so the next
+    /// quantum should follow without waiting an interval. Overlap refuses without a
+    /// waiter queue.
     pub async fn quantum(&self) -> Result<serde_json::Value> {
         let mut partial = Partial::default();
         let result = self.quantum_with(&mut partial).await;
@@ -13,12 +16,30 @@ impl Driver {
     pub(crate) fn drive_reason(&self) -> Option<String> {
         self.reason.lock().ok().and_then(|reason| reason.clone())
     }
+    /// The driver's limits Settings; the defaults if they cannot be read.
+    async fn limits(&self, partial: &mut Partial) -> DriverLimits {
+        let read = aq_role_settings::driver_limits(&self.service.pool).await;
+        match read {
+            Ok(limits) if limits.validate().is_ok() => limits,
+            _ => {
+                partial
+                    .reasons
+                    .push("reading the driver limits; the defaults apply".into());
+                DriverLimits::default()
+            }
+        }
+    }
     async fn quantum_with(&self, partial: &mut Partial) -> Result<serde_json::Value> {
         let mut cursor = self.gate.try_lock().map_err(|_| Error::Overloaded)?;
-        let admissions = self.deliver_admissions(partial).await?;
-        self.collect_events(partial).await;
-        let (events, undecryptable) = self.deliver_page(&mut cursor, partial).await?;
-        let tick = self.tick_runs(partial).await?;
+        let limits = self.limits(partial).await;
+        let admissions = self.deliver_admissions(partial, limits.admissions).await?;
+        self.collect_events(partial, &limits).await;
+        let page = self.deliver_page(&mut cursor, partial, limits.outbox_events);
+        let (events, undecryptable) = page.await?;
+        let tick = self.tick_runs(partial, &limits).await?;
+        // Only the tick promises progress with each pass: an outbox page can
+        // hold rows that wait on other work, so a full page is not "more".
+        let more = tick["more"] == true;
         self.finish_tick(partial).await;
         if partial.overloaded {
             return Err(Error::Overloaded);
@@ -27,10 +48,15 @@ impl Driver {
             partial.reasons.push(reason);
             return Err(Error::Unknown);
         }
-        Ok(serde_json::json!({"admissions_checked":admissions,"events_checked":events,"tick":tick}))
+        Ok(
+            serde_json::json!({"admissions_checked":admissions,"events_checked":events,"tick":tick,"more":more}),
+        )
     }
-    async fn deliver_admissions(&self, partial: &mut Partial) -> Result<usize> {
-        let pending = self.service.pending_admissions(&self.runtime, 2).await?;
+    async fn deliver_admissions(&self, partial: &mut Partial, limit: u32) -> Result<usize> {
+        let pending = self
+            .service
+            .pending_admissions(&self.runtime, limit)
+            .await?;
         for id in &pending {
             let result = self
                 .admission(self.service.namespace.owner_user_id, *id, false)
@@ -55,14 +81,17 @@ impl Driver {
         }
         Ok(pending.len())
     }
-    async fn collect_events(&self, partial: &mut Partial) {
+    async fn collect_events(&self, partial: &mut Partial, limits: &DriverLimits) {
+        let events = limits.events;
         partial.defer(
             "expiring decisions",
-            self.service.expire_decisions(&self.runtime, 2).await,
+            self.service.expire_decisions(&self.runtime, events).await,
         );
         partial.defer(
             "collecting decision events",
-            self.service.collect_decision_events(&self.runtime, 2).await,
+            self.service
+                .collect_decision_events(&self.runtime, events)
+                .await,
         );
         if self
             .graph_consumer
@@ -70,7 +99,9 @@ impl Driver {
         {
             partial.defer(
                 "collecting graph events",
-                self.service.collect_graph_events(&self.runtime, 2).await,
+                self.service
+                    .collect_graph_events(&self.runtime, events)
+                    .await,
             );
         }
         if self
@@ -80,44 +111,50 @@ impl Driver {
             partial.defer(
                 "collecting settlement events",
                 self.service
-                    .collect_settlement_events(&self.runtime, 2)
+                    .collect_settlement_events(&self.runtime, events)
                     .await,
             );
         }
         partial.defer(
             "asking for routes",
-            self.service.collect_route_needed(&self.runtime, 8).await,
+            self.service
+                .collect_route_needed(&self.runtime, limits.routing_asks)
+                .await,
         );
         partial.defer(
             "announcing results",
-            self.service.collect_result_ready(&self.runtime, 8).await,
+            self.service
+                .collect_result_ready(&self.runtime, limits.announcements)
+                .await,
         );
         #[cfg(feature = "project_environments")]
         partial.defer(
             "announcing base changes",
-            self.service.collect_base_changes(&self.runtime, 8).await,
+            self.service
+                .collect_base_changes(&self.runtime, limits.announcements)
+                .await,
         );
         partial.defer(
             "running delivery operations",
             self.service
-                .collect_delivery_operations(&self.runtime, 4)
+                .collect_delivery_operations(&self.runtime, limits.delivery_operations)
                 .await,
         );
         partial.defer(
             "expiring judgments",
-            self.service.expire_assessments(&self.runtime, 2).await,
+            self.service.expire_assessments(&self.runtime, events).await,
         );
         // Catalog profile 7 work.ensure completion (aq.operation.updated).
         partial.defer(
             "collecting work completions",
             self.service
-                .collect_work_completions(&self.runtime, 2)
+                .collect_work_completions(&self.runtime, events)
                 .await,
         );
-        self.collect_timed_events(partial).await;
+        self.collect_timed_events(partial, events).await;
     }
 
-    async fn collect_timed_events(&self, partial: &mut Partial) {
+    async fn collect_timed_events(&self, partial: &mut Partial, events: u32) {
         if self.service.profile.is_host() {
             partial.defer(
                 "collecting interval events",
@@ -139,7 +176,9 @@ impl Driver {
         {
             partial.defer(
                 "collecting schedule events",
-                self.service.collect_schedule_events(&self.runtime, 2).await,
+                self.service
+                    .collect_schedule_events(&self.runtime, events)
+                    .await,
             );
         }
     }
@@ -147,11 +186,15 @@ impl Driver {
         &self,
         cursor: &mut i64,
         partial: &mut Partial,
+        limit: u32,
     ) -> Result<(usize, Option<String>)> {
         // A row that cannot be decrypted ends the page before it: event
         // delivery waits there (until the keyring is fixed or the owner holds
         // the row) while effects are still cancelled and runs still tick.
-        let (page, undecryptable) = self.service.outbox_page(&self.runtime, *cursor, 2).await?;
+        let (page, undecryptable) = self
+            .service
+            .outbox_page(&self.runtime, *cursor, limit)
+            .await?;
         if page.is_empty() && undecryptable.is_none() {
             *cursor = 0;
         }
@@ -200,7 +243,11 @@ impl Driver {
                 .declares_event(&event.contract.name, &event.contract.fingerprint)
     }
 
-    async fn tick_runs(&self, partial: &mut Partial) -> Result<serde_json::Value> {
+    async fn tick_runs(
+        &self,
+        partial: &mut Partial,
+        limits: &DriverLimits,
+    ) -> Result<serde_json::Value> {
         let now_ms = self.service.current_time();
         let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
         let cancelled = cancel.await.map_err(host_error);
@@ -212,12 +259,17 @@ impl Driver {
                 &self.service.namespace,
                 &self.owner,
                 self.tick_deadline,
-                self.service.current_time(),
+                (self.service.current_time(), limits.route_error_retries),
             );
             partial.defer("reconciling delivery decisions", recovery.await);
         }
         let now_ms = self.service.current_time();
-        let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
+        let drive = Request::Drive {
+            now_ms,
+            transitions: limits.tick_transitions as usize,
+            budget_ms: limits.tick_budget_ms,
+        };
+        let ticked = (self.owner).call(drive, self.tick_deadline);
         let tick = ticked.await.map_err(host_error);
         partial.defer("ticking runs", tick.clone());
         tick

@@ -23,7 +23,7 @@ impl Service {
         after: i64,
         limit: u32,
     ) -> Result<(Vec<(i64, Uuid, EventEnvelope, bool)>, Option<String>)> {
-        if after < 0 || !(1..=16).contains(&limit) {
+        if after < 0 || !(1..=aq_role_settings::driver::OUTBOX_EVENTS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let mut tx = self.tx().await?;

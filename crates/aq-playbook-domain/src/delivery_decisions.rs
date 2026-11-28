@@ -67,7 +67,7 @@ impl Recovery {
         namespace: &crate::Namespace,
         owner: &aq_playbook_host::Owner,
         deadline: Duration,
-        now_ms: i64,
+        (now_ms, route_error_retries): (i64, u32),
     ) -> Result<()> {
         let cursor = self.0.lock().map_err(|_| Error::Unknown)?.clone();
         let intents = recovery_batch(pool, namespace, &cursor.ledger).await?;
@@ -84,6 +84,27 @@ impl Recovery {
             .await?;
         let engine = serde_json::from_value(page["next_after"].clone())?;
         *self.0.lock().map_err(|_| Error::Unknown)? = RecoveryCursor { ledger, engine };
+        // A routing run retired for a command that was never started leaves
+        // its task unrouted: ask about the task again (bounded per version).
+        let retired: Vec<Uuid> = (page["retired_tasks"].as_array().into_iter().flatten())
+            .filter_map(|task| task.as_str()?.parse().ok())
+            .collect();
+        if !retired.is_empty() {
+            let mut tx = crate::bridge_tx(pool).await?;
+            let again = crate::route_store::retry_after_error(
+                &mut tx,
+                &retired,
+                route_error_retries,
+                now_ms,
+            );
+            let again = again.await?;
+            tx.commit().await?;
+            tracing::info!(
+                retired = retired.len(),
+                asked_again = again,
+                "routing runs retired for an unstarted command"
+            );
+        }
         Ok(())
     }
 }

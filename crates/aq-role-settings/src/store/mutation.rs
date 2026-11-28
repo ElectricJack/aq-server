@@ -209,6 +209,12 @@ impl Candidate {
         Ok(())
     }
     fn snapshot(&mut self, change: &Change) -> Result<Option<Snapshot>> {
+        if let Change::Limits(limits) = change {
+            limits
+                .driver
+                .validate()
+                .map_err(|message| invalid(&message))?;
+        }
         match change {
             Change::RoutingDocument(markdown) => self.validate_markdown("routing", markdown)?,
             Change::ObservationLimits(limits) => {

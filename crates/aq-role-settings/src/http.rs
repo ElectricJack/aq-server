@@ -6,7 +6,7 @@
 //! | `/roles`, `/intelligence-profiles`, `/execution-profiles` | the documents of that kind | | |
 //! | `/<one of those>/{id}` | one document | create or replace | delete |
 //! | `/selection-defaults` | the selection defaults | replace | |
-//! | `/profiles/limits` | this store's limits | replace | |
+//! | `/profiles/limits` | this store's limits, including the playbook driver's per-quantum bounds (`driver`) | replace | |
 //! | `/profiles/snapshot` | the active digest and store revision | | |
 //! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
 //! | `/observation-limits` | the node observation limits: `{limits, revision}` | replace | |

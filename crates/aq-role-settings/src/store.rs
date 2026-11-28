@@ -348,6 +348,19 @@ pub async fn delivery_limits(pool: &PgPool) -> Result<(delivery::DeliveryLimits,
     let settings = settings(pool).await?;
     Ok((settings.delivery_limits, settings.delivery_limits_revision))
 }
+/// The playbook driver's limits, read on their own (the driver reads them at
+/// every quantum): the defaults until the store's limits are first saved.
+pub async fn driver_limits(pool: &PgPool) -> Result<driver::DriverLimits> {
+    let stored: Option<Option<serde_json::Value>> =
+        sqlx::query_scalar("SELECT limits FROM role_settings WHERE singleton")
+            .fetch_optional(pool)
+            .await?;
+    let Some(Some(value)) = stored else {
+        return Ok(Default::default());
+    };
+    let limits: StoreLimits = serde_json::from_value(value).map_err(|_| Error::Internal)?;
+    Ok(limits.driver)
+}
 /// The node limits and their revision (the defaults at revision 0 until first
 /// saved), read on the caller's connection, apart from the other Settings values.
 pub async fn node_limits(conn: &mut PgConnection) -> sqlx::Result<(crate::node::NodeLimits, i64)> {
