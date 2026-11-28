@@ -212,21 +212,30 @@ async fn write(
             if !(1..=1_000_000_000).contains(&pull_request) {
                 return Err(AppError::BadRequest("invalid pull request number".into()));
             }
-            let (delivery, target) = publication::configured(&state, source, &mut tx).await?;
-            let evidence = delivery
-                .verified_external_merge(&target, pull_request, &source.head)
-                .await
-                .map_err(|_| AppError::UpdatesUnavailable("target forge unavailable".into()))?
-                .ok_or_else(|| {
-                    conflict("target pull request has no verified merge for the retained revision")
-                })?;
+            let unverified =
+                || conflict("target pull request has no verified merge for the retained revision");
+            // A playbook-delivered target has no legacy policy: the merge the
+            // playbook verified and recorded is the evidence.
+            let url = if source.playbook_ref.is_some() {
+                playbook_merge(&mut tx, &plan, source, pull_request)
+                    .await?
+                    .ok_or_else(unverified)?
+            } else {
+                let (delivery, target) = publication::configured(&state, source, &mut tx).await?;
+                delivery
+                    .verified_external_merge(&target, pull_request, &source.head)
+                    .await
+                    .map_err(|_| AppError::UpdatesUnavailable("target forge unavailable".into()))?
+                    .ok_or_else(unverified)?
+                    .url
+            };
             record_target(
                 &mut tx,
                 &plan,
                 source,
                 (operation, actor.id(), at),
                 "verified_merge",
-                &evidence.url,
+                &url,
             )
             .await?;
         }
@@ -284,7 +293,7 @@ async fn plan(
         .ok_or_else(|| AppError::NotFound("task has no supplemental workspaces".into()))
 }
 
-async fn read_plan(db: &mut PgConnection, plan: &Plan) -> Result<Value, AppError> {
+pub(super) async fn read_plan(db: &mut PgConnection, plan: &Plan) -> Result<Value, AppError> {
     let mut targets = BTreeMap::new();
     for s in plan.sources.values() {
         let accepted = !s.changed || target_accepted(db, plan, s).await?;
@@ -329,6 +338,26 @@ fn source<'a>(plan: &'a Plan, project: Uuid, head: &str) -> Result<&'a Source, A
         .get(&project)
         .filter(|s| s.changed && s.head == head)
         .ok_or_else(|| conflict("target is not a changed writable workspace at the named revision"))
+}
+
+/// The delivery playbook's recorded merge of `pull_request` at the exact
+/// repository, binding generation, configured branch and retained head.
+pub(super) async fn playbook_merge(
+    db: &mut PgConnection,
+    plan: &Plan,
+    source: &Source,
+    pull_request: u64,
+) -> Result<Option<String>, AppError> {
+    let number = i64::try_from(pull_request).map_err(|_| AppError::Internal)?;
+    sqlx::query_scalar(
+        "SELECT coalesce('https://github.com/'||(target#>>'{github,owner}')||'/'||(target#>>'{github,name}')
+             ||'/pull/'||pull_request,'pull request '||pull_request||' merged as '||merge_sha)
+         FROM delivery_merge_evidence
+         WHERE task_id=$1 AND project_id=$2 AND pull_request=$3 AND expected_head_sha=$4 AND target_ref=$5
+           AND target#>>'{git,repository_id}'=$6::uuid::text AND target#>>'{git,binding_generation}'=$7::bigint::text
+         ORDER BY observed_at_ms,operation_id LIMIT 1",
+    ).bind(plan.task).bind(source.project_id).bind(number).bind(&source.head).bind(source.playbook_ref.as_deref())
+     .bind(source.repository_id).bind(source.binding_generation).fetch_optional(db).await.map_err(crate::error::db)
 }
 
 fn evidence_valid(text: &str) -> Result<(), AppError> {

@@ -24,6 +24,18 @@ struct Source {
     changed: bool,
     target_ref: Option<String>,
     publication_mode: Option<String>,
+    /// The configured branch the delivery playbook merges into, for a
+    /// playbook-delivered project without a legacy publication policy. Not
+    /// part of the checkout identity, so the plan digest does not change.
+    #[serde(skip)]
+    playbook_ref: Option<String>,
+}
+
+impl Source {
+    /// The branch whose recorded playbook merge accepts this target.
+    fn merge_ref(&self) -> Option<&str> {
+        self.target_ref.as_deref().or(self.playbook_ref.as_deref())
+    }
 }
 
 #[derive(Serialize)]
@@ -141,6 +153,7 @@ async fn load(
                         && row.get::<Option<bool>, _>("changed") == Some(true),
                     target_ref: row.get("target_ref"),
                     publication_mode: row.get("publication_mode"),
+                    playbook_ref: None,
                 },
             );
         } else {
@@ -169,18 +182,21 @@ async fn load(
                 let base =
                     aq_machine_control::lineage_base(db, task, &source.resolved_object.hex).await?;
                 let changed = base.as_deref() != Some(head.as_str());
-                plan.sources.insert(
+                let mut delivered = home_source(
                     home,
-                    home_source(
-                        home,
-                        revision,
-                        generation,
-                        source.repository_id,
-                        head,
-                        changed,
-                        &row,
-                    ),
+                    revision,
+                    generation,
+                    source.repository_id,
+                    head,
+                    changed,
+                    &row,
                 );
+                // An enrolled Home is delivered by the playbook: its verified
+                // merge to the onboarded branch is the target's acceptance.
+                if changed && delivered.target_ref.is_none() {
+                    delivered.playbook_ref = playbook_ref(state, &delivered).await?;
+                }
+                plan.sources.insert(home, delivered);
             } else {
                 plan.missing_projects.push(home);
             }
@@ -228,7 +244,21 @@ fn home_source(
         changed,
         target_ref: row.get("target_ref"),
         publication_mode: row.get("publication_mode"),
+        playbook_ref: None,
     }
+}
+
+/// The configured branch of the onboarded repository the playbook merges to.
+async fn playbook_ref(state: &AppState, source: &Source) -> Result<Option<String>, AppError> {
+    let git = aq_delivery::commands::GitTarget {
+        repository_id: source.repository_id,
+        binding_generation: u64::try_from(source.binding_generation)
+            .map_err(|_| AppError::Internal)?,
+    };
+    let target = aq_delivery::commands::onboarded_target(&state.store.pool, source.project_id, git)
+        .await
+        .map_err(crate::error::db)?;
+    Ok(target.map(|target| format!("refs/heads/{}", target.default_branch)))
 }
 
 async fn check_passed(db: &mut PgConnection, plan: &Plan) -> Result<bool, AppError> {
@@ -299,12 +329,12 @@ async fn target_accepted(
              AND target_ref IS NOT DISTINCT FROM $8
          ) OR EXISTS(
            SELECT 1 FROM delivery_merge_evidence
-           WHERE task_id=$2 AND project_id=$3 AND expected_head_sha=$7 AND target_ref=$8
+           WHERE task_id=$2 AND project_id=$3 AND expected_head_sha=$7 AND target_ref=$9
              AND target#>>'{git,repository_id}'=$5::uuid::text AND target#>>'{git,binding_generation}'=$6::bigint::text
          )",
     ).bind(plan.home).bind(plan.task).bind(source.project_id).bind(source.project_revision)
      .bind(source.repository_id).bind(source.binding_generation).bind(&source.head).bind(&source.target_ref)
-     .fetch_one(db).await.map_err(crate::error::db)
+     .bind(source.merge_ref()).fetch_one(db).await.map_err(crate::error::db)
 }
 
 pub(crate) async fn gate(
@@ -470,7 +500,7 @@ async fn plan_merge_readiness(
         return Ok(MergeReadiness::PendingEvidence);
     }
     let home = plan.sources.get(&plan.home).ok_or(AppError::Internal)?;
-    if home.target_ref.is_some() && target_accepted(db, plan, home).await? {
+    if home.merge_ref().is_some() && target_accepted(db, plan, home).await? {
         return Ok(MergeReadiness::AlreadyDelivered);
     }
     if human_home_review {
@@ -493,6 +523,7 @@ mod tests {
             changed: true,
             target_ref: Some("refs/heads/main".into()),
             publication_mode: Some("pull_request".into()),
+            playbook_ref: None,
         }
     }
 
@@ -595,6 +626,89 @@ mod tests {
             MergeReadiness::AlreadyDelivered
         ));
         assert_eq!(integrated_check_rows(&mut conn, &plan).await, 0);
+    }
+
+    /// 2026-11-28, task a2d006a6: an enrolled Home has no legacy publication
+    /// policy, and the playbook's own verified merge of its PR (operation
+    /// 030efc15, PR 19) must accept it without any owner action.
+    #[tokio::test]
+    async fn a_playbook_delivered_home_is_accepted_by_the_playbook_merge() {
+        use aq_playbook_domain::delivery_runs::MergeReadiness;
+        let database = crate::test_support::TestDb::create().await;
+        let (_store, _owner) = owner(&database).await;
+        let pool = database.pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let (home, dependency) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut delivered = source(home, 'a');
+        (delivered.target_ref, delivered.publication_mode) = (None, None);
+        delivered.playbook_ref = Some("refs/heads/main".into());
+        let mut readonly = source(dependency, 'd');
+        readonly.changed = false;
+        let plan = Plan {
+            home,
+            task: Uuid::new_v4(),
+            sources: BTreeMap::from([(home, delivered), (dependency, readonly)]),
+            missing_projects: vec![],
+        };
+        // The resolved branch is not part of the checkout identity.
+        let mut unresolved = Plan {
+            home,
+            task: plan.task,
+            sources: plan.sources.clone(),
+            missing_projects: vec![],
+        };
+        unresolved.sources.get_mut(&home).unwrap().playbook_ref = None;
+        assert_eq!(plan.digest().unwrap(), unresolved.digest().unwrap());
+        let home_source = &plan.sources[&home];
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+        assert_eq!(
+            owner::playbook_merge(&mut conn, &plan, home_source, 19)
+                .await
+                .unwrap(),
+            None
+        );
+        // A merge to another branch is not the configured delivery.
+        sqlx::query(
+            "INSERT INTO delivery_merge_evidence(operation_id,project_id,task_id,pull_request,target,
+                target_ref,expected_head_sha,merge_sha,observed_at_ms)
+             VALUES($1,$2,$3,19,$4,'refs/heads/release',$5,repeat('f',40),1)",
+        ).bind(Uuid::new_v4()).bind(home).bind(plan.task)
+         .bind(serde_json::json!({"git":{"repository_id":home_source.repository_id,"binding_generation":2}}))
+         .bind(&home_source.head).execute(&mut *conn).await.unwrap();
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+
+        home_merged(&mut conn, &plan).await;
+        // work.complete's gate (playbook, no human review) now accepts.
+        assert!(
+            target_accepted(&mut conn, &plan, home_source)
+                .await
+                .unwrap()
+        );
+        assert!(accepts_plan(&mut conn, &plan, false).await.unwrap());
+        assert!(accepts_plan(&mut conn, &plan, true).await.unwrap());
+        assert!(matches!(
+            plan_merge_readiness(&mut conn, &plan, true).await.unwrap(),
+            MergeReadiness::AlreadyDelivered
+        ));
+        let read = owner::read_plan(&mut conn, &plan).await.unwrap();
+        assert_eq!(read["targets"][home.to_string()]["accepted"], true);
+        assert_eq!(read["integrated_checks_passed"], true);
+        // verify_merge accepts the same recorded merge, and only that PR.
+        assert_eq!(
+            owner::playbook_merge(&mut conn, &plan, home_source, 19)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(format!("pull request 19 merged as {}", "f".repeat(40)).as_str())
+        );
+        assert_eq!(
+            owner::playbook_merge(&mut conn, &plan, home_source, 20)
+                .await
+                .unwrap(),
+            None
+        );
+        // Without a resolved playbook branch the same evidence accepts nothing.
+        assert!(!accepts_plan(&mut conn, &unresolved, false).await.unwrap());
     }
 
     #[tokio::test]
