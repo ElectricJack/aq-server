@@ -81,6 +81,11 @@ impl Request {
                 ..
             } => authorized(binding, entry, a),
             Self::Runs { after, limit } => valid_page(after.as_deref(), *limit, 100),
+            Self::Drive {
+                transitions,
+                budget_ms,
+                ..
+            } => (1..=4096).contains(transitions) && (1..=300_000).contains(budget_ms),
             Self::Cancel { run, .. } => valid(run),
             Self::ReconcileDelivery {
                 intents,

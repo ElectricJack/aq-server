@@ -11,7 +11,7 @@ impl Service {
         if !self.profile.has_reviews() {
             return Ok(0);
         }
-        if !(1..=2).contains(&limit) {
+        if !(1..=aq_role_settings::driver::EVENTS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let reviews = self.reviews.as_ref().ok_or(Error::Forbidden)?;
@@ -107,7 +107,7 @@ impl Service {
         ) {
             return Ok(0);
         }
-        if !(1..=2).contains(&limit) {
+        if !(1..=aq_role_settings::driver::EVENTS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let producer = crate::playbooks::review_domain::GRAPH_PRODUCER;

@@ -393,6 +393,39 @@ async fn selection_defaults_and_limits_are_settings_that_recompile_the_set() {
 }
 
 #[tokio::test]
+async fn the_playbook_driver_limits_default_save_and_are_validated_with_the_store_limits() {
+    let f = started().await;
+    assert_eq!(
+        settings::driver_limits(&f.pool).await.unwrap(),
+        settings::driver::DriverLimits::default()
+    );
+    let mut limits = StoreLimits::default();
+    limits.driver.tick_transitions = 64;
+    limits.driver.route_error_retries = 5;
+    let writer = || settings::Writer::new(&f.pool, f.owner, NOW);
+    settings::save_limits(writer().edit(0, Uuid::new_v4()), &limits)
+        .await
+        .unwrap();
+    let read = settings::driver_limits(&f.pool).await.unwrap();
+    assert_eq!((read.tick_transitions, read.route_error_retries), (64, 5));
+    // An out-of-range bound is refused and stores nothing.
+    limits.driver.tick_budget_ms = 10;
+    let revision = settings::settings(&f.pool).await.unwrap().limits_revision;
+    let refused = settings::save_limits(writer().edit(revision, Uuid::new_v4()), &limits).await;
+    assert!(matches!(refused, Err(Error::Invalid(_))));
+    assert_eq!(settings::driver_limits(&f.pool).await.unwrap(), read);
+    // Settings stored before the driver limits existed read as the defaults.
+    sqlx::query("UPDATE role_settings SET limits=limits-'driver' WHERE singleton")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        settings::driver_limits(&f.pool).await.unwrap(),
+        settings::driver::DriverLimits::default()
+    );
+}
+
+#[tokio::test]
 async fn an_invalid_stored_set_at_start_keeps_the_previous_snapshot() {
     let f = started().await;
     let before = f.active().await;

@@ -242,6 +242,16 @@ pub enum Request {
     Tick {
         now_ms: i64,
     },
+    /// [`Self::Tick`] with the caller's bounds: at most `transitions` run
+    /// transitions, none started after `budget_ms` of the tick's own time.
+    /// Every command a transition creates is handed to the host before the
+    /// next transition, so its deadline is spent in the host call and not
+    /// queued behind other runs. The reply says whether work is left.
+    Drive {
+        now_ms: i64,
+        transitions: usize,
+        budget_ms: u64,
+    },
     Cancel {
         run: String,
         now_ms: i64,
@@ -608,10 +618,16 @@ fn reconcile_delivery<S: Storage>(
     }
     let (candidates, next_after) = page;
     let mut count = 0;
+    // The tasks whose routing run was retired for an unissued command: the
+    // caller asks about them again.
+    let mut retired = Vec::new();
     for intent in candidates {
         if routing_expired_before_dispatch(&intent) {
             let at = host.transition_time(now_ms).max(now_ms);
             engine.cancel(&intent.run, at).map_err(engine_error)?;
+            if let Some(task) = intent.input["subject"]["id"].as_str() {
+                retired.push(task.to_owned());
+            }
             count += 1;
             continue;
         }
@@ -642,10 +658,15 @@ fn reconcile_delivery<S: Storage>(
         }
         count += 1;
     }
-    Ok(serde_json::json!({"reconciled":count,"next_after":next_after}))
+    Ok(serde_json::json!({"reconciled":count,"next_after":next_after,"retired_tasks":retired}))
 }
 
 pub const DELIVERY_ADMISSION_EXPIRED: &str = "delivery_request_expired_before_admission";
+
+/// The reason a host gives when it refuses a command because the command's
+/// deadline had passed before the host started it. Nothing was done, so a
+/// routing run blocked by this answer is retired like one the engine expired.
+pub const HOST_DEADLINE_EXPIRED: &str = "command deadline expired before host dispatch";
 
 fn delivery_recovery_page(
     state: &runner::State,
@@ -702,14 +723,18 @@ pub const DELIVERY_RECOVERY_COMMANDS: [&str; 11] = [
 ];
 
 /// Rejected routing commands can have external effects. Retire only an expiry
-/// the engine recorded before ever handing the command to the host.
+/// the engine recorded before ever handing the command to the host, or one the
+/// host recorded before doing anything ([`HOST_DEADLINE_EXPIRED`]).
 fn routing_expired_before_dispatch(intent: &Intent) -> bool {
     matches!(
         intent.command.name.as_str(),
         "work.route" | "work.unroutable"
     ) && intent.status == IntentStatus::Rejected
-        && intent.dispatch_sequence.is_none()
-        && intent.reason.as_deref() == Some("command deadline expired before dispatch")
+        && match intent.reason.as_deref() {
+            Some("command deadline expired before dispatch") => intent.dispatch_sequence.is_none(),
+            Some(HOST_DEADLINE_EXPIRED) => true,
+            _ => false,
+        }
 }
 
 fn reconcilable_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {

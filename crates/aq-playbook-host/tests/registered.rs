@@ -388,13 +388,15 @@ async fn recovery_retires_a_routing_deadline_only_before_any_dispatch() {
     };
     let unissued = admit();
     let disputed = admit();
+    let refused = admit();
     seed.advance(&unissued, 2).unwrap();
     seed.advance(&disputed, 2).unwrap();
+    seed.advance(&refused, 2).unwrap();
 
     // Reproduce the durable states left when an old blocked run was recovered
     // and the next dispatch deadline expired. One had an earlier dispatch.
     let mut snapshot = store.load("routing-deadline").unwrap();
-    for run in [&unissued, &disputed] {
+    for run in [&unissued, &disputed, &refused] {
         snapshot.state.runs.get_mut(run).unwrap().status = RunStatus::Blocked;
         let id = snapshot
             .state
@@ -408,6 +410,12 @@ async fn recovery_retires_a_routing_deadline_only_before_any_dispatch() {
         intent.status = IntentStatus::Rejected;
         intent.reason = Some("command deadline expired before dispatch".into());
         intent.dispatch_sequence = (run == &disputed).then_some(1);
+        if run == &refused {
+            // The host looked at the command, found its deadline gone and
+            // did nothing: the engine did dispatch it, but it is unissued.
+            intent.reason = Some(HOST_DEADLINE_EXPIRED.into());
+            intent.input = serde_json::json!({"subject": {"id": "task-1"}});
+        }
     }
     store
         .compare_and_swap(
@@ -447,16 +455,183 @@ async fn recovery_retires_a_routing_deadline_only_before_any_dispatch() {
         )
         .await
         .unwrap();
-    assert_eq!(result["reconciled"], 1);
+    assert_eq!(result["reconciled"], 2);
+    assert_eq!(result["retired_tasks"], serde_json::json!(["task-1"]));
     let snapshot = inspect.load("routing-deadline").unwrap().state;
-    assert!(
-        snapshot.runs.get(&unissued).is_none_or(|run| {
+    for retired in [&unissued, &refused] {
+        assert!(snapshot.runs.get(retired).is_none_or(|run| {
             matches!(run.status, RunStatus::Cancelling | RunStatus::Cancelled)
-        })
-    );
+        }));
+    }
     assert_eq!(
         snapshot.runs.get(&disputed).unwrap().status,
         RunStatus::Blocked
     );
     owner.call(Request::Stop, DEADLINE).await.unwrap();
+}
+
+/// A host that spends 200 ms of its own clock on every command.
+struct Paced {
+    clock: Arc<AtomicI64>,
+    dispatched: Arc<AtomicUsize>,
+    shortest_window: Arc<AtomicI64>,
+}
+impl Host for Paced {
+    fn authorize(&self, _: &Authority, c: &CommandContract) -> bool {
+        c == &contract()
+    }
+    fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
+        let window = intent.deadline_at_ms - self.clock.load(Ordering::SeqCst);
+        self.shortest_window.fetch_min(window, Ordering::SeqCst);
+        self.dispatched.fetch_add(1, Ordering::SeqCst);
+        self.clock.fetch_add(200, Ordering::SeqCst);
+        DispatchResult::Completed {
+            outcome: "queued".into(),
+            output: Value::Null,
+        }
+    }
+    fn reconcile(&mut self, _: &Intent) -> DispatchResult {
+        DispatchResult::Unknown {
+            reason: "not used".into(),
+        }
+    }
+}
+impl DomainHost for Paced {
+    fn transition_time(&self, now_ms: i64) -> i64 {
+        now_ms.max(self.clock.load(Ordering::SeqCst))
+    }
+    fn set_mode(&mut self, _: HostMode) {}
+}
+struct PacedFixture {
+    owner: Owner,
+    store: MemoryStorage,
+    dispatched: Arc<AtomicUsize>,
+    shortest_window: Arc<AtomicI64>,
+}
+async fn paced(name: &str, runs: usize) -> PacedFixture {
+    let (clock, dispatched) = (Arc::new(AtomicI64::new(1)), Arc::new(AtomicUsize::new(0)));
+    let shortest_window = Arc::new(AtomicI64::new(i64::MAX));
+    let store = MemoryStorage::default();
+    let contract = contract();
+    let registry = Registry {
+        commands: BTreeMap::from([(contract.name.clone(), contract.clone())]),
+        events: BTreeMap::new(),
+    };
+    let host = (clock, dispatched.clone(), shortest_window.clone());
+    let owner = Owner::start_registered(
+        Registration::new(
+            name.into(),
+            aq_playbook_host::Limits::default(),
+            registry.clone(),
+        ),
+        {
+            let store = store.clone();
+            move || Ok(store)
+        },
+        move |_| {
+            Ok(Paced {
+                clock: host.0,
+                dispatched: host.1,
+                shortest_window: host.2,
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let mut artifact = artifact(registry, &contract);
+    // `prepare` of the shared fixture moves the fixture peer's clock, not ours.
+    artifact
+        .content
+        .playbook
+        .entries
+        .get_mut("main")
+        .unwrap()
+        .start = "prepare".into();
+    let digest = artifact.digest.clone();
+    owner
+        .call(
+            Request::Install {
+                artifact: Box::new(artifact),
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    owner
+        .call(
+            Request::Activate {
+                binding: "test".into(),
+                artifact: digest,
+                authority: common::authority(),
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    for _ in 0..runs {
+        let admit = Request::Admit {
+            binding: "test".into(),
+            entry: "main".into(),
+            input: Value::Null,
+            authority: common::authority(),
+            now_ms: 1,
+        };
+        owner.call(admit, DEADLINE).await.unwrap();
+    }
+    PacedFixture {
+        owner,
+        store,
+        dispatched,
+        shortest_window,
+    }
+}
+
+#[tokio::test]
+async fn a_bounded_drive_hands_the_command_it_created_to_the_host_before_it_returns() {
+    let f = paced("drive-one", 1).await;
+    let drive = |transitions| Request::Drive {
+        now_ms: 1,
+        transitions,
+        budget_ms: 60_000,
+    };
+    let first = f.owner.call(drive(1), DEADLINE).await.unwrap();
+    assert_eq!(first["transitions"], 1);
+    assert_eq!(first["dispatched"], 1);
+    assert_eq!(first["more"], true);
+    assert_eq!(f.dispatched.load(Ordering::SeqCst), 1);
+    // Nothing is queued between ticks: the command had its whole window.
+    assert_eq!(f.shortest_window.load(Ordering::SeqCst), 1000);
+    let rest = f.owner.call(drive(100), DEADLINE).await.unwrap();
+    assert_eq!(rest["more"], false);
+    assert_eq!(f.dispatched.load(Ordering::SeqCst), 2);
+    assert!(f.store.load("drive-one").unwrap().state.runs.is_empty());
+    for invalid in [0, 4097] {
+        let refused = f.owner.call(drive(invalid), DEADLINE).await;
+        assert!(matches!(refused, Err(Error::Invalid)), "{invalid}");
+    }
+}
+
+#[tokio::test]
+async fn seventy_runs_are_driven_to_the_end_with_every_command_inside_its_deadline() {
+    let f = paced("drive-wave", 70).await;
+    // Two commands per run, 200 ms of host time each: 28 s of host time
+    // against a command deadline of 1 s.
+    let mut ticks = 0;
+    loop {
+        let drive = Request::Drive {
+            now_ms: 1,
+            transitions: 100,
+            budget_ms: 60_000,
+        };
+        let tick = f.owner.call(drive, DEADLINE).await.unwrap();
+        ticks += 1;
+        if tick["more"] == false {
+            break;
+        }
+        assert!(ticks < 20, "the wave is not draining");
+    }
+    assert!(ticks > 1, "the bound of 100 transitions was reached");
+    assert_eq!(f.dispatched.load(Ordering::SeqCst), 140);
+    assert_eq!(f.shortest_window.load(Ordering::SeqCst), 1000);
+    assert!(f.store.load("drive-wave").unwrap().state.runs.is_empty());
 }

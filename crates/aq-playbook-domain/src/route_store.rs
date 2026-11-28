@@ -50,7 +50,7 @@ impl RouteCandidate {
     }
 
     pub async fn sent(&self, db: &mut PgConnection, now: i64, artifact: &str) -> Result<()> {
-        sqlx::query("UPDATE route_needed_emissions SET task_version=$2,emitted_at_ms=$3,checked_at_ms=0,outcome=NULL,reasons=NULL,artifact_digest=$4,options_digest=NULL WHERE task_id=$1")
+        sqlx::query("UPDATE route_needed_emissions SET error_retries=CASE WHEN task_version=$2 THEN error_retries ELSE 0 END,task_version=$2,emitted_at_ms=$3,checked_at_ms=0,outcome=NULL,reasons=NULL,artifact_digest=$4,options_digest=NULL WHERE task_id=$1")
             .bind(self.task).bind(self.emission.wanted_version).bind(now).bind(artifact)
             .execute(db).await?;
         Ok(())
@@ -92,4 +92,29 @@ pub async fn candidates(
             },
         })
         .collect())
+}
+
+/// Routing runs for these tasks were retired because a command of theirs was
+/// refused for an expired deadline, with nothing done. Each task that still
+/// waits for a route (placement saw it ready and unrouted) and has had fewer
+/// than `retries` such retirements for the version last asked about is due to
+/// be asked again at once. A task over the bound is left to the usual repeat
+/// and to the raise to the owner of a task that stays unrouted. Returns how
+/// many were made due.
+pub async fn retry_after_error(
+    db: &mut PgConnection,
+    tasks: &[Uuid],
+    retries: u32,
+    now: i64,
+) -> Result<u64> {
+    if tasks.is_empty() || retries == 0 {
+        return Ok(0);
+    }
+    let made_due = sqlx::query("UPDATE route_needed_emissions SET error_retries=error_retries+1,emitted_at_ms=LEAST(emitted_at_ms,$2),checked_at_ms=0 WHERE task_id=ANY($1) AND wanted_at_ms IS NOT NULL AND outcome IS NULL AND emitted_at_ms>0 AND error_retries<$3")
+        .bind(tasks)
+        .bind(now - host9::ROUTE_NEEDED_REPEAT_MS)
+        .bind(i32::try_from(retries).unwrap_or(i32::MAX))
+        .execute(db)
+        .await?;
+    Ok(made_due.rows_affected())
 }

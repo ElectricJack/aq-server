@@ -51,12 +51,23 @@ fn pending_plugin<S: Storage>(engine: &Engine<S>, now_ms: i64) -> Result<bool, E
         .values()
         .any(|intent| retryable_plugin(intent, now_ms)))
 }
+/// What one tick may do: the run transitions it may start, and (for the
+/// driver) the time after which it starts no more and hands each command a
+/// transition created to the host at once.
+struct TickBound {
+    transitions: usize,
+    budget: Option<std::time::Duration>,
+}
+/// The most commands one transition's follow-up hands to the host.
+const FOLLOW_UP_DISPATCHES: usize = 16;
 fn tick<S: Storage>(
     engine: &Engine<S>,
     host: &mut impl DomainHost,
     shared: &Shared,
     now_ms: i64,
+    bound: TickBound,
 ) -> Result<Value, Error> {
+    let started = std::time::Instant::now();
     let mut now_ms = now_ms.max(host.transition_time(now_ms));
     if shared.plugin_artifacts.load(Ordering::Acquire) && pending_plugin(engine, now_ms)? {
         host.set_mode(HostMode::RetryPlugins);
@@ -75,8 +86,15 @@ fn tick<S: Storage>(
     // A slow host operation can use most of a tick. Start each new
     // command's deadline when its own transition runs and check an
     // existing deadline against the current time before dispatch.
-    let mut transitions = 0;
-    while transitions < shared.limits.transitions {
+    let (mut transitions, mut dispatched, mut more) = (0, 0, false);
+    loop {
+        let timed_out = bound
+            .budget
+            .is_some_and(|budget| started.elapsed() >= budget);
+        if transitions >= bound.transitions || timed_out {
+            more = true;
+            break;
+        }
         now_ms = now_ms.max(guarded.host.transition_time(now_ms));
         if engine
             .drive(&mut guarded, now_ms, 1)
@@ -86,8 +104,21 @@ fn tick<S: Storage>(
             break;
         }
         transitions += 1;
+        if bound.budget.is_some() {
+            // The command this transition created is dispatched in this
+            // tick, ahead of the other runs' work, so the command's own
+            // deadline is not spent waiting for the next quantum.
+            for _ in 0..FOLLOW_UP_DISPATCHES {
+                now_ms = now_ms.max(guarded.host.transition_time(now_ms));
+                match engine.dispatch_next(&mut guarded, now_ms) {
+                    Ok(Some(_)) => dispatched += 1,
+                    Ok(None) => break,
+                    Err(error) => return Err(engine_error(error)),
+                }
+            }
+        }
     }
-    Ok(serde_json::json!({"transitions": transitions}))
+    Ok(serde_json::json!({"transitions": transitions, "dispatched": dispatched, "more": more}))
 }
 fn install<S: Storage>(
     engine: &Engine<S>,
@@ -355,7 +386,24 @@ impl<S: Storage, H: DomainHost> Runtime<'_, S, H> {
                 limit,
                 now_ms,
             } => self.fanout(&event_key, limit, now_ms),
-            Tick { now_ms } => tick(self.engine, self.host, self.shared, now_ms),
+            Tick { now_ms } => {
+                let bound = TickBound {
+                    transitions: self.shared.limits.transitions,
+                    budget: None,
+                };
+                tick(self.engine, self.host, self.shared, now_ms, bound)
+            }
+            Drive {
+                now_ms,
+                transitions,
+                budget_ms,
+            } => {
+                let bound = TickBound {
+                    transitions,
+                    budget: Some(std::time::Duration::from_millis(budget_ms)),
+                };
+                tick(self.engine, self.host, self.shared, now_ms, bound)
+            }
             // The owner acknowledges stop only after reaching this boundary.
             Stop => Ok(Value::Null),
         }

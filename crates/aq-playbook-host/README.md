@@ -15,7 +15,9 @@ refused. MemoryStorage is for tests/development, not cross-process fencing.
 
 Requests and response serialization have bounded envelopes (default256KiB,
 hard1MiB). Work/control queues are separate (default32/8, hard128/32). Tick is
-explicit and bounded (default8 transitions, hard64); there is no unbounded polling
+explicit and bounded (default8 transitions, hard64); `Drive` takes its own bounds
+(transitions up to 4096, and a time budget) and hands each command a transition
+created to the host before the next transition. There is no unbounded polling
 loop or waiter registry. Control has priority **between** synchronous engine calls.
 A stuck call cannot be interrupted. Timed-out admitted requests return Unknown;
 they can still commit. In particular, raw Admit has no caller idempotency key and

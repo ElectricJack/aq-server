@@ -215,7 +215,7 @@ impl Service {
         if !self.profile.is_delivery() || self.host.is_none() {
             return Ok(0);
         }
-        if !(1..=8).contains(&limit) {
+        if !(1..=aq_role_settings::driver::DELIVERY_OPERATIONS_MAX).contains(&limit) {
             return Err(Error::Invalid);
         }
         let mut tx = self.tx().await?;

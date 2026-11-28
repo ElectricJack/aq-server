@@ -117,7 +117,7 @@ impl<'a> ActionOwner<'a> {
 }
 fn outcome(error: Error) -> Outcome {
     existing::disposition(match error {
-        Error::Invalid | Error::Forbidden => Disposition::Rejected,
+        Error::Invalid | Error::Forbidden | Error::DeadlineExpired => Disposition::Rejected,
         Error::Conflict | Error::Fenced => Disposition::Conflict,
         Error::Overloaded | Error::Unknown => Disposition::Unknown,
     })

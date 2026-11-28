@@ -14,6 +14,7 @@ use aq_playbook_host::{
         KeyedAdmissionDisposition, KeyedAdmissionReceipt, Storage,
     },
 };
+use aq_role_settings::driver::DriverLimits;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,

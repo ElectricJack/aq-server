@@ -82,24 +82,33 @@ async fn pause(stop: &mut watch::Receiver<bool>, delay: Duration) -> bool {
     }
 }
 
-/// Runs `quantum` every `interval` until a stop is requested. A failed
-/// quantum is passed to `failed` with the delay before the next attempt
-/// (a [`Backoff`] from `interval` to `max_backoff`); a success resets it.
+/// The pause between two quanta when the last one left work to do.
+const BUSY_PAUSE: Duration = Duration::from_millis(10);
+
+/// Runs `quantum` every `interval` until a stop is requested. `Ok(true)`
+/// says work is left (a bound was reached), so the next quantum follows after
+/// a short pause instead of the interval. A failed quantum is passed to
+/// `failed` with the delay before the next attempt (a [`Backoff`] from
+/// `interval` to `max_backoff`); a success resets it.
 pub async fn run<E, Q, F>(
     mut stop: watch::Receiver<bool>,
     mut backoff: Backoff,
     mut quantum: impl FnMut() -> Q,
     mut failed: F,
 ) where
-    Q: Future<Output = Result<(), E>>,
+    Q: Future<Output = Result<bool, E>>,
     F: FnMut(&E, Duration),
 {
     let interval = backoff.first;
     loop {
         let delay = match quantum().await {
-            Ok(()) => {
+            Ok(more) => {
                 backoff.reset();
-                interval
+                if more {
+                    BUSY_PAUSE.min(interval)
+                } else {
+                    interval
+                }
             }
             Err(error) => {
                 let delay = backoff.fail();
@@ -195,7 +204,7 @@ mod tests {
                     if (1..=3).contains(&n) {
                         Err("storage")
                     } else {
-                        Ok(())
+                        Ok(false)
                     }
                 }
             },
@@ -205,6 +214,31 @@ mod tests {
         assert_eq!(*delays.lock().unwrap(), [10, 20, 40]);
         // Still driving after the failures: interval 10 ms over ~430 ms.
         assert!(calls.load(Ordering::SeqCst) > 20);
+        tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), drive)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_quantum_with_work_left_is_followed_without_waiting_the_interval() {
+        let (tx, rx) = watch::channel(false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let drive = tokio::spawn(run(
+            rx,
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            move || {
+                let n = c.fetch_add(1, Ordering::SeqCst);
+                // Work is left for the first 50 quanta, then the drive idles.
+                async move { Ok::<_, ()>(n < 50) }
+            },
+            |_: &(), _| {},
+        ));
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        // 50 busy quanta need 10 ms pauses, not 50 s of intervals.
+        assert_eq!(calls.load(Ordering::SeqCst), 51);
         tx.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(1), drive)
             .await
