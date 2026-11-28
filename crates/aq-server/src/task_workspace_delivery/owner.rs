@@ -309,9 +309,19 @@ async fn read_plan(db: &mut PgConnection, plan: &Plan) -> Result<Value, AppError
         .map_err(crate::error::db)?;
         targets.insert(s.project_id, json!({"accepted":accepted,"publication":pr}));
     }
-    Ok(
-        json!({"plan":plan,"targets":targets,"integrated_checks_passed":plan.complete() && check_passed(db,plan).await?}),
-    )
+    // `integrated_checks` says what satisfied them: the Home required checks
+    // when no sibling changed, or the owner's attestation at the exact set.
+    let integrated = integrated(db, plan).await?;
+    let checks = json!({
+        "required": !siblings_unchanged(plan),
+        "satisfied_by": integrated.map(Integrated::basis),
+    });
+    Ok(json!({
+        "plan": plan,
+        "targets": targets,
+        "integrated_checks_passed": integrated.is_some(),
+        "integrated_checks": checks,
+    }))
 }
 
 fn source<'a>(plan: &'a Plan, project: Uuid, head: &str) -> Result<&'a Source, AppError> {
