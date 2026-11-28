@@ -90,7 +90,8 @@ async fn the_error_retry_count_and_the_held_attempts_index_arrive_with_migration
             .fetch_optional(&pool)
             .await
             .unwrap();
-    assert!(indexed.is_some_and(|definition| definition.ends_with("WHERE holds_task)")));
+    // The definition the store's catalog attestation expects from format 192.
+    assert_eq!(indexed.as_deref(), Some(aq_history_caps::NODE_HELD_INDEX.1));
     // A task already retried up to the bound is left alone; one no longer
     // waiting (routed meanwhile) is left alone.
     sqlx::query("UPDATE route_needed_emissions SET error_retries=2 WHERE task_id=$1")

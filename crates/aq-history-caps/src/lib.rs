@@ -199,15 +199,24 @@ pub const ATTESTED_INDEXES: [(&str, &str); 4] = [
     ),
 ];
 
+/// The partial index migration 0192 adds on `execution_attempts` for the
+/// compute-occupancy read of one node's held attempts, as the catalog row
+/// expected from format 192 on.
+pub const NODE_HELD_INDEX: (&str, &str) = (
+    "execution_node_held",
+    "CREATE INDEX execution_node_held ON public.execution_attempts USING btree (node_id, attempt_id) WHERE holds_task",
+);
+
+/// One attested non-unique, valid index as a catalog row.
+fn index_row((name, definition): &(&str, &str)) -> serde_json::Value {
+    serde_json::json!({"kind": "index", "name": name, "body": {
+    "definition": definition, "valid": true, "ready": true, "live": true,
+    "primary": false, "unique": false, "immediate": true, "nulls_not_distinct": false}})
+}
+
 /// `ATTESTED_INDEXES` as catalog rows (`kind`, `name`, `body`).
 pub fn attested_index_rows() -> Vec<serde_json::Value> {
-    (ATTESTED_INDEXES.iter())
-        .map(|(name, definition)| {
-            serde_json::json!({"kind": "index", "name": name, "body": {
-            "definition": definition, "valid": true, "ready": true, "live": true,
-            "primary": false, "unique": false, "immediate": true, "nulls_not_distinct": false}})
-        })
-        .collect()
+    ATTESTED_INDEXES.iter().map(index_row).collect()
 }
 
 /// The R6 trigger (migration 0106) that clears a task's hold when the task gets a new attempt
@@ -270,7 +279,8 @@ pub fn attested_compute_release_rows() -> Vec<serde_json::Value> {
 }
 
 /// Whether the attested catalog equals the expected one. From format 103 the
-/// expected rows include `ATTESTED_INDEXES`, and from 106 the task holds trigger; both sides
+/// expected rows include `ATTESTED_INDEXES`, from 106 the task holds trigger, from 185 the
+/// compute release triggers and from 192 `NODE_HELD_INDEX`; both sides
 /// are compared in (kind, name) order, so the database collation does not matter.
 pub fn catalog_matches(
     expected: &mut serde_json::Value,
@@ -289,6 +299,9 @@ pub fn catalog_matches(
             }
             if supported >= 185 {
                 expected.extend(attested_compute_release_rows());
+            }
+            if supported >= 192 {
+                expected.push(index_row(&NODE_HELD_INDEX));
             }
             expected.sort_by_key(key);
             actual.sort_by_key(key);
