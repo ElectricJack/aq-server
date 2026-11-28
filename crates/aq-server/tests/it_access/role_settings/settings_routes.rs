@@ -130,7 +130,6 @@ async fn the_supervisor_document_is_saved_replayed_and_fenced_over_http() {
     assert_eq!(f.owner().get(PATH).await.1["markdown"], "");
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_delivery_document_is_saved_replayed_and_fenced_over_http() {
     const PATH: &str = "/api/settings/delivery-document";
@@ -200,7 +199,6 @@ async fn the_delivery_document_is_saved_replayed_and_fenced_over_http() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     use aq_role_settings::delivery::DeliveryLimits;
@@ -297,7 +295,6 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     assert_eq!(now["limits"]["hold_followup_interval_ms"], 180000);
 }
 
-#[cfg(feature = "delivery_playbook")]
 fn invalid_delivery_limits(defaults: &Value) -> Vec<Value> {
     let mut cases = Vec::new();
     for field in defaults.as_object().unwrap().keys() {

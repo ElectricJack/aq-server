@@ -13,11 +13,9 @@ pub const ROUTING_OPTIONS: &str = "routing_options";
 
 /// The id of the source whose document says what happens to a task's result
 /// (spec 0016 §8).
-#[cfg(feature = "delivery_playbook")]
 pub const DELIVERY: &str = "delivery";
 /// The binding its playbook is activated on (`aq-playbook-domain`'s
 /// `DELIVERY_BINDING`; a server test keeps the two equal).
-#[cfg(feature = "delivery_playbook")]
 pub const DELIVERY_BINDING: &str = "aq.delivery";
 
 /// The record of the `routing` source: it reads a task, asks a structured
@@ -78,7 +76,6 @@ pub fn routing() -> SourceRecord {
 /// commands (catalog 2.5.0, spec 0017): only then does the record ask them.
 /// A build with `project_environments` may still run a Host10 namespace,
 /// whose grants refuse them.
-#[cfg(feature = "delivery_playbook")]
 pub fn delivery(environments: bool) -> SourceRecord {
     let names =
         |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
@@ -101,7 +98,7 @@ pub fn delivery(environments: bool) -> SourceRecord {
     let mut events = names(&["aq.work.result_ready"]);
     // Spec 0017 §6.3-6.4: build and admit environments, and rebuild on a new
     // base (`aq.environment.completed` comes with the commands).
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     if environments {
         commands.extend(names(&["environment.build", "environment.admit"]));
         events.extend(names(&["aq.environment.base_changed"]));
@@ -157,7 +154,6 @@ mod tests {
     }
 
     /// Whatever the build: a Host10 namespace refuses the environment commands.
-    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_delivery_record_may_settle_a_result_and_no_more() {
         let record = delivery(false);
@@ -242,10 +238,9 @@ mod tests {
     /// The worked delivery example of catalog 2.3.0 seals as a playbook of
     /// this record, against catalog 2.9.0, with the record's scope, binding and
     /// abilities (`project` is the one scope the contracts allow).
-    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
-        const DIR: &str = "../../vendor/aq-playbooks-c744301/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
+        const DIR: &str = "../../vendor/aq-playbooks-8901af1/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
         let read = |name: &str| {
             std::fs::read_to_string(format!("{}/{DIR}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
         };
@@ -439,8 +434,13 @@ mod tests {
     }
 
     /// Spec 0017: catalog 2.5.0 adds the environment commands and the base
+<<<<<<< HEAD
     /// event, and keeps every 2.9.0 contract the record used.
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+=======
+    /// event, and keeps every 2.8.0 contract the record used.
+    #[cfg(feature = "project_environments")]
+>>>>>>> refs/remotes/central/main
     #[test]
     fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
         let record = delivery(true);
@@ -510,7 +510,7 @@ mod tests {
     /// Spec 0017 §5.4: the routing record is authored against catalog 2.5.0,
     /// whose `work.read` gives needs and environments and whose `work.route`
     /// takes the chosen environment; its other commands are 2.2.0's.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_routing_record_chooses_environments_on_catalog_2_5_0() {
         let record = routing();
@@ -543,7 +543,7 @@ mod tests {
 
     /// A Host10 routing namespace authors on catalog 2.3.0: its workspace
     /// describes 2.3.0's work.route, without the 2.5.0 environment.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_routing_record_on_a_host10_namespace_gets_catalog_2_3_0_notes() {
         let record = routing();
@@ -566,7 +566,7 @@ mod tests {
     /// The published routing example of spec 0017 §5.4 (vendored byte for
     /// byte) seals as a playbook of this record against its catalog, and its
     /// cases pass.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_route_to_environment_example_seals_as_the_routing_record() {
         let root = format!(
@@ -611,7 +611,7 @@ mod tests {
     }
 
     /// The published 2.5.0 delivery example seals as a playbook of this record.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_environment_delivery_example_seals_as_the_delivery_record() {
         const DIR: &str = "../../vendor/aq-host-catalog-2.5.0/examples/deliver-with-environments";

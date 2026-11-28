@@ -135,54 +135,11 @@ pub enum ChecksState {
     Passed,
     Failed,
 }
-#[cfg(not(feature = "delivery_playbook"))]
-#[derive(Debug, Clone, Serialize)]
-pub struct PullRequestSpec {
-    pub repository_id: Uuid,
-    pub head: String,
-    pub base: String,
-    pub title: String,
-    pub body: String,
-}
-#[cfg(not(feature = "delivery_playbook"))]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PullRequest {
-    pub number: u64,
-    pub url: String,
-}
-#[cfg(not(feature = "delivery_playbook"))]
-#[derive(Debug, thiserror::Error)]
-#[error("github: {0}")]
-pub struct GitHubError(pub String);
 /// Pull-request publication seam. aq-git 0.2.0 cannot create the head branch,
 /// so `deliver` refuses pull_request policies before calling this.
-#[cfg(not(feature = "delivery_playbook"))]
-#[async_trait::async_trait]
-pub trait GitHubAdapter: Send + Sync {
-    async fn open_pull_request(
-        &self,
-        spec: &PullRequestSpec,
-    ) -> std::result::Result<PullRequest, GitHubError>;
-    async fn checks(&self, pr: &PullRequest) -> std::result::Result<ChecksState, GitHubError>;
-}
 /// The adapter when no GitHub client is bound: every operation refuses.
 pub struct UnconfiguredGitHub;
-#[cfg(not(feature = "delivery_playbook"))]
-#[async_trait::async_trait]
-impl GitHubAdapter for UnconfiguredGitHub {
-    async fn open_pull_request(
-        &self,
-        _: &PullRequestSpec,
-    ) -> std::result::Result<PullRequest, GitHubError> {
-        Err(GitHubError("not configured".into()))
-    }
-    async fn checks(&self, _: &PullRequest) -> std::result::Result<ChecksState, GitHubError> {
-        Err(GitHubError("not configured".into()))
-    }
-}
-#[cfg(feature = "delivery_playbook")]
 mod adapter;
-#[cfg(feature = "delivery_playbook")]
 pub use adapter::*;
 impl DeliveryService {
     pub async fn deliver(

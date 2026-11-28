@@ -146,9 +146,7 @@ impl Candidate {
             Change::ObservationLimits(_) => observation_limits(conn).await?.1,
             Change::NodeLimits(_) => node_limits(conn).await?.1,
             Change::SupervisorDocument(_) => supervisor_document(conn).await?.1,
-            #[cfg(feature = "delivery_playbook")]
             Change::DeliveryDocument(_) => self.state.delivery_revision,
-            #[cfg(feature = "delivery_playbook")]
             Change::DeliveryLimits(limits) => {
                 self.state.delivery_limits = limits.resolve(self.state.delivery_limits);
                 self.state.delivery_limits_revision
@@ -227,9 +225,7 @@ impl Candidate {
                     )));
                 }
             }
-            #[cfg(feature = "delivery_playbook")]
             Change::DeliveryDocument(markdown) => self.validate_markdown("delivery", markdown)?,
-            #[cfg(feature = "delivery_playbook")]
             Change::DeliveryLimits(_) => self
                 .state
                 .delivery_limits
@@ -313,9 +309,7 @@ async fn persist(conn: &mut PgConnection, change: &Change, candidate: &Candidate
         Change::ObservationLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,observation_limits=$2,observation_limits_revision=$1 WHERE singleton",revision,limits).await?,
         Change::NodeLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,node_limits=$2,node_limits_revision=$1 WHERE singleton",revision,limits).await?,
         Change::SupervisorDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,supervisor_markdown=$2,supervisor_revision=$1 WHERE singleton", revision,markdown).await?,
-        #[cfg(feature = "delivery_playbook")]
         Change::DeliveryDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton", revision,markdown).await?,
-        #[cfg(feature = "delivery_playbook")]
         Change::DeliveryLimits(_) => update_json(conn, "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",revision,&candidate.state.delivery_limits).await?,
         #[cfg(feature = "project_environments")]
         Change::EnvironmentLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,environment_limits=$2,environment_limits_revision=$1 WHERE singleton",revision,limits).await?,

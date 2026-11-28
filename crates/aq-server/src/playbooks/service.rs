@@ -74,10 +74,8 @@ pub struct Service {
     /// R1 (Host9): the routing commands serve any project on the router.
     pub installation_routing: bool,
     /// Epic 0: what the server records of results (`aq.work.result_ready`, `work.read`).
-    #[cfg(feature = "delivery_playbook")]
     pub(super) delivery: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
     /// Epic 0: the server's settlement, for `work.complete` and `work.return`.
-    #[cfg(feature = "delivery_playbook")]
     pub(super) settlement: Arc<dyn super::host_adapters::DeliverySettlement>,
 }
 pub use aq_playbook_domain::intent_store::MessageResult;

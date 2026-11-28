@@ -177,9 +177,9 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
     // The first number after the last profile is none.
-    #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+    #[cfg(not(feature = "project_environments"))]
     assert_eq!(CatalogProfile::from_number(12), None);
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     assert_eq!(CatalogProfile::from_number(13), None);
 }
 
@@ -251,7 +251,7 @@ mod adapters {
         pub attempts: Mutex<(u32, u32)>,
         pub options: Mutex<Options>,
         pub writes: Mutex<Vec<(Uuid, Option<Route>)>>,
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         pub environments: Mutex<aq_server::playbooks::domain::host10::Environments>,
     }
     #[async_trait::async_trait]
@@ -268,7 +268,7 @@ mod adapters {
         async fn options(&self) -> Result<Options> {
             Ok(self.options.lock().unwrap().clone())
         }
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         async fn environments(
             &self,
             _: Uuid,
@@ -376,7 +376,7 @@ mod adapters {
                 described: BTreeMap::new(),
             }),
             writes: Mutex::default(),
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             environments: Mutex::default(),
         });
         let service = Service::new_host2(
@@ -1250,7 +1250,7 @@ mod adapters {
         use aq_playbooks_compiler::draft;
         use aq_server::playbooks::driver::Driver;
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/aq-playbooks-c744301/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
+            .join("../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
         let workspace = draft::Workspace::read(&example).unwrap();
         let artifact = draft::seal(&workspace).unwrap();
         let h = host(true, Some(Arc::new(LowRisk))).await;
@@ -1631,7 +1631,6 @@ mod adapters {
 // ------------------------------------------------------------------------
 // Epic 0 (spec 0016 section 6): host catalog 2.3.0 (profile 10), the event
 // `aq.work.result_ready` and the result facts of `work.read`.
-#[cfg(feature = "delivery_playbook")]
 mod delivery {
     use super::adapters::{FakeGraph, FakeRouting};
     use crate::common;
@@ -1965,7 +1964,7 @@ mod delivery {
             attempts: Mutex::new((1, 2)),
             options: Mutex::new(Options::default()),
             writes: Mutex::default(),
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             environments: Mutex::default(),
         });
         let port = Arc::new(Port::default());
@@ -2237,7 +2236,6 @@ mod delivery {
 
     // `work.complete`, `work.return`, `work.hold` and `supervisor.notify`.
     mod decisions;
-    #[cfg(feature = "delivery_playbook")]
     mod publication_fixture;
 
     #[tokio::test]
@@ -4055,13 +4053,12 @@ mod delivery {
     }
 }
 
-#[cfg(feature = "delivery_playbook")]
 pub(crate) use delivery::commands::GraphMergeHost;
 
 /// Catalog 2.5.0 routing on a Host12 namespace (spec 0017 §5.4): `work.read`
 /// gives the facts a routing document chooses an environment from, and
 /// `work.route` records the environment it chose.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 mod environments {
     use super::adapters::{Host, host_as};
     use crate::common;

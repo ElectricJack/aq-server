@@ -18,22 +18,16 @@ pub mod config_policy;
 pub mod context_reads;
 pub mod daily_schedules;
 pub mod decision_effects;
-#[cfg(feature = "delivery_playbook")]
 pub mod delivery_decisions;
-#[cfg(feature = "delivery_playbook")]
 mod delivery_review;
-#[cfg(feature = "delivery_playbook")]
 pub mod delivery_runs;
-#[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
 pub mod driver_outcomes;
 pub mod effect_store;
 pub mod finding_episodes;
 pub mod grants;
 pub mod health_scans;
-#[cfg(feature = "delivery_playbook")]
 pub mod hold_notice;
-#[cfg(feature = "delivery_playbook")]
 pub mod host10;
 pub mod host9;
 pub mod host_operations;
@@ -49,12 +43,10 @@ pub mod namespace_store;
 pub mod playbook_view;
 pub mod plugin_effects;
 pub mod publication_evidence;
-#[cfg(feature = "delivery_playbook")]
 pub mod retry_check;
 pub mod review_domain;
 pub mod route_effect;
 pub mod route_store;
-#[cfg(feature = "delivery_playbook")]
 pub mod scheduling_notices;
 mod step_inspection;
 pub mod view_store;

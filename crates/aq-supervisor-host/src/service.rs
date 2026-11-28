@@ -288,7 +288,7 @@ fn clean_homes(config: &ServiceConfig) -> Result<()> {
         for name in ["auth.json", "supervisor.credential"] {
             let _ = std::fs::remove_file(path.join(name));
         }
-        #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+        #[cfg(feature = "supervisor_full_access")]
         {
             // The caller has stopped proof. Remove repositories even when
             // Claude killed the broker before its own cleanup could run.

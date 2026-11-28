@@ -325,7 +325,6 @@ fn playbook_authoring_section_is_optional_strict_and_bounded() {
     assert!(load(vault_with(&none).path()).is_err());
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[test]
 fn delivery_github_section_is_optional_strict_and_validated() {
     let cfg = load(vault_with(VALID).path()).unwrap();

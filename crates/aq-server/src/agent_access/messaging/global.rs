@@ -25,7 +25,6 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 pub(crate) use writes::action::SendMessage;
 pub(crate) use writes::system_message;
-#[cfg(feature = "delivery_playbook")]
 pub(crate) use writes::system_message_in;
 type Result<T> = std::result::Result<T, AppError>;
 const CONTRACT: &str = "human-supervisor-conversation-1";

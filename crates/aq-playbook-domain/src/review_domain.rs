@@ -37,16 +37,14 @@ pub enum CatalogProfile {
     /// AQ host catalog 2.3.0 (Epic 0, spec 0016 section 6; supersedes 2.2.0),
     /// vendored and fingerprint-pinned beside the untouched Host9 pin: Host9's
     /// contracts, `work.read` with the facts of the task's latest result, the
-    /// event `aq.work.result_ready` and the delivery commands. Compiled in only
-    /// with the cargo feature `delivery_playbook`.
-    #[cfg(feature = "delivery_playbook")]
+    /// event `aq.work.result_ready` and the delivery commands.
     Host10,
     /// AQ host catalog 2.4.0: Host9 plus decision notes and draft-subtree activation.
     Host11,
     /// AQ host catalog 2.5.0 (spec 0017): Host10's delivery lineage plus
     /// Host11's changes and the environment commands. Compiled in only with
-    /// the cargo features `delivery_playbook` and `project_environments`.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    /// the cargo feature `project_environments`.
+    #[cfg(feature = "project_environments")]
     Host12,
 }
 pub const HOST9_VERSION: &str = "2.2.0";
@@ -159,20 +157,16 @@ static HOST9_CATALOG: CatalogSource = CatalogSource::new(
     include_str!("../../../vendor/aq-host-catalog-2.2.0/registry.json"),
 );
 /// AQ host catalog 2.3.0.
-#[cfg(feature = "delivery_playbook")]
 pub const HOST10_VERSION: &str = "2.3.0";
-#[cfg(feature = "delivery_playbook")]
 pub const HOST10_FINGERPRINT: &str =
     "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a";
 /// What a Host10 namespace admits in a grant besides the delivery
 /// capabilities below: the sixteen capabilities of Host9.
-#[cfg(feature = "delivery_playbook")]
 pub const HOST10_CAPABILITIES: [&str; 16] = HOST9_CAPABILITIES;
 /// The capabilities of the ten delivery commands of catalog 2.3.0. A Host10
 /// grant may name them, so that the built-in `delivery` source (spec 0016 §8)
 /// can hold a grant for the playbook its document is authored into; whether a
 /// command is served is the business of the task that implements it.
-#[cfg(feature = "delivery_playbook")]
 pub const HOST10_DELIVERY_CAPABILITIES: [&str; 10] = [
     "work.complete",
     "work.return",
@@ -186,7 +180,6 @@ pub const HOST10_DELIVERY_CAPABILITIES: [&str; 10] = [
     "pull_request.close",
 ];
 /// The delivery commands a Host10 namespace serves so far (Epic 0 S8).
-#[cfg(feature = "delivery_playbook")]
 pub const HOST10_DELIVERY_COMMANDS: [&str; 4] = [
     "work.complete",
     "work.return",
@@ -194,7 +187,6 @@ pub const HOST10_DELIVERY_COMMANDS: [&str; 4] = [
     "supervisor.notify",
 ];
 /// The commands a Host10 namespace serves (see [`HOST10_CAPABILITIES`]).
-#[cfg(feature = "delivery_playbook")]
 pub const HOST10_COMMANDS: [&str; 26] = [
     "context.read",
     "work.ensure",
@@ -224,9 +216,7 @@ pub const HOST10_COMMANDS: [&str; 26] = [
     "pull_request.close",
 ];
 /// The asynchronous delivery commands: each completes by `aq.delivery.completed`.
-#[cfg(feature = "delivery_playbook")]
 pub use aq_playbook_host::ASYNC_DELIVERY_COMMANDS as DELIVERY_COMMANDS;
-#[cfg(feature = "delivery_playbook")]
 static HOST10_CATALOG: CatalogSource = CatalogSource::new(
     HOST10_VERSION,
     HOST10_FINGERPRINT,
@@ -247,15 +237,15 @@ static HOST11_CATALOG: CatalogSource = CatalogSource::new(
 pub const WORK_ACTIVATE: &str = "work.activate";
 
 /// AQ host catalog 2.5.0.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub const HOST12_VERSION: &str = "2.5.0";
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub const HOST12_FINGERPRINT: &str =
     "sha256:d51ac465281614d241fe0023bafd94aadbaf3e65a1c3464c597da5000c549a7f";
 /// The asynchronous environment commands: each completes by `aq.environment.completed`.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub const ENVIRONMENT_COMMANDS: [&str; 2] = ["environment.build", "environment.admit"];
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 fn host12_registry() -> Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     REGISTRY
@@ -335,32 +325,23 @@ impl CatalogProfile {
             Self::Host7 => 7,
             Self::Host8 => 8,
             Self::Host9 => 9,
-            #[cfg(feature = "delivery_playbook")]
             Self::Host10 => 10,
             Self::Host11 => 11,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => 12,
         }
     }
-    /// Catalog 2.3.0 (Epic 0): always false without the feature
-    /// `delivery_playbook`.
+    /// Catalog 2.3.0 (Epic 0).
     pub fn is_delivery(self) -> bool {
-        #[cfg(feature = "delivery_playbook")]
-        {
-            self == Self::Host10 || self.has_environments()
-        }
-        #[cfg(not(feature = "delivery_playbook"))]
-        {
-            false
-        }
+        self == Self::Host10 || self.has_environments()
     }
     /// Catalog 2.5.0 (spec 0017): always false without both features.
     pub fn has_environments(self) -> bool {
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         {
             self == Self::Host12
         }
-        #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+        #[cfg(not(feature = "project_environments"))]
         {
             false
         }
@@ -395,12 +376,10 @@ impl CatalogProfile {
         self.is_host2() || self == Self::Monitoring6
     }
     pub fn from_number(number: i16) -> Option<Self> {
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         let delivery = [Self::Host10, Self::Host12];
-        #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
+        #[cfg(not(feature = "project_environments"))]
         let delivery = [Self::Host10];
-        #[cfg(not(feature = "delivery_playbook"))]
-        let delivery: [Self; 0] = [];
         [
             Self::Mail1,
             Self::HumanReview2,
@@ -429,10 +408,9 @@ impl CatalogProfile {
             Self::Host7 => "host_v7",
             Self::Host8 => "host_v8",
             Self::Host9 => "host_v9",
-            #[cfg(feature = "delivery_playbook")]
             Self::Host10 => "host_v10",
             Self::Host11 => "host_v11",
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => "host_v12",
         }
     }
@@ -469,9 +447,8 @@ impl CatalogProfile {
                     });
                 &COMMANDS
             }
-            #[cfg(feature = "delivery_playbook")]
             Self::Host10 => &HOST10_COMMANDS,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => {
                 static COMMANDS: std::sync::LazyLock<Vec<&'static str>> =
                     std::sync::LazyLock::new(|| {
@@ -504,9 +481,8 @@ impl CatalogProfile {
             Self::Host8 => HOST8_CATALOG.load(),
             Self::Host9 => HOST9_CATALOG.load(),
             Self::Host11 => HOST11_CATALOG.load(),
-            #[cfg(feature = "delivery_playbook")]
             Self::Host10 => HOST10_CATALOG.load(),
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             Self::Host12 => host12_registry(),
             _ => self.review_registry(),
         }

@@ -10,7 +10,7 @@ use axum::{Router, http::StatusCode};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use uuid::Uuid;
-#[cfg(all(feature = "project_environments", feature = "delivery_playbook"))]
+#[cfg(feature = "project_environments")]
 mod environment_try;
 mod fixture;
 mod locks;
@@ -19,8 +19,8 @@ mod pages;
 mod provision;
 mod reads;
 mod rotation;
-/// Spec 0017 §6.2: with no git route for try pushes (no `delivery_playbook`,
-/// or no aq-git configured, as here), a try can never be verified, so it is
+/// Spec 0017 §6.2: with no git route for try pushes (no aq-git
+/// configured, as here), a try can never be verified, so it is
 /// refused as unavailable rather than "run it again".
 #[cfg(feature = "project_environments")]
 #[tokio::test]

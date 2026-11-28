@@ -159,7 +159,6 @@ async fn setup_actual_with_prefix(task_prefix: bool) -> Unpublished {
         base,
     }
 }
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 #[ignore = "qualification requires an actual aq-git with followed-main retention"]
 async fn unchanged_main_refreshes_at_completion_and_publishes_an_offer() {
@@ -268,7 +267,6 @@ async fn unchanged_main_refreshes_at_completion_and_publishes_an_offer() {
     );
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 #[ignore = "qualification requires a delivery-enabled aq-git with source leases"]
 async fn actual_git_publishes_only_the_submitted_commit_and_cleans_both_refs() {
@@ -516,6 +514,5 @@ mod accepted_v2;
 #[path = "actual_git/worker_refresh_assembly.rs"]
 mod worker_refresh_assembly;
 
-#[cfg(feature = "delivery_playbook")]
 #[path = "actual_git/sibling_bundle.rs"]
 mod sibling_bundle;

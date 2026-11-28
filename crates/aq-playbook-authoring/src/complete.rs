@@ -568,7 +568,6 @@ pub async fn serve<S: Server>(s: S, mut stop: tokio::sync::watch::Receiver<bool>
         }
         // The delivery document is Settings' too: a missed save is caught up
         // on a slower pass (spec 0016 §8).
-        #[cfg(feature = "delivery_playbook")]
         if pass % 30 == 0
             && let Some(record) = s.delivery()
         {

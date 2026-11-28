@@ -99,7 +99,6 @@ async fn named_head(
     configured_handle: Uuid,
 ) -> Result<(String, Uuid)> {
     let now = || (s.clock)().timestamp_millis().max(0) as u64;
-    #[cfg(feature = "delivery_playbook")]
     if crate::profiled_execution::delivery_enrolled(s, project, _task) {
         use aq_delivery::main_sync::{MainFollower, Scope};
         let scope = Scope::new(project, repo.id, repo.generation, reference);

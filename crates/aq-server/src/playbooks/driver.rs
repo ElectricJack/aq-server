@@ -31,7 +31,6 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
-    #[cfg(feature = "delivery_playbook")]
     delivery_recovery: aq_playbook_domain::delivery_decisions::Recovery,
     /// Order binding mutations with their bridge projections.
     binding_gate: tokio::sync::Mutex<()>,
@@ -167,7 +166,6 @@ impl Driver {
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
-            #[cfg(feature = "delivery_playbook")]
             delivery_recovery: Default::default(),
             binding_gate: tokio::sync::Mutex::new(()),
             deadline: settings.deadline,

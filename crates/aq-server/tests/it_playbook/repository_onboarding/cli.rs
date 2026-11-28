@@ -128,7 +128,6 @@ async fn competing_adoption_operations_cannot_both_record_the_same_generation() 
     );
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn owner_cli_uses_the_configured_repository_scoped_github_app() {
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};

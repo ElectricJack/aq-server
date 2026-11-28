@@ -19,7 +19,7 @@ pub async fn run() -> Result<()> {
 #[derive(Default)]
 struct Bridge {
     initialized: bool,
-    #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+    #[cfg(feature = "supervisor_full_access")]
     repositories: crate::repo::SessionRepositories,
 }
 
@@ -158,7 +158,7 @@ impl Bridge {
                 let Attachment { id } = parse(args)?;
                 tool::execute("attachment-text", Some(&id.to_string()), &[]).await
             }
-            #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+            #[cfg(feature = "supervisor_full_access")]
             "repo_sync" => {
                 let args = parse::<crate::repo::SyncArguments>(args)?;
                 return self
@@ -168,7 +168,7 @@ impl Bridge {
                     .map(|value| (value, true))
                     .map_err(|_| CallError::Failed("AQ could not sync the project repository."));
             }
-            #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+            #[cfg(feature = "supervisor_full_access")]
             "repo_read" => {
                 let args = parse::<crate::repo::ReadArguments>(args)?;
                 return self.repositories.read(args).await
@@ -237,7 +237,7 @@ fn definitions() -> Vec<Value> {
             &["id"],
         ),
     ];
-    #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+    #[cfg(feature = "supervisor_full_access")]
     let tools = {
         let mut tools = tools;
         tools.extend([
@@ -297,10 +297,7 @@ mod tests {
         );
         assert_eq!(
             names.contains(&"repo_sync"),
-            cfg!(all(
-                feature = "supervisor_full_access",
-                feature = "delivery_playbook"
-            ))
+            cfg!(feature = "supervisor_full_access")
         );
         assert_eq!(names.contains(&"repo_read"), names.contains(&"repo_sync"));
         assert_eq!(lines[3]["result"]["isError"], true);

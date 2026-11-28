@@ -94,7 +94,6 @@ pub(super) async fn writable(
     .fetch_one(&mut **tx)
     .await
     .map_err(crate::error::db)?;
-    #[cfg(feature = "delivery_playbook")]
     let reworked = reworked || settlement::terminal_refusal(tx, &r).await?.is_some();
     if !reworked {
         return Ok(false);

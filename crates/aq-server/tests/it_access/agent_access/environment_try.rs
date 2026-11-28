@@ -1,4 +1,4 @@
-//! Spec 0017 §6.2 (features `project_environments` and `delivery_playbook`):
+//! Spec 0017 §6.2 (feature `project_environments`):
 //! `environment.try` queues a `try` job for the commit the attempt's node
 //! pushed and attested. The node's channel proxy commits and pushes the
 //! workspace to `refs/heads/aq-try/<attempt>` and adds `"commit"` to the

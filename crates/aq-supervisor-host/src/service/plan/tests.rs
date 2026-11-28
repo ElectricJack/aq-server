@@ -272,11 +272,7 @@ fn check_assembled_plan(harness: &str, provider: &str, reasoning: &str, adapter:
     );
     assert_eq!(
         prompt.contains("mcp__aq__repo_read"),
-        harness == "claude"
-            && cfg!(all(
-                feature = "supervisor_full_access",
-                feature = "delivery_playbook"
-            ))
+        harness == "claude" && cfg!(feature = "supervisor_full_access")
     );
     assert_scope_instructions(&config, &control, harness);
     assert_eq!(
@@ -358,7 +354,7 @@ fn assert_scope_instructions(config: &ServiceConfig, control: &Control, harness:
             text.contains(
                 "repo sync PROJECT_ID`, then read `/workspace/repos/<name>` with git and rg"
             ),
-            cfg!(feature = "delivery_playbook") && harness == "codex"
+            harness == "codex"
         );
         for gone in [
             "Create draft tasks for proposals",

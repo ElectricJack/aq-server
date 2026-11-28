@@ -134,7 +134,6 @@ impl Service {
             || extension_command(&contract.name, contract)
     }
     /// Replaces the delivery port of a freshly built host service (tests).
-    #[cfg(feature = "delivery_playbook")]
     pub fn with_delivery_ops(mut self, delivery_ops: Arc<dyn host::DeliveryOps>) -> Self {
         if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
             ports.delivery_ops = delivery_ops;
@@ -142,7 +141,7 @@ impl Service {
         self
     }
     /// Replaces the environment port of a freshly built host service (tests).
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     pub fn with_environment_ops(
         mut self,
         ops: Arc<dyn aq_environments::commands::EnvironmentOps>,
@@ -220,16 +219,13 @@ impl Service {
             reviews,
             host: None,
             installation_routing: false,
-            #[cfg(feature = "delivery_playbook")]
             delivery: Arc::new(aq_playbook_domain::delivery_store::PgDelivery(
                 state.store.pool.clone(),
             )),
-            #[cfg(feature = "delivery_playbook")]
             settlement: Arc::new(host::ServerSettlement(state.clone())),
         })
     }
     /// Replaces the delivery port of a freshly built host service (tests).
-    #[cfg(feature = "delivery_playbook")]
     pub fn with_delivery(
         mut self,
         port: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
@@ -238,7 +234,6 @@ impl Service {
         self
     }
     /// Replaces the settlement port of a freshly built host service (tests).
-    #[cfg(feature = "delivery_playbook")]
     pub fn with_settlement(mut self, port: Arc<dyn host::DeliverySettlement>) -> Self {
         self.settlement = port;
         self
@@ -253,9 +248,8 @@ fn default_host_ports(state: &crate::AppState, graph: Arc<dyn host::WorkGraph>) 
         judgments: None,
         integration: None,
         routing: Arc::new(host::ServerRouting(state.clone())),
-        #[cfg(feature = "delivery_playbook")]
         delivery_ops: Arc::new(host::ServerDelivery::new(state.clone())),
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         environment_ops: Arc::new(host::ServerEnvironments(state.clone())),
     }
 }

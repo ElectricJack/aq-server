@@ -123,8 +123,7 @@ fn supported_command(name: &str) -> bool {
         "operation.get",
         "operation.cancel",
     ];
-    // Host catalog 2.3.0 (Epic 0, spec 0016): the ten delivery commands, only
-    // with the cargo feature `delivery_playbook`.
+    // Host catalog 2.3.0 (Epic 0, spec 0016): the ten delivery commands.
     const DELIVERY: [&str; 10] = [
         "work.complete",
         "work.return",
@@ -137,11 +136,10 @@ fn supported_command(name: &str) -> bool {
         "pull_request.merge",
         "pull_request.close",
     ];
-    let delivery = cfg!(feature = "delivery_playbook");
-    // Host catalog 2.5.0 (spec 0017), with both features.
-    let environments = delivery && cfg!(feature = "project_environments");
+    // Host catalog 2.5.0 (spec 0017), with the feature `project_environments`.
+    let environments = cfg!(feature = "project_environments");
     COMMANDS.contains(&name)
-        || (delivery && DELIVERY.contains(&name))
+        || DELIVERY.contains(&name)
         || (environments && ["environment.build", "environment.admit"].contains(&name))
 }
 

@@ -211,11 +211,6 @@ async fn select_all(
     task: Uuid,
     requested: &[Requirement],
 ) -> Result<Vec<Selected>> {
-    if !requested.is_empty() && !cfg!(feature = "delivery_playbook") {
-        return Err(AppError::Maintenance(
-            "Task workspace requests require an AQ server built with delivery_playbook for workspace Git routes".into(),
-        ));
-    }
     if !cfg!(feature = "project_environments")
         && requested
             .iter()

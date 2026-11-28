@@ -9,43 +9,28 @@ pub mod config;
 pub use aq_selection::context_budget;
 pub mod context_projection;
 pub mod expiry;
-#[cfg(feature = "delivery_playbook")]
 pub mod git_grant;
 /// Enrollment applies when assembling a new offer. The persisted grant is
 /// authoritative once the offer is published.
 pub(crate) fn delivery_enrolled(
-    _state: &crate::AppState,
-    _project: uuid::Uuid,
-    _task: uuid::Uuid,
+    state: &crate::AppState,
+    project: uuid::Uuid,
+    task: uuid::Uuid,
 ) -> bool {
-    #[cfg(feature = "delivery_playbook")]
-    {
-        _state
-            .config
-            .delivery
-            .as_ref()
-            .is_some_and(|d| d.enrolls(_project, _task))
-    }
-    #[cfg(not(feature = "delivery_playbook"))]
-    {
-        false
-    }
+    state
+        .config
+        .delivery
+        .as_ref()
+        .is_some_and(|d| d.enrolls(project, task))
 }
 
 pub(crate) async fn has_delivery_grant<'e>(
-    _db: impl sqlx::PgExecutor<'e>,
-    _attempt: uuid::Uuid,
+    db: impl sqlx::PgExecutor<'e>,
+    attempt: uuid::Uuid,
 ) -> Result<bool, crate::error::AppError> {
-    #[cfg(feature = "delivery_playbook")]
-    {
-        aq_delivery::git_grant::exists(_db, _attempt)
-            .await
-            .map_err(|_| crate::error::AppError::Maintenance("git grants unavailable".into()))
-    }
-    #[cfg(not(feature = "delivery_playbook"))]
-    {
-        Ok(false)
-    }
+    aq_delivery::git_grant::exists(db, attempt)
+        .await
+        .map_err(|_| crate::error::AppError::Maintenance("git grants unavailable".into()))
 }
 
 pub mod handoff;

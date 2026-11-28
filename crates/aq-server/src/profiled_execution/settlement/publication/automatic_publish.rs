@@ -1,5 +1,5 @@
-//! The D1 automatic publish for D3's default completion policy, compiled out
-//! with the cargo feature `delivery_playbook` (Epic 0, spec 0016 section 7).
+//! The D1 automatic publish for D3's default completion policy, for attempts
+//! without a Git grant (projects not enrolled in delivery; spec 0016 section 7).
 use super::{SourceHead, current_head};
 use crate::{
     AppState,

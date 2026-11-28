@@ -5,8 +5,8 @@
 //! force-pushes it to the attempt's try ref `refs/heads/aq-try/<attempt>`
 //! and adds the pushed commit to the body as `"commit"` before it forwards
 //! the request. The server takes the commit only when it is the head of the
-//! caller's own try ref on aq-git (with `delivery_playbook`, whose `/v1/git`
-//! the push goes through). A request without one, or with another commit
+//! caller's own try ref on aq-git (whose `/v1/git` the push goes
+//! through). A request without one, or with another commit
 //! (the command surface, an older node, an agent's own body), is refused
 //! with `workspace_not_pushed`.
 use crate::worker::{Host, NewJob, enqueue};
@@ -166,29 +166,21 @@ async fn queued<S: Host<E>, E: IntoResponse>(
     Ok(Json(json!({"job_id": job_id})).into_response())
 }
 
-/// The head of `attempt`'s try ref on aq-git. A server without `/v1/git`
-/// (no `delivery_playbook`) or without aq-git refuses with `try_unavailable`.
+/// The head of `attempt`'s try ref on aq-git. A server without aq-git refuses
+/// with `try_unavailable`.
 async fn try_head<S: Host<E>, E: IntoResponse>(
     host: &S,
     attempt: Uuid,
 ) -> Result<Option<String>, Response> {
     let message = "this server has no git route for try pushes";
     let unavailable = || refuse(StatusCode::CONFLICT, "try_unavailable", message, false);
-    #[cfg(feature = "delivery_playbook")]
-    {
-        let socket = host.git_socket().ok_or_else(unavailable)?;
-        let head = crate::git::try_head(host.as_ref(), socket, attempt).await;
-        head.map_err(|e| {
-            tracing::warn!(error = %e, %attempt, "try ref unreadable");
-            let message = "aq-git is unavailable; retry";
-            refuse(StatusCode::SERVICE_UNAVAILABLE, "overloaded", message, true)
-        })
-    }
-    #[cfg(not(feature = "delivery_playbook"))]
-    {
-        let _ = (host, attempt);
-        Err(unavailable())
-    }
+    let socket = host.git_socket().ok_or_else(unavailable)?;
+    let head = crate::git::try_head(host.as_ref(), socket, attempt).await;
+    head.map_err(|e| {
+        tracing::warn!(error = %e, %attempt, "try ref unreadable");
+        let message = "aq-git is unavailable; retry";
+        refuse(StatusCode::SERVICE_UNAVAILABLE, "overloaded", message, true)
+    })
 }
 
 /// One of the project's try jobs: its state and, once completed, the

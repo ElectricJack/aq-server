@@ -807,7 +807,6 @@ fn owner_commands_follow_the_supervisor_route_policy() {
     }
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[test]
 fn publication_recovery_exposes_only_scoped_owner_routes_and_keeps_the_original_identity() {
     let r = Registry::new(&actions()).unwrap();

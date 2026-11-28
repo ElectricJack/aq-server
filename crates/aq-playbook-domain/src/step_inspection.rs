@@ -224,7 +224,7 @@ mod tests {
 
     fn authored_example() -> Value {
         serde_json::from_str(include_str!(
-            "../../../vendor/aq-playbooks-c744301/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment/previous.artifact.json"
+            "../../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment/previous.artifact.json"
         )).unwrap()
     }
 

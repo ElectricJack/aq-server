@@ -12,8 +12,8 @@
 //! | `/observation-limits` | the node observation limits: `{limits, revision}` | replace | |
 //! | `/node-limits` | the node limits (headroom, build-cache keys, deferral attention): `{limits, revision}` | replace | |
 //! | `/supervisor-document` | the project supervisor's role text: `{markdown, revision}`; empty means the compiled text | replace | |
-//! | `/delivery-document` | the delivery document: `{markdown, revision}` (feature `delivery_playbook`) | replace | |
-//! | `/delivery-limits` | the delivery limits: `{limits, revision}` (feature `delivery_playbook`) | replace | |
+//! | `/delivery-document` | the delivery document: `{markdown, revision}` | replace | |
+//! | `/delivery-limits` | the delivery limits: `{limits, revision}` | replace | |
 //!
 //! Revisions travel as decimal strings, as in the other Settings routes.
 use crate::{Change, Document, Error, Mutation, Result, invalid, store};
@@ -62,7 +62,6 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/node-limits", value.clone())
         .route("/api/settings/supervisor-document", value.clone())
         .route("/api/settings/profiles/snapshot", read);
-    #[cfg(feature = "delivery_playbook")]
     let router = router
         .route("/api/settings/delivery-document", value.clone())
         .route("/api/settings/delivery-limits", value);
@@ -79,9 +78,7 @@ enum Target {
     ObservationLimits,
     NodeLimits,
     SupervisorDocument,
-    #[cfg(feature = "delivery_playbook")]
     DeliveryDocument,
-    #[cfg(feature = "delivery_playbook")]
     DeliveryLimits,
 }
 fn target(path: &str) -> Result<Target> {
@@ -100,9 +97,7 @@ fn target(path: &str) -> Result<Target> {
         ("observation-limits", None) => Ok(Target::ObservationLimits),
         ("node-limits", None) => Ok(Target::NodeLimits),
         ("supervisor-document", None) => Ok(Target::SupervisorDocument),
-        #[cfg(feature = "delivery_playbook")]
         ("delivery-document", None) => Ok(Target::DeliveryDocument),
-        #[cfg(feature = "delivery_playbook")]
         ("delivery-limits", None) => Ok(Target::DeliveryLimits),
         ("profiles", Some("limits")) => Ok(Target::Limits),
         ("profiles", Some("snapshot")) => Ok(Target::Snapshot),
@@ -205,12 +200,10 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
                 store::supervisor_document(&mut *pool.acquire().await?).await?;
             Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
         }
-        #[cfg(feature = "delivery_playbook")]
         Target::DeliveryDocument => {
             let (markdown, revision) = store::delivery_document(pool).await?;
             Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
         }
-        #[cfg(feature = "delivery_playbook")]
         Target::DeliveryLimits => {
             let (limits, revision) = store::delivery_limits(pool).await?;
             Ok(json!({"limits": limits, "revision": revision.to_string()}))
@@ -264,11 +257,9 @@ pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result
         (Target::NodeLimits, None, None, Some(limits)) => {
             Change::NodeLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
-        #[cfg(feature = "delivery_playbook")]
         (Target::DeliveryDocument, Some(markdown), None, None) => {
             Change::DeliveryDocument(markdown)
         }
-        #[cfg(feature = "delivery_playbook")]
         (Target::DeliveryLimits, None, None, Some(limits)) => Change::DeliveryLimits(
             crate::delivery::DeliveryLimitsChange::from_request(limits).map_err(|_| bad())?,
         ),

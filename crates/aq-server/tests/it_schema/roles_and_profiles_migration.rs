@@ -418,6 +418,8 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
     let mut tx = pool.begin().await.unwrap();
     sqlx::raw_sql(MIGRATION).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
+    // The role store reads the settings row with migration 0142's columns.
+    crate::common::roles::add_delivery_settings(&pool).await;
 
     for table in REMOVED {
         assert!(!exists(&pool, table).await, "{table} is dropped");
@@ -458,6 +460,8 @@ async fn the_roles_migration_of_an_empty_store_carries_nothing() {
     let mut tx = pool.begin().await.unwrap();
     sqlx::raw_sql(MIGRATION).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
+    // The role store reads the settings row with migration 0142's columns.
+    crate::common::roles::add_delivery_settings(&pool).await;
     assert_eq!(
         aq_role_settings::routing_document(&pool).await.unwrap(),
         (String::new(), 0)

@@ -1,4 +1,4 @@
-//! Spec 0017 §6.3 (with `delivery_playbook`): a builder fetches its job's
+//! Spec 0017 §6.3: a builder fetches its job's
 //! commit through the server's `/v1/git/<repository>/…` route with its node
 //! credential and `AQ-Environment-Job: <job_id>` instead of `AQ-Attempt`.
 //! The job grant is fetch-only, for the job's repository, while the node

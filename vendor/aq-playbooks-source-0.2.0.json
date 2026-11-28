@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "source_repository": "aq-playbooks",
-  "source_revision": "c7443012c1e6902c2d6fa40ecff0402090f189b1",
-  "publication_profile": "Exact aq-playbooks source for extension catalogs, plugin events, binding interval schedules, and host catalog 2.4.0.",
-  "archive_format": "git archive --format=tar c744301 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
-  "archive_sha256": "00ad95556fe6d140ab858382e8fc3024523438ab7e8f0f9764fc1689d7f89f92",
-  "vendor_root": "vendor/aq-playbooks-c744301",
+  "source_revision": "8901af14df0be3ee0d6e81bf6a97f73913a41eb2",
+  "publication_profile": "Exact aq-playbooks source for host catalogs through 2.4.0, including delivery in ordinary builds.",
+  "archive_format": "git archive --format=tar 8901af14df0be3ee0d6e81bf6a97f73913a41eb2 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
+  "archive_sha256": "60d2b494b0bea71767f619ca4247ec2b164b4d23b5988bce424b68a08467a078",
+  "vendor_root": "vendor/aq-playbooks-8901af1",
   "files": [
     {
       "path": "Cargo.lock",
@@ -100,8 +100,8 @@
     {
       "path": "contracts/aq-host-2.3.0/README.md",
       "mode": "100644",
-      "bytes": 4859,
-      "sha256": "d9cd30ffaaf7fd4dd07464a4e625e9f946b3c6b0cba3b88407ce9391a8579888"
+      "bytes": 4794,
+      "sha256": "14dfa5321b88e9f1271c5968f872333b74b84701755b2c8e5ec352fa202d2ed9"
     },
     {
       "path": "contracts/aq-host-2.3.0/examples/deliver-by-playbook/catalog.json",
@@ -214,8 +214,8 @@
     {
       "path": "crates/aq-playbooks-cli/Cargo.toml",
       "mode": "100644",
-      "bytes": 626,
-      "sha256": "d92bbec45f6ad90c35159b0c44b4223af21861edd722a875a47537c1f95cdb25"
+      "bytes": 482,
+      "sha256": "418547c0bddfcbba2c2f38d6aa8076a66f678e33d0df2b991a978b473bb3c513"
     },
     {
       "path": "crates/aq-playbooks-cli/examples/measure.rs",
@@ -232,8 +232,8 @@
     {
       "path": "crates/aq-playbooks-cli/src/catalog.rs",
       "mode": "100644",
-      "bytes": 4622,
-      "sha256": "29240d0298eb451f5fbf9f8237d6ec62d5280b1d4b5f73fd6e306af9ee5b9607"
+      "bytes": 4470,
+      "sha256": "4a61adaac3c468f23b7f650ce812b09fb9ba6c6979630e9d09ddc09d00b00d17"
     },
     {
       "path": "crates/aq-playbooks-cli/src/configuration.rs",
@@ -292,8 +292,8 @@
     {
       "path": "crates/aq-playbooks-cli/tests/catalog_v2_3_contract.rs",
       "mode": "100644",
-      "bytes": 36922,
-      "sha256": "088052ba4ff2500053f084c5f21f547cccbb52d3d960185944b803bf7036e7c7"
+      "bytes": 36843,
+      "sha256": "730acfbb36806f42ec388f063fd8323f9bb5ea0e73a1ea2e8537fd42c73397aa"
     },
     {
       "path": "crates/aq-playbooks-cli/tests/catalog_v2_4_contract.rs",
@@ -382,8 +382,8 @@
     {
       "path": "crates/aq-playbooks-compiler/Cargo.toml",
       "mode": "100644",
-      "bytes": 328,
-      "sha256": "a18b136b01a5709d280cce6592b7b35df48f0b1271f23bf6a1fe7b7d1335fc63"
+      "bytes": 214,
+      "sha256": "be15eb2833748a6a7026a2d2f83277b0b08ebaa929ff0fd709379baccabe7655"
     },
     {
       "path": "crates/aq-playbooks-compiler/LANGUAGE.md",
@@ -688,8 +688,8 @@
     {
       "path": "crates/aq-playbooks-compiler/src/docs.rs",
       "mode": "100644",
-      "bytes": 16658,
-      "sha256": "96d49976ce0a2b7cbb353969bb80bca645a397a15e1a27d8827316c61c209170"
+      "bytes": 16516,
+      "sha256": "e37b97310b1cbc34bf5a32c6bee0491436a6daa583928c441d74bfc8f9f9d6c3"
     },
     {
       "path": "crates/aq-playbooks-compiler/src/draft.rs",
@@ -1228,8 +1228,8 @@
     {
       "path": "docs/aq-host-integration.md",
       "mode": "100644",
-      "bytes": 29885,
-      "sha256": "9084a31a6627a5f0564dd4da5d93a7be38fc4cebb8d762b81d660032f718706f"
+      "bytes": 29849,
+      "sha256": "de6522ce14c42c914a45a8d988d8ef970b35b5e79046853f3555284dfccc2a08"
     },
     {
       "path": "docs/implementation/0003-live-state-only.md",

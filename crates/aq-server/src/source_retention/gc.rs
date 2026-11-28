@@ -251,7 +251,7 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
         }
         // Spec 0017 §6.2: ended attempts' try refs leave aq-git, beside GC.
         let tick = sweep.tick(&state);
-        #[cfg(all(feature = "project_environments", feature = "delivery_playbook"))]
+        #[cfg(feature = "project_environments")]
         let tick = {
             let git = state.source_retention.as_ref();
             let git = git.map(|r| r.config.git_socket.as_path());

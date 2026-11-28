@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod attempts;
-#[cfg(feature = "delivery_playbook")]
 pub mod delivery;
 #[cfg(feature = "project_environments")]
 pub mod environments;
@@ -29,7 +28,6 @@ pub use store::{
     save_supervisor_document, selection_defaults, settings, snapshot, startup, supervisor_document,
     unpin,
 };
-#[cfg(feature = "delivery_playbook")]
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
 #[cfg(feature = "project_environments")]
 pub use store::{environment_limits, save_environment_limits};
@@ -128,14 +126,10 @@ pub struct Settings {
     pub routing_revision: i64,
     /// The delivery document: the text the delivery playbook is authored
     /// from (spec 0016 §8). Empty means no delivery policy.
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_markdown: String,
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_revision: i64,
     /// The delivery limits (spec 0016 §4), a Settings value of their own.
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_limits: delivery::DeliveryLimits,
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_limits_revision: i64,
 }
 
@@ -170,10 +164,8 @@ pub enum Change {
     /// The project supervisor's role text. It is not part of a snapshot.
     SupervisorDocument(String),
     /// The delivery document. It is not part of a snapshot.
-    #[cfg(feature = "delivery_playbook")]
     DeliveryDocument(String),
     /// The delivery limits. They are not part of a snapshot.
-    #[cfg(feature = "delivery_playbook")]
     DeliveryLimits(delivery::DeliveryLimitsChange),
     /// The environment limits (spec 0017 §6.7). They are not part of a snapshot.
     #[cfg(feature = "project_environments")]

@@ -14,7 +14,7 @@ use sqlx::Row;
 use std::sync::{Arc, atomic::Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
-// With `delivery_playbook` a named ref never reads `repo.observation` or the
+// A named ref never reads `repo.observation` or the
 // configured handle (spec 0016 §4); the test below covers that path.
 #[tokio::test]
 async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_retention() {
@@ -85,11 +85,10 @@ async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_ret
     task.abort();
 }
 
-/// Spec 0016 §4 (feature `delivery_playbook`): a project whose source is
+/// Spec 0016 §4: a project whose source is
 /// `NamedRef refs/heads/main` follows the remote's `main` through heads
 /// central aq-git synced and retained (`repo.retain_ref`), with no config
 /// change. The synthetic aq-git peer holds the fixture remote's `main`.
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn named_main_follows_remote_pushes_through_synced_retained_heads() {
     use aq_delivery::main_sync::{self, Scope};
@@ -256,13 +255,11 @@ fn install_git(
     ));
     (dir, socket, listener)
 }
-#[cfg(feature = "delivery_playbook")]
 struct MovingMain {
     remote: Arc<std::sync::Mutex<String>>,
     operations: Arc<std::sync::Mutex<Vec<String>>>,
     task: tokio::task::JoinHandle<()>,
 }
-#[cfg(feature = "delivery_playbook")]
 impl MovingMain {
     fn serve(
         listener: tokio::net::UnixListener,
@@ -362,7 +359,6 @@ impl MovingMain {
             .count()
     }
 }
-#[cfg(feature = "delivery_playbook")]
 async fn check_handles(
     pool: &sqlx::PgPool,
     scope: &aq_delivery::main_sync::Scope,
@@ -383,7 +379,6 @@ async fn check_handles(
         assert_eq!(verdict.unwrap(), accepted, "{handle} for {head}");
     }
 }
-#[cfg(feature = "delivery_playbook")]
 fn assert_synced_head(sync: &aq_delivery::main_sync::MainSync, expected: &str, at: u64) {
     assert_eq!((sync.head.as_str(), sync.synced_at_ms), (expected, at));
 }

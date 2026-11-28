@@ -5,7 +5,7 @@ pub mod attachments;
 pub mod authority;
 pub mod delivery;
 pub mod extract;
-#[cfg(all(feature = "delivery_playbook", feature = "supervisor_full_access"))]
+#[cfg(feature = "supervisor_full_access")]
 pub mod git;
 #[cfg(feature = "supervisor_full_access")]
 pub mod owner;
@@ -47,7 +47,6 @@ pub fn machine_routes<S: Clone + Send + Sync + 'static>(
 /// The supervisor git route `/v1/supervisor/git` on the machine listener,
 /// forwarding fetches to aq-git's git `socket`: mounted only with
 /// supervisor_full_access and a configured socket.
-#[cfg(feature = "delivery_playbook")]
 pub fn git_routes<S: Clone + Send + Sync + 'static>(
     pool: &sqlx::PgPool,
     clock: &Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,

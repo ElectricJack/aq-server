@@ -67,7 +67,6 @@ pub(super) async fn require_base(
     {
         return Ok(());
     }
-    #[cfg(feature = "delivery_playbook")]
     if serde_json::from_slice::<Value>(&source.bytes)
         .is_ok_and(|body| body["evidence"].get("main_sync").is_some())
     {
@@ -83,10 +82,8 @@ pub(super) async fn require_base(
     Err(refused())
 }
 
-#[cfg(feature = "delivery_playbook")]
 use aq_role_settings::refusals::{DeliveryAncestryWait, OfferRefusal};
 
-#[cfg(feature = "delivery_playbook")]
 async fn ancestry_wait(
     state: &AppState,
     project: Uuid,
@@ -250,14 +247,12 @@ impl<'a> Observer<'a> {
         }
         // Enrollment selects the result path. A first offer on either path must
         // still prove the chosen base against its completed blockers.
-        #[cfg(feature = "delivery_playbook")]
         let object = selected.verify_ancestry(self, _offer, object).await?;
         selected.inspect(self, &object).await?;
         selected.observation(self, object)
     }
 }
 /// Spec 0016 §4: the loop syncing each enabled project's followed named ref.
-#[cfg(feature = "delivery_playbook")]
 pub async fn follow_main(state: AppState, stop: tokio::sync::watch::Receiver<bool>) {
     let (Some(runtime), Some(config), Some(delivery)) = (
         &state.source_retention,

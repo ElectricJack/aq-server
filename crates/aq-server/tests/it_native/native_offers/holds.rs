@@ -506,7 +506,6 @@ async fn an_owner_retry_overrides_each_budget_hold_and_records_the_reason() {
     }
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_startup() {
     use aq_playbook_domain::retry_check;
@@ -599,7 +598,6 @@ async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_
     );
 }
 
-#[cfg(feature = "delivery_playbook")]
 async fn seed_failed_check(
     c: &Case,
     attempt: Uuid,
@@ -1467,7 +1465,6 @@ async fn resume_held_refuses_a_safety_hold_or_no_hold_and_adds_no_edge() {
 /// A result the delivery playbook held at its return limit, with its stopped attempt proven,
 /// is not replaced by the poll. An owner retry still releases it as before: it overrides the
 /// return limit, starts the return count again, and the poll offers the task.
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn a_held_delivery_result_waits_for_an_owner_retry_which_resets_its_returns() {
     let mut c = setup().await;

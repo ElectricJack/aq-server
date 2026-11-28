@@ -150,7 +150,6 @@ impl Service {
         Ok(count)
     }
     /// Announce an unsettled result or a publication whose lease is usable again.
-    #[cfg(feature = "delivery_playbook")]
     pub async fn collect_result_ready(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         use aq_playbook_domain::delivery_store as store;
         let (Some(host), true) = (self.host.as_deref(), self.profile.is_delivery()) else {
@@ -198,7 +197,7 @@ impl Service {
     }
     /// Spec 0017 §6.4: `aq.environment.base_changed` once per project whose
     /// environments were built on another base than the newest one.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     pub async fn collect_base_changes(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         use aq_environments::commands as environments;
         if !self.profile.has_environments() || self.host.is_none() {

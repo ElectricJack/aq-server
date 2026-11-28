@@ -11,10 +11,7 @@ pub(crate) struct Env {
     pub(crate) time: Arc<std::sync::atomic::AtomicI64>,
     pub(super) node_token: String,
     /// The state `app` and `admin` serve, for a test that rebuilds them.
-    #[cfg_attr(
-        not(all(feature = "project_environments", feature = "delivery_playbook")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(feature = "project_environments"), allow(dead_code))]
     pub(crate) state: aq_server::AppState,
 }
 pub(crate) async fn setup() -> Env {

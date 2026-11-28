@@ -33,11 +33,10 @@ impl Service {
             "check.request" => (json!("check"), "aq.check.receipted"),
             "work.ensure" => (json!("work"), "aq.operation.updated"),
             "decision.request" => (json!("decision"), "aq.decision.completed"),
-            #[cfg(feature = "delivery_playbook")]
             name if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) => {
                 (json!("delivery"), "aq.delivery.completed")
             }
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             "environment.build" | "environment.admit" => {
                 (json!("environment"), "aq.environment.completed")
             }

@@ -4,11 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 [features]
-# Supervisors get full access (owner scope and registry); off by default.
-supervisor_full_access = ["dep:tower"]
-# Read-only code access through aq-git (`/v1/supervisor/git`), mounted only
-# together with supervisor_full_access.
-delivery_playbook = ["dep:aq-delivery", "aq-delivery/delivery_playbook"]
+# Supervisors get full access (owner scope and registry), including read-only
+# code access through aq-git (`/v1/supervisor/git`); off by default.
+supervisor_full_access = ["dep:tower", "dep:aq-delivery"]
 
 [dependencies]
 axum.workspace = true

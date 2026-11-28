@@ -873,7 +873,6 @@ pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool 
     if current == Some(contract) {
         return true;
     }
-    #[cfg(feature = "delivery_playbook")]
     if contract.name == "work.read" {
         let pinned = |catalog: &'static OnceLock<Registry>, json: &str| {
             catalog

@@ -682,7 +682,6 @@ fn closed_launch_shows_the_owner_and_the_event_that_can_release_it() {
     assert!(crate::holds::recovery_reason(attempt, Some("stopped"), None, true).is_none());
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[test]
 fn exhausted_delivery_names_the_retry_owner_and_original_result() {
     let attempt = Uuid::new_v4();

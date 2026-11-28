@@ -34,28 +34,24 @@ mod activate;
 mod assess;
 mod cancellation;
 mod context;
-#[cfg(feature = "delivery_playbook")]
 mod delivery_commands;
-#[cfg(feature = "delivery_playbook")]
 mod delivery_decisions;
 mod delivery_port;
 mod effects;
 mod events;
 use events::HostEvent;
 pub(super) use events::OutboxEntry;
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 mod environment_commands;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
 mod work;
-#[cfg(feature = "delivery_playbook")]
 pub use delivery_commands::{DeliveryOps, ServerDelivery};
-#[cfg(feature = "delivery_playbook")]
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub use environment_commands::ServerEnvironments;
 pub use integration::*;
 pub use requests::*;
@@ -75,10 +71,9 @@ pub struct HostPorts {
     pub routing: Arc<dyn RoutingPort>,
     /// Catalog 2.3.0 delivery commands (Epic 0): where a project's work is
     /// delivered, and the commands over the forge and central aq-git.
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_ops: Arc<dyn DeliveryOps>,
     /// Catalog 2.5.0: the project's recipes on aq-git and its binding.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     pub environment_ops: Arc<dyn aq_environments::commands::EnvironmentOps>,
 }
 
@@ -233,11 +228,8 @@ impl Service {
             "work.ensure" => self.work_ensure(owner, command).await,
             "work.change" => self.work_change(owner, command).await,
             super::review_domain::WORK_ACTIVATE => self.work_activate(owner, command).await,
-            #[cfg(feature = "delivery_playbook")]
             "work.complete" | "work.return" => self.work_decide(owner, command, false).await,
-            #[cfg(feature = "delivery_playbook")]
             "work.hold" => self.work_hold(owner, command).await,
-            #[cfg(feature = "delivery_playbook")]
             "supervisor.notify" => self.supervisor_notify(owner, command).await,
             "operation.cancel" => self.operation_cancel(owner, command).await,
             "judgment.request" => self.judgment_request(owner, command).await,
@@ -248,13 +240,12 @@ impl Service {
             "candidate.publish" => self.candidate_publish(owner, command).await,
             "message.send" => self.host_message_send(owner, command).await,
             "decision.request" => self.host_decision_request(owner, command).await,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             name if self.profile.has_environments()
                 && aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&name) =>
             {
                 self.environment_command(owner, id, revision, intent).await
             }
-            #[cfg(feature = "delivery_playbook")]
             name if self.profile.is_delivery()
                 && aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) =>
             {

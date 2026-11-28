@@ -83,11 +83,10 @@ impl CatalogProfile {
         if self.has_notes() {
             allowed.insert(WORK_ACTIVATE.into());
         }
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         if self.has_environments() {
             allowed.extend(ENVIRONMENT_COMMANDS.iter().map(|c| c.to_string()));
         }
-        #[cfg(feature = "delivery_playbook")]
         if self.is_delivery() {
             allowed.extend(HOST10_DELIVERY_CAPABILITIES.iter().map(|c| c.to_string()));
         }

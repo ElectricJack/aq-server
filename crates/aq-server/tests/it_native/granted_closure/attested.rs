@@ -169,7 +169,6 @@ async fn an_attested_closed_launch_releases_its_claim_for_one_ordinary_successor
     )
     .await;
     // The retained branch head: the task ref at the attempt's lease (delivery builds only).
-    #[cfg(feature = "delivery_playbook")]
     let head = retained_head(&c, task).await;
     let operation = Uuid::new_v4();
     let (status, body) = command(&c, project(&c), operation).await;
@@ -202,7 +201,6 @@ async fn an_attested_closed_launch_releases_its_claim_for_one_ordinary_successor
     assert_eq!(replace.predecessor, attempt);
     assert!(!replace.needs_release);
     // The successor's git grant leases the task ref: it starts from the retained head.
-    #[cfg(feature = "delivery_playbook")]
     assert_eq!(successor_lease(&c, task).await, Some(head));
     // Idempotent: the same operation returns the same attestation and changes nothing.
     let (status, replay) = command(&c, project(&c), operation).await;
@@ -286,7 +284,6 @@ async fn condition_5_a_task_ref_not_at_the_lease_is_refused() {
 
 /// The attempt's git grant leases the task ref at a commit central aq-git holds (the fixture's
 /// aq-git serves `ref.show` from `git-http-repositories/<repository>`).
-#[cfg(feature = "delivery_playbook")]
 async fn retained_head(c: &Prepared, task: Uuid) -> String {
     use aq_delivery::git_grant::fake::git;
     let retention = c.case.env.env.state.source_retention.as_ref().unwrap();
@@ -313,7 +310,6 @@ async fn retained_head(c: &Prepared, task: Uuid) -> String {
     head
 }
 /// The lease the successor's offer gets (`producer::build` calls this grant owner).
-#[cfg(feature = "delivery_playbook")]
 async fn successor_lease(c: &Prepared, task: Uuid) -> Option<String> {
     let retention = c.case.env.env.state.source_retention.as_ref().unwrap();
     let git = aq_delivery::commands::SocketGit::new(&retention.config.git_socket);
