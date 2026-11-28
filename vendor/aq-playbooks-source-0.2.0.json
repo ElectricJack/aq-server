@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "source_repository": "aq-playbooks",
-  "source_revision": "8901af14df0be3ee0d6e81bf6a97f73913a41eb2",
+  "source_revision": "c6c3f18ea913ebb030301c0844f082af7be38d70",
   "publication_profile": "Exact aq-playbooks source for host catalogs through 2.4.0, including delivery in ordinary builds.",
-  "archive_format": "git archive --format=tar 8901af14df0be3ee0d6e81bf6a97f73913a41eb2 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
-  "archive_sha256": "60d2b494b0bea71767f619ca4247ec2b164b4d23b5988bce424b68a08467a078",
-  "vendor_root": "vendor/aq-playbooks-8901af1",
+  "archive_format": "git archive --format=tar c6c3f18ea913ebb030301c0844f082af7be38d70 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
+  "archive_sha256": "07e8720abd20c38ca85c4df00ca13721bb9650c7ba61e353e09652f4a6832297",
+  "vendor_root": "vendor/aq-playbooks-c6c3f18",
   "files": [
     {
       "path": "Cargo.lock",
@@ -856,8 +856,8 @@
     {
       "path": "crates/aq-playbooks-postgres/examples/engine_growth.rs",
       "mode": "100644",
-      "bytes": 47946,
-      "sha256": "e337abcbd7063f3b2cf95c40baec07e5ffe9283c70cff8020bc9d0c5235bd136"
+      "bytes": 48803,
+      "sha256": "c8d67b4e2c8d539359df0439bc2b68d59a31d56e3ef06ec85b58a14a9c00ee57"
     },
     {
       "path": "crates/aq-playbooks-postgres/examples/engine_growth_drain.rs",
@@ -1000,8 +1000,8 @@
     {
       "path": "crates/aq-playbooks-postgres/src/lib.rs",
       "mode": "100644",
-      "bytes": 44279,
-      "sha256": "f34366fb800a5a5b30476dc84044b43bb75c4a90bb6b49ffd9e0500ca77374fa"
+      "bytes": 45639,
+      "sha256": "5eba12d0d0cff21476ecb651452a65658bb568ae156e0be8ac5fa7cf1e8bdc86"
     },
     {
       "path": "crates/aq-playbooks-postgres/src/profiling.rs",
@@ -1054,8 +1054,8 @@
     {
       "path": "crates/aq-playbooks-postgres/tests/protected_indexes.rs",
       "mode": "100644",
-      "bytes": 46695,
-      "sha256": "2f343b9674b96d02775ad706d85ff75e18d4af90448d8496ee56881aeabb259b"
+      "bytes": 49146,
+      "sha256": "5eef8f536fbc2c191dc0f8671744773eb7836cca696ec1c4752da7ee52fc11bf"
     },
     {
       "path": "crates/aq-playbooks-postgres/tests/support/mod.rs",
@@ -1120,8 +1120,8 @@
     {
       "path": "crates/aq-playbooks-runner/src/lib.rs",
       "mode": "100644",
-      "bytes": 151482,
-      "sha256": "69b4f11b0c93a4ab39c8fcc5a4dbd4175fc8b62bd6752da77e061a92a0a142e3"
+      "bytes": 154517,
+      "sha256": "94e72f274d8d805f4d63513326097d53e443d49c446cab898343418d395e2d05"
     },
     {
       "path": "crates/aq-playbooks-runner/src/metrics.rs",
@@ -1186,8 +1186,8 @@
     {
       "path": "crates/aq-playbooks-runner/tests/live_state.rs",
       "mode": "100644",
-      "bytes": 293267,
-      "sha256": "b0c3b31bdb1dcb47fb33bc8b1efa93f600c7370a9f92e8b14da357797b2c989d"
+      "bytes": 293830,
+      "sha256": "1deb567aa96eb732338f62279b4a6f533b221d1af8a98cca7cbd383ada722f53"
     },
     {
       "path": "crates/aq-playbooks-runner/tests/review_regressions.rs",

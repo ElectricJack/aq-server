@@ -93,6 +93,10 @@ pub struct PostgresStorage {
     /// probes once again. A commit that writes legacy rows (legacy GC)
     /// takes its namespace out.
     tombstones_drained: Mutex<std::collections::BTreeSet<String>>,
+    /// Per namespace, the artifacts this handle last read, each with the
+    /// exact authenticated canonical bytes it verified. Identical bytes are
+    /// not parsed and verified again on every read.
+    verified_artifacts: Mutex<BTreeMap<String, VerifiedArtifacts>>,
     #[cfg(test)]
     lose_catalog_commit_reply: std::sync::atomic::AtomicBool,
     #[cfg(test)]
@@ -105,6 +109,8 @@ struct SnapshotEnvelope {
     ciphertext: Option<Vec<u8>>,
 }
 
+/// Digest to (the exact canonical bytes verified, the artifact).
+type VerifiedArtifacts = BTreeMap<String, (Zeroizing<Vec<u8>>, Artifact)>;
 fn backend(error: impl std::fmt::Display) -> StorageError {
     StorageError::Backend(error.to_string())
 }
@@ -251,6 +257,7 @@ impl PostgresStorage {
             records: false,
             stats: Mutex::new(TransitionStats::default()),
             tombstones_drained: Mutex::new(Default::default()),
+            verified_artifacts: Mutex::new(Default::default()),
             #[cfg(test)]
             lose_catalog_commit_reply: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -263,8 +270,7 @@ impl PostgresStorage {
         revision: u64,
         state: &State,
     ) -> Result<SnapshotEnvelope, StorageError> {
-        let mut value = serde_json::to_value(state).map_err(backend)?;
-        value["artifacts"] = serde_json::json!({});
+        let value = state.to_value_without_artifacts().map_err(backend)?;
         if let Some(keyring) = &self.keyring {
             let plaintext = Zeroizing::new(serde_json::to_vec(&value).map_err(backend)?);
             let sealed = keyring.seal(namespace, revision, &plaintext)?;
@@ -315,11 +321,33 @@ impl PostgresStorage {
         protected: bool,
     ) -> Result<BTreeMap<String, Artifact>, StorageError> {
         let mut artifacts = BTreeMap::new();
+        let mut cache = self
+            .verified_artifacts
+            .lock()
+            .map_err(|_| backend("artifact cache mutex poisoned"))?;
+        // Only the artifacts of this read stay cached: removed ones leave.
+        let mut known = cache.remove(namespace).unwrap_or_default();
+        let mut current = VerifiedArtifacts::new();
         for artifact_row in tx.query("SELECT n.digest,a.canonical_bytes,e.key_id,e.nonce,e.ciphertext FROM aq_playbooks.namespace_artifacts n LEFT JOIN aq_playbooks.artifacts a ON a.digest=n.digest LEFT JOIN aq_playbooks.encrypted_artifacts e ON e.namespace=n.namespace AND e.digest=n.digest WHERE n.namespace=$1 ORDER BY n.digest",&[&namespace]).map_err(backend)?{
             let digest:String=artifact_row.get(0);
             let bytes=if protected{let key_id:Option<String>=artifact_row.get(2);let key_id=key_id.ok_or_else(||backend("missing protected artifact envelope"))?;let nonce:Vec<u8>=artifact_row.get(3);let ciphertext:Vec<u8>=artifact_row.get(4);self.keyring.as_ref().ok_or_else(||backend("protected namespace requires configured keys"))?.open_artifact(namespace,&digest,&key_id,&nonce,&ciphertext)?}else{Zeroizing::new(artifact_row.get::<_,Option<Vec<u8>>>(1).ok_or_else(||backend("missing plaintext artifact payload"))?)};
-            let started=tx.clock();let artifact=Artifact::from_canonical_bytes(&bytes).map_err(backend)?;tx.verified(started);if artifact.digest!=digest{return Err(backend("artifact address integrity mismatch"));}artifacts.insert(digest,artifact);
+            let artifact = match known.remove(&digest) {
+                // The same bytes this handle already parsed and verified.
+                Some((verified, artifact)) if *verified == *bytes => artifact,
+                _ => {
+                    let started = tx.clock();
+                    let artifact = Artifact::from_canonical_bytes(&bytes).map_err(backend)?;
+                    tx.verified(started);
+                    artifact
+                }
+            };
+            if artifact.digest != digest {
+                return Err(backend("artifact address integrity mismatch"));
+            }
+            artifacts.insert(digest.clone(), artifact.clone());
+            current.insert(digest, (bytes, artifact));
         }
+        cache.insert(namespace.to_owned(), current);
         Ok(artifacts)
     }
     /// Disabled by default. Value-free fixed-stage aggregate diagnostics only.
@@ -795,9 +823,10 @@ impl PostgresStorage {
         history::insert(&mut tx, namespace, &items, &state.retention.policy)?;
         for (digest, artifact) in &state.artifacts {
             tx.phase("artifact_compare");
-            // Previous bytes were freshly read, authenticated and fully verified
-            // under this namespace's row/revision/owner locks. Equality checks the
-            // entire typed artifact, never just its supplied address. No cache.
+            // Previous bytes were freshly read and authenticated under this
+            // namespace's row/revision/owner locks, and fully verified (now, or
+            // earlier for the identical bytes). Equality checks the entire
+            // typed artifact, never just its supplied address.
             if !refresh_artifacts && previous.artifacts.get(digest) == Some(artifact) {
                 tx.skipped();
                 continue;

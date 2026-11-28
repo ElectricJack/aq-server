@@ -647,6 +647,87 @@ pub struct State {
     pub budgets: LazyMap<String, Budget>,
     pub sequence: u64,
 }
+impl State {
+    /// The serialized State with an empty `artifacts` map, built without
+    /// visiting the artifacts: storage that keeps them apart by digest
+    /// writes this on every commit, whatever their number or size.
+    pub fn to_value_without_artifacts(&self) -> serde_json::Result<serde_json::Value> {
+        /// `State`'s serialized fields, borrowed, with no artifacts.
+        #[derive(Serialize)]
+        struct Stored<'a> {
+            keyed_admissions: &'a LazyMap<String, KeyedAdmissionReceipt>,
+            catalog_history: &'a BTreeMap<u64, BTreeMap<String, Activation>>,
+            catalog_history_at_ms: &'a BTreeMap<u64, i64>,
+            retention: &'a RetentionState,
+            execution_denied: &'a BTreeSet<String>,
+            authority_revocations: &'a BTreeMap<String, BTreeSet<String>>,
+            recovery_requests: &'a BTreeMap<String, RecoveryRequest>,
+            indexes: &'a RuntimeIndexes,
+            artifacts: BTreeMap<String, Artifact>,
+            bindings: &'a BTreeMap<String, Activation>,
+            #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+            binding_schedules: &'a BTreeMap<String, BindingSchedules>,
+            #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+            deactivated_bindings: &'a BTreeMap<String, DeactivatedBinding>,
+            catalog_revision: u64,
+            runs: &'a LazyMap<String, Run>,
+            receipts: &'a LazySeq<Receipt>,
+            intents: &'a LazyMap<String, Intent>,
+            waits: &'a LazyMap<String, WaitRecord>,
+            events: &'a LazyMap<String, AcceptedEvent>,
+            budgets: &'a LazyMap<String, Budget>,
+            sequence: u64,
+        }
+        // Exhaustive: a new State field fails to compile until it is stored.
+        let State {
+            keyed_admissions,
+            catalog_history,
+            catalog_history_at_ms,
+            retention,
+            execution_denied,
+            authority_revocations,
+            recovery_requests,
+            protection_available: _,
+            settled: _,
+            replay_touched: _,
+            indexes,
+            artifacts: _,
+            bindings,
+            binding_schedules,
+            deactivated_bindings,
+            catalog_revision,
+            runs,
+            receipts,
+            intents,
+            waits,
+            events,
+            budgets,
+            sequence,
+        } = self;
+        serde_json::to_value(Stored {
+            keyed_admissions,
+            catalog_history,
+            catalog_history_at_ms,
+            retention,
+            execution_denied,
+            authority_revocations,
+            recovery_requests,
+            indexes,
+            artifacts: BTreeMap::new(),
+            bindings,
+            binding_schedules,
+            deactivated_bindings,
+            catalog_revision: *catalog_revision,
+            runs,
+            receipts,
+            intents,
+            waits,
+            events,
+            budgets,
+            sequence: *sequence,
+        })
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryRequest {
     pub id: String,

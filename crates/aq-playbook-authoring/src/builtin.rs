@@ -240,7 +240,7 @@ mod tests {
     /// abilities (`project` is the one scope the contracts allow).
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
-        const DIR: &str = "../../vendor/aq-playbooks-8901af1/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
+        const DIR: &str = "../../vendor/aq-playbooks-c6c3f18/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
         let read = |name: &str| {
             std::fs::read_to_string(format!("{}/{DIR}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
         };
@@ -289,7 +289,7 @@ mod tests {
             serde_json::from_str(&fenced("\n```json\n", "\n```\n")).unwrap();
         let rule = fenced("\n````markdown\n", "\n````\n");
         assert!(rule.contains("failed_checks_head") && !rule.contains("pull_request."));
-        const DIR: &str = "../../vendor/aq-playbooks-8901af1/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
+        const DIR: &str = "../../vendor/aq-playbooks-c6c3f18/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
         let read = |name: &str| std::fs::read_to_string(format!("{root}/{DIR}/{name}")).unwrap();
         let mut draft: Value = serde_json::from_str(&read("draft.json")).unwrap();
         assert_eq!(draft["steps"]["read"]["edges"]["observed"], "publish");

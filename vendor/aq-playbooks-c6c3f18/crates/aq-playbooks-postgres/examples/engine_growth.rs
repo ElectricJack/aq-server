@@ -44,6 +44,8 @@
 //!   the record size, the legacy cohorts and legacy window entries left in
 //!   the State it wrote, history rows, legacy tombstone rows and the drain
 //!   state. Gathered outside the timed window.
+//! - `ENGINE_GROWTH_EXTRA_ARTIFACTS=<dir>`: also install every `*.json`
+//!   artifact in `dir`, as a namespace that keeps many sealed playbooks.
 use aq_playbooks_model::*;
 use aq_playbooks_postgres::{PostgresStorage, ProtectionKeyring};
 use aq_playbooks_runner::{
@@ -1034,6 +1036,23 @@ fn history_verdict(e: &Engine<Measured>, ids: &[String], history_keep: u64) -> V
            "captured_runs":captured.len(),"live_runs":live,"history_keep":history_keep})
 }
 
+/// `ENGINE_GROWTH_EXTRA_ARTIFACTS`: install the artifacts (never activated).
+fn install_extra_artifacts(e: &Engine<Measured>) {
+    let Ok(dir) = std::env::var("ENGINE_GROWTH_EXTRA_ARTIFACTS") else {
+        return;
+    };
+    let mut paths: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    paths.sort();
+    for path in &paths {
+        let artifact: Artifact = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        e.install(artifact).unwrap();
+    }
+    eprintln!("installed {} extra artifacts", paths.len());
+}
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args[1].as_str();
@@ -1081,6 +1100,7 @@ fn main() {
     let a = playbook();
     let digest = a.digest.clone();
     e.install(a).unwrap();
+    install_extra_artifacts(&e);
     e.activate_at("growth", &digest, authority(), 0).unwrap();
     if gc {
         e.set_retention_policy(RetentionPolicy {

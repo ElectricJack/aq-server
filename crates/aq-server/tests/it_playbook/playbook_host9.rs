@@ -1250,7 +1250,7 @@ mod adapters {
         use aq_playbooks_compiler::draft;
         use aq_server::playbooks::driver::Driver;
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
+            .join("../../vendor/aq-playbooks-c6c3f18/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
         let workspace = draft::Workspace::read(&example).unwrap();
         let artifact = draft::seal(&workspace).unwrap();
         let h = host(true, Some(Arc::new(LowRisk))).await;
