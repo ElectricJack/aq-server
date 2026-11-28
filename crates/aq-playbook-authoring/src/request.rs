@@ -21,6 +21,9 @@ Your workspace holds everything you need:
 - previous.artifact.json and previous/ are there when a playbook from an earlier version of the document is in effect.
 
 Write draft.json and the cases under cases/, and check them with the aq-playbooks tool, run from this directory. \
+Every case under previous/cases/ stays a case of the new playbook: the server runs the ones you do not write again \
+against your draft, and when one no longer passes it asks the owner instead of saving. When the document's change \
+deliberately alters a case, write it again under the same name with its new expectation. \
 There is nobody to ask while you work. When the document can be read in two ways that would act differently, or names \
 something the host does not offer, do not guess: end with `aq-playbooks ask`. When the document cannot be turned into a \
 playbook at all, end with `aq-playbooks unable`. Otherwise end with `aq-playbooks save`. End exactly once, and only \

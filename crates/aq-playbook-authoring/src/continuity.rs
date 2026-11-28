@@ -222,6 +222,7 @@ impl Retained {
             facts,
             facts_version: self.facts_digest.clone(),
             previous: None,
+            previous_cases: vec![],
         })
     }
 }
@@ -274,6 +275,7 @@ mod tests {
             facts: serde_json::from_str(example("facts.json")).unwrap(),
             facts_version: "settings-7".into(),
             previous: None,
+            previous_cases: vec![],
         };
         let draft_json = serde_json::from_str(example("draft.json")).unwrap();
         let cases = [

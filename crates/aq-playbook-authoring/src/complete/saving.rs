@@ -2,7 +2,7 @@ use super::{FACTS_CHANGED, Now, author, deploy, fail, prune};
 use crate::{ActiveRun, Config, Ended, Error, Finished, Result, Run, Server, active, finish, save};
 use aq_playbooks_model::Artifact;
 use aq_playbooks_simulation::cases::Case;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -41,13 +41,29 @@ pub(super) async fn saved<S: Server>(s: &S, run: &Run, now: Now, claim: Claim) -
         return Ok(());
     }
     let in_effect = active(pool, source).await?;
-    let case_files = serde_json::to_value(&claim.cases).map_err(|_| Error::Corrupt)?;
-    let inputs = inputs_for(s, run, now, in_effect.as_ref())?;
+    let inputs = inputs_for(
+        s,
+        run,
+        now,
+        in_effect.as_ref(),
+        previous_cases(pool, in_effect.as_ref()).await?,
+    )?;
     let markdown = inputs.markdown.clone();
     let claimed = claim.artifact;
     let checked = check(config, claim.draft, claim.cases, inputs).await;
     let checked = match checked {
         Ok(checked) => checked,
+        Err(refused) if !refused.regressed.is_empty() => {
+            tracing::warn!(source, detail = %refused.detail, "authored save regressed a previous case");
+            let question = json!({"question": refused.owner, "sentences": []});
+            let asked = Finished {
+                status: Ended::Question,
+                question: Some(question),
+                ..Finished::default()
+            };
+            finish(pool, run.id, &asked).await?;
+            return prune(s, source).await;
+        }
         Err(refused) => {
             tracing::warn!(source, detail = %refused.detail, "authored save refused");
             fail(pool, run.id, Ended::Refused, &refused.owner).await?;
@@ -67,12 +83,7 @@ pub(super) async fn saved<S: Server>(s: &S, run: &Run, now: Now, claim: Claim) -
         fail(pool, run.id, Ended::Refused, owner).await?;
         return prune(s, source).await;
     }
-    let finished = SavedRun {
-        checked,
-        markdown,
-        case_files,
-    }
-    .finished(in_effect.as_ref())?;
+    let finished = SavedRun { checked, markdown }.finished(in_effect.as_ref())?;
     // Review focus 2: a superseded run is not recorded as saved, so its
     // artifact is never activated.
     if !finish(pool, run.id, &finished).await? {
@@ -102,6 +113,7 @@ fn inputs_for<S: Server>(
     run: &Run,
     now: Now,
     in_effect: Option<&ActiveRun>,
+    previous_cases: Vec<Case>,
 ) -> Result<save::Inputs> {
     let previous: Option<Artifact> =
         in_effect.and_then(|a| serde_json::from_value(a.artifact.clone()).ok());
@@ -114,7 +126,28 @@ fn inputs_for<S: Server>(
         facts: now.facts,
         facts_version: run.facts_digest.clone(),
         previous,
+        previous_cases,
     })
+}
+
+/// The case files the active run was sealed with. Files this engine no
+/// longer reads are none: they cannot be run again.
+async fn previous_cases(pool: &PgPool, in_effect: Option<&ActiveRun>) -> Result<Vec<Case>> {
+    let Some(active) = in_effect else {
+        return Ok(vec![]);
+    };
+    let files: Option<Option<sqlx::types::Json<Value>>> =
+        sqlx::query_scalar("SELECT case_files FROM playbook_authoring_runs WHERE id=$1")
+            .bind(active.id)
+            .fetch_optional(pool)
+            .await?;
+    let Some(sqlx::types::Json(files)) = files.flatten() else {
+        return Ok(vec![]);
+    };
+    Ok(serde_json::from_value(files).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "the active run's case files are unreadable");
+        vec![]
+    }))
 }
 
 async fn check(
@@ -128,26 +161,22 @@ async fn check(
         tokio::task::spawn_blocking(move || save::check_saved(&draft, &cases, &inputs, &config));
     match tokio::time::timeout(deadline, check).await {
         Ok(Ok(checked)) => checked,
-        Ok(Err(_)) | Err(_) => Err(save::Refusal {
-            owner: "The server's check of the saved playbook did not finish in time.".into(),
-            detail: "check deadline or panic".into(),
-        }),
+        Ok(Err(_)) | Err(_) => Err(save::Refusal::new(
+            "The server's check of the saved playbook did not finish in time.",
+            "check deadline or panic",
+        )),
     }
 }
 
 struct SavedRun {
     checked: save::Saved,
     markdown: String,
-    case_files: Value,
 }
 
 impl SavedRun {
     fn finished(self, in_effect: Option<&ActiveRun>) -> Result<Finished> {
-        let Self {
-            checked,
-            markdown,
-            case_files,
-        } = self;
+        let Self { checked, markdown } = self;
+        let case_files = serde_json::to_value(&checked.case_files).map_err(|_| Error::Corrupt)?;
         let digest = checked.artifact.digest.clone();
         // Saving the same playbook again keeps what a rollback would bring back.
         let previous_digest = match in_effect {

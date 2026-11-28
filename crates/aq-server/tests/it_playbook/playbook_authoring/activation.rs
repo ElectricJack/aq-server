@@ -99,7 +99,12 @@ async fn a_saved_playbook_is_installed_and_activated_and_the_previous_kept_for_r
     );
     let view = source_view(&host).await;
     assert_eq!(view["active"]["can_rollback"], true);
-    assert_eq!(view["active"]["comparison"], json!({"change": "wording"}));
+    // The second run wrote every case of the first again, unchanged: all kept.
+    let kept: Vec<Value> = example_cases().iter().map(|c| c["name"].clone()).collect();
+    assert_eq!(
+        view["active"]["comparison"],
+        json!({"change": "wording", "cases": {"kept": kept, "changed": [], "dropped": []}})
+    );
     assert!(view["active"]["previous"]["since_ms"].as_i64().unwrap() > 0);
     // Recording the same result twice changes nothing.
     authoring::completed(&host, task, &answered(saved_outcome()))

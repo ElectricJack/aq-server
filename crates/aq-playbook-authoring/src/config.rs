@@ -13,6 +13,9 @@ pub struct Config {
     pub outcome_bytes: u64,
     /// Engine transitions all cases of one save may take together.
     pub case_transitions: usize,
+    /// Cases of the previous artifact one save may leave out and still carry
+    /// as regression cases; above it the save is refused.
+    pub regression_cases: usize,
     /// Wall time the server's own check of a save may take.
     pub check_deadline_ms: u64,
     /// Finished runs kept per source; older ones are deleted. The active run
@@ -32,6 +35,7 @@ impl Default for Config {
             max_turns: 200,
             outcome_bytes: 4_194_304,
             case_transitions: aq_playbooks_simulation::cases::CASES_TRANSITION_BUDGET,
+            regression_cases: 200,
             check_deadline_ms: 60_000,
             keep_finished_runs: 50,
             facts_restarts: 3,
@@ -47,6 +51,7 @@ impl Config {
             && aq_internal_work::AGENT_MAX_TURNS.contains(&self.max_turns)
             && aq_internal_work::AGENT_MAX_OUTPUT_BYTES.contains(&self.outcome_bytes)
             && self.case_transitions > 0
+            && self.regression_cases > 0
             && self.check_deadline_ms > 0
             && self.keep_finished_runs > 0
             && self.poll_ms > 0
