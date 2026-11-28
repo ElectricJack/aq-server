@@ -110,8 +110,9 @@ pub struct CheckLog {
 pub struct Completion {
     pub outcome: &'static str,
     pub output: Value,
-    /// The pull request as this command left it, when it touched one.
-    pub pull_request: Option<PullRequestObserved>,
+    /// The pull request as this command left it, when it touched one. Boxed
+    /// so that a completion stays small inside [`Step`].
+    pub pull_request: Option<Box<PullRequestObserved>>,
     /// Diagnostic retained with the operation, outside the versioned catalog response.
     pub diagnostic: Option<&'static str>,
 }
@@ -138,7 +139,7 @@ impl Completion {
         Self::new("closed", json!({}))
     }
     fn with(mut self, pull_request: PullRequestObserved) -> Self {
-        self.pull_request = Some(pull_request);
+        self.pull_request = Some(Box::new(pull_request));
         self
     }
 }
