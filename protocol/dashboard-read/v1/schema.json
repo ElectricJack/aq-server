@@ -1097,7 +1097,8 @@
         "no_free_slot",
         "history_rate_limited",
         "history_cap_reached",
-        "tasks_held"
+        "tasks_held",
+        "launch_overdue"
       ],
       "type": "string"
     },

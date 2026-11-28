@@ -130,7 +130,7 @@ pub use hierarchy::{
 mod holds;
 pub use holds::{
     Hold, attempt_hold, attempt_recovery_wait, completed_without_changes, graph_completion_wait,
-    holding_executions, launch_retry_wait, owner_retry_wait, recorded_hold,
+    holding_executions, launch_overdue_wait, launch_retry_wait, owner_retry_wait, recorded_hold,
     show_no_change_settlement, task_hold,
 };
 pub use holds::{delivery_hold, result_waiting};

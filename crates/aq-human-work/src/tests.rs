@@ -683,6 +683,40 @@ fn closed_launch_shows_the_owner_and_the_event_that_can_release_it() {
 }
 
 #[test]
+fn an_overdue_launch_is_held_and_names_its_node() {
+    let attempt = Uuid::new_v4();
+    let hold = Hold::from_authority(attempt, &authority("granted", "unknown", Value::Null));
+    let overdue = aq_machine_control::lapse::Overdue {
+        attempt_id: attempt,
+        task_id: Uuid::new_v4(),
+        node_id: Uuid::new_v4(),
+        node_name: "laptop".into(),
+        lapsed_at_ms: 1,
+    };
+    assert_eq!(overdue.headline(), "Launch overdue on laptop");
+    let reason = crate::holds::launch_overdue_reason(&overdue);
+    let result = readiness(
+        Some("active"),
+        Some(&hold),
+        Some(reason),
+        TaskDependencies::new(vec![], true),
+    );
+    assert_eq!(result["state"], "held");
+    let shown = &result["reasons"][0];
+    assert_eq!(shown["code"], "launch_overdue");
+    assert_eq!(shown["attempt_id"], json!(attempt));
+    assert_eq!(shown["node_id"], json!(overdue.node_id));
+    assert_eq!(shown["wake_condition"], "launch_overdue_settlement");
+    assert!(
+        shown["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Launch overdue on laptop:")
+    );
+    assert!(shown["message"].as_str().unwrap().len() <= 512);
+}
+
+#[test]
 fn exhausted_delivery_names_the_retry_owner_and_original_result() {
     let attempt = Uuid::new_v4();
     let result = Uuid::new_v4();

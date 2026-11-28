@@ -233,3 +233,34 @@ fn task_holds_are_counted_per_project_in_the_waiting_reasons() {
     );
     assert!(held[0].remedy.is_some());
 }
+
+#[test]
+fn an_overdue_launch_is_a_waiting_reason_naming_its_node() {
+    let mut i = input(vec![node(
+        (1, "a"),
+        WorkerHealth::Online,
+        (Some(1), 0),
+        vec![],
+    )]);
+    i.launch_overdue = vec![aq_machine_control::lapse::Overdue {
+        attempt_id: uid(9),
+        task_id: uid(10),
+        node_id: uid(1),
+        node_name: "laptop".into(),
+        lapsed_at_ms: 1,
+    }];
+    let s = assemble(i).unwrap();
+    let overdue: Vec<&HoldReason> = (s.waiting.reasons.iter())
+        .filter(|r| r.code == HoldCode::LaunchOverdue)
+        .collect();
+    assert_eq!(overdue.len(), 1);
+    assert_eq!(
+        overdue[0].message,
+        format!(
+            "Launch overdue on laptop: task {} has not started its agent (attempt {})",
+            uid(10),
+            uid(9)
+        )
+    );
+    assert!(overdue[0].remedy.is_some());
+}

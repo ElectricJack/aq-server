@@ -131,12 +131,15 @@ pub struct SwarmInput {
     pub history: Vec<aq_history_caps::Hold>,
     /// R6: current task holds per (project, reason code), `aq_machine_control::holds::counts`.
     pub task_holds: Vec<(Uuid, String, i64)>,
+    /// Granted attempts on the page's nodes whose agent did not start within the launch
+    /// deadline (`aq_machine_control::lapse::overdue_on`).
+    pub launch_overdue: Vec<aq_machine_control::lapse::Overdue>,
 }
 
 mod holds;
 mod machines;
 mod nodes;
-pub use holds::{history_reason, hold, task_hold_reasons};
+pub use holds::{history_reason, hold, launch_overdue_reasons, task_hold_reasons};
 
 struct Built<'a> {
     key: String,
@@ -192,6 +195,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
             .filter(|h| !matches!(h.scope, aq_history_caps::Scope::Node(_)))
             .map(history_reason),
     );
+    reasons.extend(launch_overdue_reasons(&input.launch_overdue));
     reasons.extend(task_hold_reasons(&input.task_holds));
     Ok(Swarm {
         server: input.server,

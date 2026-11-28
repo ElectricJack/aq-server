@@ -1998,12 +1998,13 @@
       },
       "HumanAttemptRecoveryWait": {
         "type": "object",
-        "description": "The recovery a stopped or closed holding attempt waits for, or the backoff before AQ reoffers a task after repeated verified launch failures.",
+        "description": "The recovery a stopped or closed holding attempt waits for, the backoff before AQ reoffers a task after repeated verified launch failures, or a granted attempt whose agent did not start within its launch deadline (launch_overdue: AQ ends it as not started and reoffers the task; node_id is the node it was granted to).",
         "properties": {
-          "code": { "enum": ["closure_does_not_prove_nonstart", "closed_launch_settlement_pending", "stopped_result_recovery_pending", "launch_retry_backoff"] },
+          "code": { "enum": ["closure_does_not_prove_nonstart", "closed_launch_settlement_pending", "stopped_result_recovery_pending", "launch_retry_backoff", "launch_overdue"] },
           "attempt_id": { "type": "string", "format": "uuid" },
+          "node_id": { "type": "string", "format": "uuid" },
           "blocker_owner": { "enum": ["aq_operator", "aq_scheduler", "aq_worker"] },
-          "wake_condition": { "enum": ["original_launch_evidence_reconciled", "closed_launch_settlement", "stopped_result_reconciled", "launch_retry_backoff_elapsed"] },
+          "wake_condition": { "enum": ["original_launch_evidence_reconciled", "closed_launch_settlement", "stopped_result_reconciled", "launch_retry_backoff_elapsed", "launch_overdue_settlement"] },
           "next_check_at_ms": { "type": "integer", "minimum": 1 },
           "message": { "type": "string", "maxLength": 512 }
         },

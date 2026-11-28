@@ -68,6 +68,23 @@ pub struct SelectionDefaults {
     /// Omitting the default preserves existing snapshot and request digests.
     #[serde(default, skip_serializing_if = "LaunchRetryBackoff::is_default")]
     pub launch_retry_backoff: LaunchRetryBackoff,
+    /// Time after its grant within which a granted attempt's agent must start.
+    /// Past it, the server ends the attempt as not started (fenced, so it can
+    /// never start later) and offers its task again. Current Settings apply;
+    /// omitting the default preserves existing snapshot and request digests.
+    #[serde(
+        default = "initial_launch_deadline_ms",
+        skip_serializing_if = "is_initial_launch_deadline"
+    )]
+    pub launch_deadline_ms: u64,
+}
+/// Default launch deadline: five minutes from the grant.
+pub const LAUNCH_DEADLINE_MS: u64 = 300_000;
+fn initial_launch_deadline_ms() -> u64 {
+    LAUNCH_DEADLINE_MS
+}
+fn is_initial_launch_deadline(value: &u64) -> bool {
+    *value == LAUNCH_DEADLINE_MS
 }
 fn initial_never_granted() -> u32 {
     SelectionDefaults::default().max_never_granted_offers
@@ -106,6 +123,7 @@ impl Default for SelectionDefaults {
             max_wake_lineage_elapsed_ms: 24 * 3_600_000,
             max_never_granted_offers: 8,
             launch_retry_backoff: LaunchRetryBackoff::default(),
+            launch_deadline_ms: LAUNCH_DEADLINE_MS,
         }
     }
 }
@@ -236,6 +254,7 @@ impl SelectionDefaults {
             max_wake_lineage_elapsed_ms: d.max_wake_lineage_elapsed_ms,
             max_never_granted_offers: d.max_never_granted_offers,
             launch_retry_backoff: d.launch_retry_backoff,
+            launch_deadline_ms: d.launch_deadline_ms,
         }
     }
     /// The full policy: these values, and from the execution profile the
@@ -271,6 +290,9 @@ impl SelectionDefaults {
             return Err(
                 "launch retry backoff must have 0 < initial_delay_ms <= max_delay_ms".into(),
             );
+        }
+        if self.launch_deadline_ms == 0 || self.launch_deadline_ms > 24 * 3_600_000 {
+            return Err("launch deadline must be above zero and at most 24 hours".into());
         }
         let wake_allowed = self.max_wake_attempts > 0 && self.max_wake_lineage_elapsed_ms > 0;
         if !wake_allowed || self.max_never_granted_offers == 0 {

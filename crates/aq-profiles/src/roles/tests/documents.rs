@@ -266,6 +266,28 @@ fn launch_retry_backoff_defaults_in_older_snapshots_and_requires_positive_ordere
     }
 }
 #[test]
+fn launch_deadline_defaults_in_older_snapshots_and_must_be_positive() {
+    let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
+    let content: serde_json::Value = serde_json::from_slice(snapshot.canonical_bytes()).unwrap();
+    assert!(
+        content["selection_defaults"]
+            .get("launch_deadline_ms")
+            .is_none(),
+        "the default is omitted, so stored digests stay the same"
+    );
+    let stored = Snapshot::from_stored_bytes(snapshot.canonical_bytes()).unwrap();
+    let mut selection = stored.selection_defaults().clone();
+    assert_eq!(selection.launch_deadline_ms, 300_000);
+    selection.launch_deadline_ms = 60_000;
+    assert!(selection.check().is_ok());
+    let saved = serde_json::to_value(&selection).unwrap();
+    assert_eq!(saved["launch_deadline_ms"], 60_000);
+    for invalid in [0, 24 * 3_600_000 + 1] {
+        selection.launch_deadline_ms = invalid;
+        assert!(selection.check().unwrap_err().contains("launch deadline"));
+    }
+}
+#[test]
 fn a_profile_is_its_candidates_and_selection_is_optional() {
     let source = &INTELLIGENCE[..INTELLIGENCE.find("\n## Selection").unwrap()];
     let profile = parse_intelligence(source).unwrap();

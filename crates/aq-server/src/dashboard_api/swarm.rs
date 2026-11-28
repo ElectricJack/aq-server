@@ -42,6 +42,15 @@ pub(super) async fn swarm(request: &DashboardRequest, scope: Scope) -> Result<En
     let task_holds = aq_machine_control::holds::counts(&mut tx, &projects)
         .await
         .map_err(|_| Error::Unavailable)?;
+    // Granted attempts whose agent did not start within the launch deadline (a Setting).
+    let launch_deadline =
+        crate::profiled_execution::closure::settlement::launch_deadline_ms(&mut tx).await;
+    let launch_deadline = launch_deadline.map_err(|_| Error::Unavailable)?;
+    let now_ms = i64::try_from(now).unwrap_or(i64::MAX);
+    let launch_overdue =
+        aq_machine_control::lapse::overdue_on(&mut tx, &ids, now_ms, launch_deadline)
+            .await
+            .map_err(|_| Error::Unavailable)?;
     let query = aq_swarm::agents::Query {
         nodes: &ids,
         project: scope.project(),
@@ -72,6 +81,7 @@ pub(super) async fn swarm(request: &DashboardRequest, scope: Scope) -> Result<En
         agents: held.agents,
         history,
         task_holds,
+        launch_overdue,
     })?;
     let mut data = aq_swarm::management::apply(&state.store.pool, data).await?;
     aq_swarm::routing::apply(&mut *state.store.pool.acquire().await?, &mut data).await?;

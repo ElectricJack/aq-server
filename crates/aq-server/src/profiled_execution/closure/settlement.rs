@@ -1,4 +1,6 @@
-//! Settlement of a granted launch the worker closed before Started (B5b/AQ-08).
+//! Settlement of a granted launch the worker closed before Started (B5b/AQ-08), and of a
+//! granted launch whose agent never started before its grant expired or its launch deadline
+//! (Settings › Selection defaults `launch_deadline_ms`) passed.
 //!
 //! The launch-closure routes record `LaunchClosedAwaitingSettlement`: they
 //! revoke private permission and the agent binding but keep the task, source
@@ -80,14 +82,15 @@ pub async fn settle(
     .fetch_optional(&mut *tx)
     .await
     .map_err(database)?;
-    // Without a closure only a granted, never-started attempt is settled here, once its grant
-    // has expired (`aq_machine_control::lapse`).
+    // Without a closure only a granted, never-started attempt is settled here, once its launch
+    // has lapsed: its grant expired or its launch deadline passed (`aq_machine_control::lapse`).
+    let launch_deadline = launch_deadline_ms(&mut tx).await?;
     let binding = match &closure {
         Some(closure) => closure.get("binding"),
         None if attest.is_some() => {
             return Ok(ClosureSettlement::Held(closed_launch::NOT_HOST_STOPPED));
         }
-        None => match lapse::pending(&mut tx, attempt).await.map_err(mapped)? {
+        None => match (lapse::pending(&mut tx, attempt, launch_deadline).await).map_err(mapped)? {
             Some((binding, _)) => binding,
             None => return Ok(ClosureSettlement::Unchanged),
         },
@@ -137,11 +140,17 @@ pub async fn settle(
             }
         }
     } else {
-        // Sampled under the locks Started and renewal take: both refuse an expired grant, so
-        // from here on this attempt can never start. A closure recorded meanwhile owns it.
+        // Sampled under the locks Started and renewal take: Started refuses a lapsed launch (an
+        // expired grant or a passed launch deadline) and renewal an expired grant, and this
+        // owner finishes and revokes the attempt under the same locks, so from here on it can
+        // never start. A closure recorded meanwhile owns it.
         let now = (state.clock)().timestamp_millis().max(0) as u64;
         let expired = (hot.grant.as_ref()).is_some_and(|g| now >= g.expires_at_ms);
-        if !expired
+        let overdue = !expired
+            && lapse::launch_overdue(&mut tx, attempt, now as i64, launch_deadline)
+                .await
+                .map_err(mapped)?;
+        if !(expired || overdue)
             || !matches!(hot.status, Status::Granted | Status::Cancelling)
             || super::ensure_launch_open_locked(&mut tx, &binding)
                 .await
@@ -156,8 +165,13 @@ pub async fn settle(
         return Ok(ClosureSettlement::Held(code));
     }
     let source_receipt = source_receipt_locked(&mut tx, attempt).await?;
-    let (operation, stop_receipt) =
-        stop_receipt_locked(&mut tx, attempt, closure.as_ref(), &mut hot).await?;
+    let (operation, stop_receipt) = stop_receipt_locked(
+        &mut tx,
+        (attempt, launch_deadline),
+        closure.as_ref(),
+        &mut hot,
+    )
+    .await?;
     let effects_receipt = reference(
         format!("aq.closure-effects/{operation}"),
         &json!({"attempt_id": attempt, "graph_operations": 0, "mailbox_operations": 0, "closure": stop_receipt}),
@@ -200,7 +214,7 @@ async fn source_receipt_locked(
 
 async fn stop_receipt_locked(
     tx: &mut Transaction<'_, Postgres>,
-    attempt: Uuid,
+    (attempt, launch_deadline): (Uuid, u64),
     closure: Option<&PgRow>,
     hot: &mut HotState,
 ) -> Result<(Uuid, ArtifactRef), AppError> {
@@ -217,11 +231,11 @@ async fn stop_receipt_locked(
             Ok((operation, stop))
         }
         None => {
-            tracing::warn!(%attempt, reason = lapse::REASON, "granted attempt never started and its grant expired; closed by the server");
+            tracing::warn!(%attempt, reason = lapse::REASON, launch_deadline_ms = launch_deadline, "granted attempt never started before its grant expired or its launch deadline passed; closed by the server");
             crate::profiled_execution::journal::revoke(tx, attempt).await?;
             hot.revoked = true;
-            let record =
-                json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant});
+            let record = json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant,
+                "launch_deadline_ms": launch_deadline});
             let stop = reference(format!("{}{attempt}", lapse::RECEIPT), &record)?;
             Ok((attempt, stop))
         }
@@ -284,6 +298,16 @@ pub async fn awaiting(
     after: Option<Uuid>,
     limit: i64,
 ) -> Result<Vec<Uuid>, AppError> {
+    let mut conn = state.store.pool.acquire().await.map_err(database)?;
+    let deadline = launch_deadline_ms(&mut conn).await?;
+    drop(conn);
     let now = (state.clock)().timestamp_millis();
-    (lapse::awaiting(&state.store.pool, after, now, limit).await).map_err(mapped)
+    (lapse::awaiting(&state.store.pool, after, now, limit, deadline).await).map_err(mapped)
+}
+
+/// The current launch deadline (Settings › Selection defaults `launch_deadline_ms`): how long
+/// after its grant a granted attempt's agent may take to start.
+pub async fn launch_deadline_ms(conn: &mut sqlx::PgConnection) -> Result<u64, AppError> {
+    let defaults = aq_role_settings::selection_defaults(conn).await;
+    Ok(defaults.map_err(|_| AppError::Internal)?.launch_deadline_ms)
 }

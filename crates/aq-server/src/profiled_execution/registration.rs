@@ -129,8 +129,20 @@ pub async fn register_slots(
     slots: Option<u32>,
 ) -> Result<Register, AppError> {
     let (pool, now) = (&state.store.pool, (state.clock)().timestamp_millis());
-    let lapsed = aq_machine_control::lapse::on_node(pool, auth.id(), now).await;
-    for attempt in lapsed.unwrap_or_default() {
+    // An unread launch deadline only defers these closures to the sweep, as an unread page does.
+    let launch_deadline = match pool.acquire().await {
+        Ok(mut conn) => super::closure::settlement::launch_deadline_ms(&mut conn)
+            .await
+            .ok(),
+        Err(_) => None,
+    };
+    let lapsed = match launch_deadline {
+        Some(deadline) => aq_machine_control::lapse::on_node(pool, auth.id(), now, deadline)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    for attempt in lapsed {
         let _ = super::closure::settlement::settle_and_release(state, attempt, None).await;
     }
     let mut tx = pool.begin().await.map_err(|_| AppError::Internal)?;

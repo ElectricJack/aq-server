@@ -189,6 +189,11 @@ pub(super) async fn work(
         (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
         _ => None,
     };
+    let now_ms = (s.clock)().timestamp_millis();
+    let launch_overdue = match (&hold, open) {
+        (Some(h), true) => aq_human_work::launch_overdue_wait(&r.pool, h, now_ms).await,
+        _ => None,
+    };
     let workspace_wait = if open {
         let running = hold.as_ref().filter(|h| h.running()).map(|h| h.attempt_id);
         crate::task_workspace_resume::work_reason(&r.pool, p, id, running).await?
@@ -206,6 +211,7 @@ pub(super) async fn work(
         .chain(workspace_wait)
         .chain(merge_wait)
         .chain(recovery)
+        .chain(launch_overdue)
         .chain(role_hold)
         .chain(offer_hold)
         .chain(graph_wait)
