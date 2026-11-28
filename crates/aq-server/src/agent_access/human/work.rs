@@ -195,9 +195,16 @@ pub(super) async fn work(
     } else {
         None
     };
+    let merge_wait = match (&hold, open) {
+        (Some(h), true) if h.stopped => {
+            crate::task_workspace_delivery::merge_wait(&s, p, id, h.attempt_id).await
+        }
+        _ => None,
+    };
     let held = held
         .into_iter()
         .chain(workspace_wait)
+        .chain(merge_wait)
         .chain(recovery)
         .chain(role_hold)
         .chain(offer_hold)

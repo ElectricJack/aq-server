@@ -2,6 +2,7 @@
 //! Task state and approval remain owned by the Home task and its review flow.
 mod node;
 mod owner;
+mod readiness;
 
 use crate::{AppState, error::AppError, profiled_execution::results::RecordedResult};
 use serde::Serialize;
@@ -11,6 +12,7 @@ use uuid::Uuid;
 
 pub(crate) use node::routes as worker_routes;
 pub(crate) use owner::routes as admin_routes;
+pub(crate) use readiness::merge_wait;
 
 #[derive(Clone, Serialize)]
 struct Source {
@@ -244,6 +246,46 @@ async fn check_passed(db: &mut PgConnection, plan: &Plan) -> Result<bool, AppErr
     Ok(latest.as_deref() == Some("passed"))
 }
 
+/// Integrated checks verify a checkout set that combines changes from more
+/// than one repository. When every sibling is read-only or unchanged, the
+/// merged result holds only the Home change, so the Home project's own
+/// required checks on its pull request are the integrated check.
+fn siblings_unchanged(plan: &Plan) -> bool {
+    plan.sources
+        .iter()
+        .all(|(project, source)| *project == plan.home || !source.changed)
+}
+
+/// Why the integrated checks of a complete plan are satisfied, if they are.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Integrated {
+    /// No sibling changed: the Home required checks cover the merged result.
+    HomeChecks,
+    /// The human owner recorded a passing run at the exact checkout set.
+    OwnerAttestation,
+}
+
+impl Integrated {
+    fn basis(self) -> &'static str {
+        match self {
+            Self::HomeChecks => "home_required_checks",
+            Self::OwnerAttestation => "owner_attestation",
+        }
+    }
+}
+
+async fn integrated(db: &mut PgConnection, plan: &Plan) -> Result<Option<Integrated>, AppError> {
+    if !plan.complete() {
+        return Ok(None);
+    }
+    if siblings_unchanged(plan) {
+        return Ok(Some(Integrated::HomeChecks));
+    }
+    Ok(check_passed(db, plan)
+        .await?
+        .then_some(Integrated::OwnerAttestation))
+}
+
 async fn target_accepted(
     db: &mut PgConnection,
     plan: &Plan,
@@ -290,7 +332,7 @@ async fn accepts_plan(
     if plan.sources.values().all(|s| !s.changed) {
         return Ok(true);
     }
-    if !check_passed(db, plan).await? {
+    if integrated(db, plan).await?.is_none() {
         return Ok(false);
     }
     for source in plan.sources.values().filter(|s| s.changed) {
@@ -414,14 +456,24 @@ pub(crate) async fn merge_readiness(
     let Some(plan) = load(state, db, result).await? else {
         return Ok(MergeReadiness::Proceed);
     };
-    if !plan.complete() || !check_passed(db, &plan).await? {
+    let human_review = result.outcome.review == ReviewRequirement::HumanOwner;
+    plan_merge_readiness(db, &plan, human_review).await
+}
+
+async fn plan_merge_readiness(
+    db: &mut PgConnection,
+    plan: &Plan,
+    human_home_review: bool,
+) -> Result<aq_playbook_domain::delivery_runs::MergeReadiness, AppError> {
+    use aq_playbook_domain::delivery_runs::MergeReadiness;
+    if integrated(db, plan).await?.is_none() {
         return Ok(MergeReadiness::PendingEvidence);
     }
     let home = plan.sources.get(&plan.home).ok_or(AppError::Internal)?;
-    if home.target_ref.is_some() && target_accepted(db, &plan, home).await? {
+    if home.target_ref.is_some() && target_accepted(db, plan, home).await? {
         return Ok(MergeReadiness::AlreadyDelivered);
     }
-    if result.outcome.review == ReviewRequirement::HumanOwner {
+    if human_home_review {
         return Ok(MergeReadiness::PendingEvidence);
     }
     Ok(MergeReadiness::Proceed)
@@ -462,12 +514,144 @@ mod tests {
             missing_projects: vec![],
         };
         assert!(accepts_plan(&mut conn, &plan, false).await.unwrap());
-        // An incomplete plan still waits, and a changed source still needs checks.
+        // An incomplete plan still waits, and a changed Home still needs its
+        // own delivery evidence.
         plan.missing_projects.push(Uuid::new_v4());
         assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
         plan.missing_projects.clear();
         plan.sources.get_mut(&home).unwrap().changed = true;
         assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+    }
+
+    async fn owner(database: &crate::test_support::TestDb) -> (crate::store::Store, Uuid) {
+        let prior = database.store_at_version(178).await;
+        let owner = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,'delivery@example.org','owner',now())")
+            .bind(owner).execute(&database.pool().await).await.unwrap();
+        drop(prior);
+        (database.store().await, owner)
+    }
+
+    async fn integrated_check_rows(conn: &mut PgConnection, plan: &Plan) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM task_workspace_integrated_checks WHERE home_project_id=$1 AND task_id=$2",
+        )
+        .bind(plan.home)
+        .bind(plan.task)
+        .fetch_one(conn)
+        .await
+        .unwrap()
+    }
+
+    async fn home_merged(conn: &mut PgConnection, plan: &Plan) {
+        let home = &plan.sources[&plan.home];
+        sqlx::query(
+            "INSERT INTO delivery_merge_evidence(operation_id,project_id,task_id,pull_request,target,
+                target_ref,expected_head_sha,merge_sha,observed_at_ms)
+             VALUES($1,$2,$3,19,$4,'refs/heads/main',$5,repeat('f',40),1)",
+        ).bind(Uuid::new_v4()).bind(plan.home).bind(plan.task)
+         .bind(serde_json::json!({"git":{"repository_id":home.repository_id,"binding_generation":2}}))
+         .bind(&home.head).execute(conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_home_change_with_an_unchanged_read_only_sibling_merges_on_home_checks() {
+        use aq_playbook_domain::delivery_runs::MergeReadiness;
+        let database = crate::test_support::TestDb::create().await;
+        let (_store, _owner) = owner(&database).await;
+        let pool = database.pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let (home, dependency) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut readonly = source(dependency, 'd');
+        readonly.changed = false;
+        let plan = Plan {
+            home,
+            task: Uuid::new_v4(),
+            sources: BTreeMap::from([(home, source(home, 'a')), (dependency, readonly)]),
+            missing_projects: vec![],
+        };
+        // The Home required checks are the integrated check; nobody records one.
+        assert_eq!(
+            integrated(&mut conn, &plan).await.unwrap(),
+            Some(Integrated::HomeChecks)
+        );
+        assert!(matches!(
+            plan_merge_readiness(&mut conn, &plan, false).await.unwrap(),
+            MergeReadiness::Proceed
+        ));
+        let ids = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        assert!(
+            readiness::reason(&mut conn, &plan, ids)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // The Home merge is its delivery evidence; the gate then accepts.
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+        home_merged(&mut conn, &plan).await;
+        assert!(accepts_plan(&mut conn, &plan, false).await.unwrap());
+        assert!(matches!(
+            plan_merge_readiness(&mut conn, &plan, false).await.unwrap(),
+            MergeReadiness::AlreadyDelivered
+        ));
+        assert_eq!(integrated_check_rows(&mut conn, &plan).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_changed_sibling_waits_for_the_attestation_and_names_it() {
+        use aq_playbook_domain::delivery_runs::MergeReadiness;
+        let database = crate::test_support::TestDb::create().await;
+        let (_store, owner) = owner(&database).await;
+        let pool = database.pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let (home, sibling) = (Uuid::new_v4(), Uuid::new_v4());
+        let plan = Plan {
+            home,
+            task: Uuid::new_v4(),
+            sources: BTreeMap::from([(home, source(home, 'a')), (sibling, source(sibling, 'b'))]),
+            missing_projects: vec![],
+        };
+        assert_eq!(integrated(&mut conn, &plan).await.unwrap(), None);
+        assert!(matches!(
+            plan_merge_readiness(&mut conn, &plan, false).await.unwrap(),
+            MergeReadiness::PendingEvidence
+        ));
+        home_merged(&mut conn, &plan).await;
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+        let (attempt, report, operation) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let reason = readiness::reason(&mut conn, &plan, (attempt, report, operation))
+            .await
+            .unwrap()
+            .expect("a waiting merge is visible");
+        assert_eq!(reason["code"], readiness::CODE);
+        assert_eq!(reason["missing_attestation"], "integrated_checks");
+        assert_eq!(reason["blocker_owner"], "installation_owner");
+        assert_eq!(reason["operation_id"], serde_json::json!(operation));
+        let message = reason["message"].as_str().unwrap();
+        assert!(message.contains("integrated_checks") && message.contains(&report.to_string()));
+        assert!(message.len() <= 512, "{message}");
+        assert!(
+            reason["owner_action"]
+                .as_str()
+                .unwrap()
+                .ends_with(&format!("/results/{report}/workspace-delivery"))
+        );
+
+        sqlx::query(
+            "INSERT INTO task_workspace_integrated_checks(operation_id,home_project_id,task_id,inputs_digest,verdict,evidence,actor_id,recorded_at_ms)
+             VALUES($1,$2,$3,$4,'passed','suite 7',$5,1)",
+        ).bind(Uuid::new_v4()).bind(home).bind(plan.task).bind(plan.digest().unwrap())
+         .bind(owner).execute(&mut *conn).await.unwrap();
+        assert_eq!(
+            integrated(&mut conn, &plan).await.unwrap(),
+            Some(Integrated::OwnerAttestation)
+        );
+        assert!(
+            readiness::reason(&mut conn, &plan, (attempt, report, operation))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
