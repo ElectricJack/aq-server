@@ -270,8 +270,9 @@ impl Service {
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
     /// those of its latest result, for a task of any bound project. The 2.6.0
     /// and 2.7.0 ones add the task's acceptance criteria and the result's
-    /// conclusion (2.7.0's up to 4096 bytes), and 2.8.0's adds the head the
-    /// pull request's checks were evaluated on.
+    /// conclusion (2.7.0's up to 4096 bytes), 2.8.0's adds the head the pull
+    /// request's checks were evaluated on, and 2.9.0's the head whose checks
+    /// failed as a plain fact (`failed_checks_head`).
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -309,7 +310,7 @@ impl Service {
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
         let output = host10::for_catalog(output, version);
         let output = match version {
-            "2.6.0" | "2.7.0" | "2.8.0" => {
+            "2.6.0" | "2.7.0" | "2.8.0" | "2.9.0" => {
                 let conclusion = match &latest {
                     Some(l) => self.final_message(task, l).await?,
                     None => None,

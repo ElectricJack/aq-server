@@ -54,10 +54,10 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
     }
 }
 
-/// The catalog a source is authored against, whole: catalog 2.8.0 for the
+/// The catalog a source is authored against, whole: catalog 2.9.0 for the
 /// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
 /// every other. With spec 0017, 2.5.0 for the routing source and for a
-/// delivery record that asks the environment commands (keeping the 2.8.0
+/// delivery record that asks the environment commands (keeping the 2.9.0
 /// `work.read`).
 pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
     #[cfg(feature = "project_environments")]
@@ -69,7 +69,7 @@ pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
         return catalog_2_5();
     }
     if record.id == crate::builtin::DELIVERY {
-        return catalog_2_8();
+        return catalog_2_9();
     }
     let _ = record;
     Ok(docs::catalog_registry())
@@ -80,17 +80,18 @@ pub fn catalog_2_3() -> Result<Registry> {
         .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()))
 }
 
-/// Catalog 2.8.0: 2.3.0 with the `work.read` whose facts add the task's
+/// Catalog 2.9.0: 2.3.0 with the `work.read` whose facts add the task's
 /// acceptance criteria and its latest result's conclusion (2.6.0), the
-/// conclusion up to the result report's 4096 bytes (2.7.0), and the head the
-/// pull request's checks were evaluated on (2.8.0).
-pub const CATALOG_2_8_REGISTRY: &str =
-    include_str!("../../../vendor/aq-host-catalog-2.8.0/registry.json");
-const CATALOG_2_8_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.8.0/notes.json");
+/// conclusion up to the result report's 4096 bytes (2.7.0), the head the
+/// pull request's checks were evaluated on (2.8.0), and the head whose checks
+/// failed as a plain fact a playbook can test, `failed_checks_head` (2.9.0).
+pub const CATALOG_2_9_REGISTRY: &str =
+    include_str!("../../../vendor/aq-host-catalog-2.9.0/registry.json");
+const CATALOG_2_9_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.9.0/notes.json");
 
-pub fn catalog_2_8() -> Result<Registry> {
-    serde_json::from_str(CATALOG_2_8_REGISTRY)
-        .map_err(|_| Error::Invalid("catalog 2.8.0 does not parse".into()))
+pub fn catalog_2_9() -> Result<Registry> {
+    serde_json::from_str(CATALOG_2_9_REGISTRY)
+        .map_err(|_| Error::Invalid("catalog 2.9.0 does not parse".into()))
 }
 
 /// Catalog 2.5.0 (spec 0017).
@@ -116,12 +117,12 @@ fn environment_delivery(record: &SourceRecord) -> bool {
 }
 
 /// The delivery source's catalog 2.5.0: the environment commands and events
-/// added, every 2.3.0 contract it uses unchanged and the 2.8.0 `work.read`
+/// added, every 2.3.0 contract it uses unchanged and the 2.9.0 `work.read`
 /// (the 2.5.0 one adds the routing facts of spec 0017 §5.4).
 #[cfg(feature = "project_environments")]
 pub fn catalog_2_5_delivery() -> Result<Registry> {
     let mut catalog = catalog_2_5()?;
-    let read = catalog_2_8()?.commands.remove("work.read");
+    let read = catalog_2_9()?.commands.remove("work.read");
     catalog
         .commands
         .extend(read.map(|c| ("work.read".to_owned(), c)));
@@ -132,10 +133,10 @@ pub fn catalog_2_5_delivery() -> Result<Registry> {
 fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
     #[cfg(feature = "project_environments")]
     if environment_delivery(record) {
-        // 2.5.0's notes, with 2.8.0's on the 2.8.0 work.read.
+        // 2.5.0's notes, with 2.9.0's on the 2.9.0 work.read.
         let parse = |text: &str| serde_json::from_str::<Value>(text).map_err(|_| Error::Corrupt);
         let mut notes = parse(CATALOG_2_5_NOTES)?;
-        notes["commands"]["work.read"] = parse(CATALOG_2_8_NOTES)?["commands"]["work.read"].take();
+        notes["commands"]["work.read"] = parse(CATALOG_2_9_NOTES)?["commands"]["work.read"].take();
         let mut text = docs::catalog_with_extensions(
             _catalog,
             &notes.to_string(),
@@ -163,7 +164,7 @@ fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
     if record.id == crate::builtin::DELIVERY {
         let mut text = docs::catalog_with_extensions(
             _catalog,
-            CATALOG_2_8_NOTES,
+            CATALOG_2_9_NOTES,
             &record.commands,
             &record.events,
             &[],

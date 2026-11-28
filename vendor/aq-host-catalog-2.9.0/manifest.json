@@ -1,0 +1,37 @@
+{
+  "commands_changed": [
+    "work.read"
+  ],
+  "context_views": [
+    "work",
+    "project",
+    "execution_options",
+    "evidence",
+    "health_observations"
+  ],
+  "fingerprint": "sha256:8edc4f5ec52ffe5350f1b69d6ec848546b15f70a79bcd0b082bc1353d77f217a",
+  "supersedes": {
+    "fingerprint": "sha256:72f0c81f0f0b7b25a4b101cb7230e085b7b04eef72609b15c3728ac3c07eaffd",
+    "version": "2.8.0"
+  },
+  "version": "2.9.0",
+  "work_change_variants": [
+    "requirements",
+    "priority",
+    "dependencies",
+    "execution_constraints",
+    "hold",
+    "release_hold"
+  ],
+  "work_kinds": [
+    "implementation",
+    "investigation",
+    "planning",
+    "review",
+    "repair",
+    "supervisor_authoring",
+    "spec_ingestion",
+    "fidelity_review",
+    "onboarding"
+  ]
+}

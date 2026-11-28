@@ -95,6 +95,15 @@ impl PullRequestFacts {
         output["checks_head"] = self.checks_head.as_deref().map_or(Value::Null, Value::from);
         output
     }
+    /// The head whose checks were last evaluated and failed (catalog 2.9.0
+    /// `failed_checks_head`): `checks_head` while `checks_state` is `failed`,
+    /// else `""`.
+    fn failed_checks_head(&self) -> &str {
+        match (self.checks_state.as_str(), self.checks_head.as_deref()) {
+            ("failed", Some(head)) => head,
+            _ => "",
+        }
+    }
 }
 
 /// The facts of a task's latest result (`work.read`). Every field is always
@@ -120,6 +129,10 @@ pub struct ResultFacts {
 
 impl ResultFacts {
     pub fn output(&self) -> Value {
+        let pull_request = self
+            .pull_request
+            .as_ref()
+            .and_then(PullRequestFacts::normalized);
         json!({
             "outcome": truncate(&self.outcome, OUTCOME_BYTES),
             "changed": self.changed,
@@ -128,16 +141,22 @@ impl ResultFacts {
             "base": truncate(&self.base, OBJECT_BYTES),
             "main_head": truncate(&self.main_head, OBJECT_BYTES),
             "returns": self.returns.min(RETURNS_MAX),
-            "pull_request": self.pull_request.as_ref().and_then(PullRequestFacts::normalized)
-                .map_or(Value::Null, |p| p.output_2_8()),
+            "pull_request": pull_request.as_ref().map_or(Value::Null, PullRequestFacts::output_2_8),
+            "failed_checks_head": pull_request.as_ref().map_or("", PullRequestFacts::failed_checks_head),
         })
     }
 }
 
 /// `output` as catalog `version` declares it: the pull request's
-/// `checks_head` is 2.8.0's, so an older catalog's answer leaves it out.
+/// `checks_head` is 2.8.0's and `failed_checks_head` 2.9.0's, so an older
+/// catalog's answer leaves them out.
 pub fn for_catalog(mut output: Value, version: &str) -> Value {
-    if version != "2.8.0"
+    if version != "2.9.0"
+        && let Some(facts) = output["facts"].as_object_mut()
+    {
+        facts.remove("failed_checks_head");
+    }
+    if !matches!(version, "2.8.0" | "2.9.0")
         && let Some(pull_request) = output["facts"]["pull_request"].as_object_mut()
     {
         pull_request.remove("checks_head");
@@ -147,7 +166,8 @@ pub fn for_catalog(mut output: Value, version: &str) -> Value {
 
 /// The `observed` output of `work.read` under catalog 2.3.0: the task's facts
 /// of 2.2.0 and those of its latest result. Its pull request carries 2.8.0's
-/// `checks_head`; [`for_catalog`] leaves it out for an older catalog.
+/// `checks_head`, and its facts 2.9.0's `failed_checks_head`; [`for_catalog`]
+/// leaves them out for an older catalog.
 pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultFacts) -> Value {
     let mut output = host9::read_output(task, version, facts);
     if let (Some(all), Some(more)) = (output["facts"].as_object_mut(), result.output().as_object())
@@ -157,10 +177,10 @@ pub fn read_output(task: Uuid, version: i64, facts: &WorkFacts, result: &ResultF
     output
 }
 
-/// The `observed` output of `work.read` `version` (catalog 2.6.0, 2.7.0 or 2.8.0):
+/// The `observed` output of `work.read` `version` (catalog 2.6.0 to 2.9.0):
 /// the 2.3.0 `output` with the acceptance criteria of the graph node `node`
 /// and the `conclusion` of the latest result (`""` when there is none), cut to
-/// that catalog's bound (2.8.0's is 2.7.0's).
+/// that catalog's bound (2.8.0's and 2.9.0's are 2.7.0's).
 pub fn with_judgment_facts(
     mut output: Value,
     node: &Value,
@@ -483,7 +503,10 @@ mod tests {
         let node = json!({"title": "t", "body": "b", "metadata": {}});
         let work = WorkFacts::of(&node, false, 0, 0);
         // No result yet: every fact present and empty.
-        let none = read_output(task, 3, &work, &ResultFacts::default());
+        let none = for_catalog(
+            read_output(task, 3, &work, &ResultFacts::default()),
+            "2.3.0",
+        );
         observed.validate(&none).unwrap();
         assert_eq!(none["facts"]["branch"], "");
         assert_eq!(none["facts"]["changed"], false);
@@ -521,7 +544,10 @@ mod tests {
         let node =
             json!({"title": "t", "body": "b", "acceptance_criteria": "It runs.", "metadata": {}});
         let work = WorkFacts::of(&node, false, 0, 0);
-        let base = read_output(task, 3, &work, &ResultFacts::default());
+        let base = for_catalog(
+            read_output(task, 3, &work, &ResultFacts::default()),
+            "2.6.0",
+        );
         // Without the two facts the 2.3.0 answer does not fit 2.6.0.
         assert!(observed.validate(&base).is_err());
         let read =
@@ -614,6 +640,139 @@ mod tests {
             facts_digest("m", Some(&moved)),
             facts_digest("m", Some(&pull_request()))
         );
+    }
+
+    fn vendored(version: &str) -> aq_playbook_host::model::Registry {
+        let path = format!(
+            "{}/../../vendor/aq-host-catalog-{version}/registry.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// Catalog 2.9.0 `work.read` reports the head whose checks were last
+    /// evaluated and failed as the plain fact `failed_checks_head`, `""` when
+    /// there is none; every older catalog's answer leaves it out.
+    #[test]
+    fn work_read_2_9_0_reports_the_failed_checks_head_or_an_empty_string() {
+        let (v2_9, v2_8) = (vendored("2.9.0"), vendored("2.8.0"));
+        let new = &v2_9.commands["work.read"].outcomes["observed"];
+        let task = Uuid::from_u128(1);
+        let node = json!({"title": "t", "body": "b", "acceptance_criteria": "c", "metadata": {}});
+        let work = WorkFacts::of(&node, false, 0, 0);
+        let read = |result: &ResultFacts, version: &str| {
+            let output = read_output(task, 3, &work, result);
+            let output = with_judgment_facts(output, &node, "Outcome: done", version);
+            for_catalog(output, version)
+        };
+        let head = "4".repeat(40);
+        let with = |checks_state: &str, checks_head: Option<&str>| ResultFacts {
+            outcome: "success".into(),
+            head: head.clone(),
+            pull_request: Some(PullRequestFacts {
+                checks_state: checks_state.into(),
+                checks_head: checks_head.map(str::to_owned),
+                ..pull_request()
+            }),
+            ..Default::default()
+        };
+        // The checks of the head failed: that head.
+        let failed = read(&with("failed", Some(&head)), "2.9.0");
+        new.validate(&failed).unwrap();
+        assert_eq!(failed["facts"]["failed_checks_head"], head);
+        assert_eq!(failed["facts"]["pull_request"]["checks_head"], head);
+        // Anything else: "".
+        for (case, result) in [
+            ("passed", with("passed", Some(&head))),
+            ("pending", with("pending", Some(&head))),
+            ("never evaluated", with("failed", None)),
+            ("no pull request", ResultFacts::default()),
+            (
+                "not expressible",
+                ResultFacts {
+                    pull_request: Some(PullRequestFacts {
+                        number: 0,
+                        ..pull_request()
+                    }),
+                    ..with("failed", Some(&head))
+                },
+            ),
+        ] {
+            let answer = read(&result, "2.9.0");
+            new.validate(&answer).unwrap();
+            assert_eq!(answer["facts"]["failed_checks_head"], "", "{case}");
+        }
+        // A head longer than the catalog's bound is cut to it.
+        let long = read(&with("failed", Some(&"f".repeat(200))), "2.9.0");
+        new.validate(&long).unwrap();
+        assert_eq!(
+            long["facts"]["failed_checks_head"].as_str().unwrap().len(),
+            128
+        );
+        // Older catalogs' answers are unchanged: no failed_checks_head.
+        let older = read(&with("failed", Some(&head)), "2.8.0");
+        assert!(older["facts"].get("failed_checks_head").is_none());
+        assert_eq!(older["facts"]["pull_request"]["checks_head"], head);
+        v2_8.commands["work.read"].outcomes["observed"]
+            .validate(&older)
+            .unwrap();
+        for version in ["2.3.0", "2.6.0", "2.7.0"] {
+            let answer = read(&with("failed", Some(&head)), version);
+            assert!(
+                answer["facts"].get("failed_checks_head").is_none(),
+                "{version}"
+            );
+        }
+        // A 2.8.0 answer does not fit 2.9.0, nor a 2.9.0 answer 2.8.0.
+        assert!(new.validate(&older).is_err());
+        assert!(
+            v2_8.commands["work.read"].outcomes["observed"]
+                .validate(&failed)
+                .is_err()
+        );
+    }
+
+    /// The 2.9.0 bundle's fixtures agree with its registry, and its
+    /// compatibility section with the contracts' fingerprints.
+    #[test]
+    fn catalog_2_9_0_fixtures_agree_with_its_registry() {
+        let registry = vendored("2.9.0");
+        let path = format!(
+            "{}/../../vendor/aq-host-catalog-2.9.0/fixtures.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let fixtures: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = fixtures["cases"].as_array().unwrap();
+        assert!(cases.len() >= 12);
+        for (i, case) in cases.iter().enumerate() {
+            let contract = &registry.commands[case["contract"].as_str().unwrap()];
+            let schema = &contract.outcomes[case["outcome"].as_str().unwrap()];
+            let valid = schema.validate(&case["value"]).is_ok();
+            assert_eq!(valid, case["valid"].as_bool().unwrap(), "case {i}");
+        }
+        let compatibility = &fixtures["compatibility"];
+        let read = &compatibility["changed_commands"]["work.read"];
+        let fingerprint = registry.commands["work.read"].fingerprint().unwrap();
+        assert_eq!(read["fingerprint"], fingerprint);
+        assert_eq!(
+            (&read["from"], &read["to"]),
+            (&json!("2.8.0"), &json!("2.9.0"))
+        );
+        for (name, fingerprint) in compatibility["unchanged_commands"].as_object().unwrap() {
+            assert_eq!(
+                registry.commands[name].fingerprint().unwrap(),
+                *fingerprint,
+                "{name}"
+            );
+        }
+        for (name, fingerprint) in compatibility["unchanged_events"].as_object().unwrap() {
+            assert_eq!(
+                registry.events[name].fingerprint().unwrap(),
+                *fingerprint,
+                "{name}"
+            );
+        }
     }
 
     #[test]

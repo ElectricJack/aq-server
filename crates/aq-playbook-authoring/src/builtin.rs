@@ -56,8 +56,9 @@ pub fn routing() -> SourceRecord {
 }
 
 /// The record of the `delivery` source: on `aq.work.result_ready` it reads
-/// the task and its result (`work.read` of catalog 2.8.0: the result facts of
-/// 2.3.0, the task's acceptance criteria and the result's conclusion) and
+/// the task and its result (`work.read` of catalog 2.9.0: the result facts of
+/// 2.3.0, the task's acceptance criteria, the result's conclusion and the head
+/// whose checks failed) and
 /// settles it with the delivery commands of catalog 2.3.0: publish,
 /// open a pull request, wait for checks, merge, complete, return or hold. It
 /// may ask a structured judgment (`judgment.assess`), for example whether a
@@ -66,7 +67,7 @@ pub fn routing() -> SourceRecord {
 /// playbook gives and internal work's caps.
 /// Its scope is `project`, the only scope the catalog's contracts have; that
 /// one document serves every project is the namespace's `installation_routing`
-/// (see `routing()`). It is authored against catalog 2.8.0
+/// (see `routing()`). It is authored against catalog 2.9.0
 /// ([`crate::request::pinned_catalog`]). The document is the only thing it
 /// reads besides the task: Settings offers no fact provider to it, and the
 /// numbers it uses (returns allowed, check wait) are the document's own words.
@@ -196,10 +197,11 @@ mod tests {
         assert!(!record.capabilities.contains("work.route"));
         assert_eq!(record.judgment_purpose, Purpose::PlaybookCall);
         assert!(record.facts.is_empty());
-        // It is authored against catalog 2.8.0: 2.3.0 with the work.read whose
-        // facts add the acceptance criteria and the result's conclusion.
+        // It is authored against catalog 2.9.0: 2.3.0 with the work.read whose
+        // facts add the acceptance criteria, the result's conclusion and the
+        // head whose checks failed.
         let catalog = crate::request::pinned_catalog(&record).unwrap();
-        assert_eq!(catalog.commands["work.read"].version, "2.8.0");
+        assert_eq!(catalog.commands["work.read"].version, "2.9.0");
         assert!(catalog.events.contains_key("aq.work.result_ready"));
         let v2_3: aq_playbooks_model::Registry =
             serde_json::from_str(docs::CATALOG_2_3_REGISTRY).unwrap();
@@ -224,6 +226,7 @@ mod tests {
             "aq.work.result_ready",
             "`acceptance_criteria`",
             "`conclusion`",
+            "`failed_checks_head`",
             "judgment.assess",
         ] {
             assert!(workspace["CATALOG.md"].contains(fact), "{fact}");
@@ -233,7 +236,7 @@ mod tests {
     }
 
     /// The worked delivery example of catalog 2.3.0 seals as a playbook of
-    /// this record, against catalog 2.8.0, with the record's scope, binding and
+    /// this record, against catalog 2.9.0, with the record's scope, binding and
     /// abilities (`project` is the one scope the contracts allow).
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
@@ -263,8 +266,174 @@ mod tests {
         );
     }
 
+    /// Task c05530d6: the failed-checks-head rule's `draft.json` steps, as
+    /// `docs/implementation/delivery-checks-head-rule.md` gives them, spliced
+    /// into the published delivery example before its `branch.publish`, pass
+    /// the authoring check (what `aq-playbooks check` runs) and seal against
+    /// the delivery record's catalog 2.9.0, and the document's cases run as
+    /// written. Catalog 2.8.0 has no such fact, and its `checks_head` cannot be
+    /// referenced through the nullable `pull_request`.
+    #[test]
+    fn the_failed_checks_head_rule_checks_on_catalog_2_9_0() {
+        use serde_json::{Value, json};
+        let root = env!("CARGO_MANIFEST_DIR");
+        let doc = std::fs::read_to_string(format!(
+            "{root}/../../docs/implementation/delivery-checks-head-rule.md"
+        ))
+        .unwrap();
+        let fenced = |open: &str, close: &str| {
+            let at = doc.find(open).unwrap() + open.len();
+            doc[at..at + doc[at..].find(close).unwrap()].to_owned()
+        };
+        let steps: serde_json::Map<String, Value> =
+            serde_json::from_str(&fenced("\n```json\n", "\n```\n")).unwrap();
+        let rule = fenced("\n````markdown\n", "\n````\n");
+        assert!(rule.contains("failed_checks_head") && !rule.contains("pull_request."));
+        const DIR: &str = "../../vendor/aq-playbooks-8901af1/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
+        let read = |name: &str| std::fs::read_to_string(format!("{root}/{DIR}/{name}")).unwrap();
+        let mut draft: Value = serde_json::from_str(&read("draft.json")).unwrap();
+        assert_eq!(draft["steps"]["read"]["edges"]["observed"], "publish");
+        draft["steps"]["read"]["edges"]["observed"] = json!("failed_head");
+        draft["steps"]
+            .as_object_mut()
+            .unwrap()
+            .extend(steps.clone());
+        let record = delivery(false);
+        let catalog = crate::request::pinned_catalog(&record).unwrap();
+        assert_eq!(catalog.commands["work.read"].version, "2.9.0");
+        let markdown = format!("{}\n{rule}\n", read("source.md"));
+        let facts: std::collections::BTreeMap<String, Value> =
+            serde_json::from_str(&read("facts.json")).unwrap();
+        let workspace = |catalog: &aq_playbooks_model::Registry, draft: &Value| draft::Workspace {
+            markdown: markdown.clone(),
+            record: crate::request::engine_record(&record, "settings-1"),
+            catalog: crate::request::catalog_for(&record, catalog).unwrap(),
+            facts: facts.clone(),
+            draft: draft.clone(),
+        };
+        let faults = draft::check(&workspace(&catalog, &draft));
+        assert!(faults.is_empty(), "{faults:?}");
+        draft::seal(&workspace(&catalog, &draft)).unwrap_or_else(|f| panic!("{f:?}"));
+        // The same draft does not check against catalog 2.8.0, which has no
+        // failed_checks_head...
+        let v2_8: aq_playbooks_model::Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.8.0/registry.json"
+        ))
+        .unwrap();
+        let mut v2_8_catalog = catalog.clone();
+        v2_8_catalog
+            .commands
+            .insert("work.read".into(), v2_8.commands["work.read"].clone());
+        let faults = draft::check(&workspace(&v2_8_catalog, &draft));
+        assert!(
+            format!("{faults:?}").contains("failed_checks_head"),
+            "{faults:?}"
+        );
+        // ...and 2.8.0's checks_head cannot be read through pull_request.
+        let mut nullable = draft.clone();
+        nullable["steps"]["failed_head"]["op"]["predicate"] = json!({"op": "eq",
+            "left": {"op": "ref", "root": "facts_of", "path": ["facts", "head"]},
+            "right": {"op": "ref", "root": "facts_of",
+                "path": ["facts", "pull_request", "checks_head"]}});
+        let faults = draft::check(&workspace(&v2_8_catalog, &nullable));
+        assert!(format!("{faults:?}").contains("may be null"), "{faults:?}");
+
+        // The document's cases (and three more the engine requires) run.
+        let failed_head = format!("4fb76495{}", "0".repeat(32));
+        let new_head = format!("5a1c0000{}", "0".repeat(32));
+        let read_returns = |outcome: &str, head: &str, failed: &str, checks: &str| {
+            let pull_request = json!({"number": 134, "url": "https://example.test/pr/134",
+                "state": "open", "mergeable": "mergeable",
+                "checks": {"state": checks, "failed": if checks == "failed" { json!(["tests"]) } else { json!([]) }},
+                "checks_head": failed_head});
+            json!([{"outcome": "observed", "output": {
+                "reference": "task-1@3", "subject": {"id": "task-1", "revision": 3},
+                "facts": {"kind": "", "title": "Verify the install guide",
+                    "description": "Check the guide.", "origin": "owner", "level_hint": "",
+                    "charged_failures": 0, "ended_attempts": 0, "route": "router",
+                    "outcome": outcome, "changed": true, "branch": "aq/task-1",
+                    "head": head, "base": "a1", "main_head": "a1", "returns": 0,
+                    "pull_request": pull_request, "acceptance_criteria": "It runs.",
+                    "conclusion": "Outcome: done", "failed_checks_head": failed}}}])
+        };
+        let read_call = json!({"command": "work.read",
+            "input": {"subject": {"id": "task-1", "revision": 3}}});
+        let publish_call = json!({"command": "branch.publish", "input": {"task": "task-1"}});
+        let refused = json!([{"outcome": "refused", "output": {"reason": "unreachable"},
+            "at_once": true}]);
+        let text = &steps["failed_head_notify"]["op"]["input"]["fields"]["text"]["value"];
+        let case = |name: &str, returns: Value, outcome: &str, calls: Vec<Value>| {
+            serde_json::from_value::<aq_playbooks_simulation::cases::Case>(json!({
+                "name": name, "situation": name,
+                "start": {"kind": "event", "event": "aq.work.result_ready", "payload": {
+                    "task_id": "task-1", "project_id": "project-1", "attempt_id": "attempt-1",
+                    "result_id": "result-1", "version": 3}},
+                "returns": returns, "expect": {"outcome": outcome, "calls": calls}}))
+            .unwrap()
+        };
+        let published = |name: &str, outcome: &str, head: &str, failed: &str, checks: &str| {
+            case(
+                name,
+                json!({"work.read": read_returns(outcome, head, failed, checks),
+                    "branch.publish": refused}),
+                "failed",
+                vec![read_call.clone(), publish_call.clone()],
+            )
+        };
+        let cases = vec![
+            case(
+                "same_failed_head_is_held",
+                json!({"work.read": read_returns("success", &failed_head, &failed_head, "failed"),
+                    "work.hold": [{"outcome": "held", "output": {}}],
+                    "supervisor.notify": [{"outcome": "sent", "output": {}}]}),
+                "held",
+                vec![
+                    read_call.clone(),
+                    json!({"command": "work.hold", "input": {"task": "task-1",
+                        "result_id": "result-1", "reason": "returns_exhausted"}}),
+                    json!({"command": "supervisor.notify", "input": {"project": "project-1",
+                        "identity": "result-1", "text": text}}),
+                ],
+            ),
+            published(
+                "a_new_head_is_published",
+                "success",
+                &new_head,
+                &failed_head,
+                "failed",
+            ),
+            published(
+                "passed_checks_are_published",
+                "success",
+                &failed_head,
+                "",
+                "passed",
+            ),
+            published(
+                "a_failed_outcome_is_not_this_rule",
+                "failed",
+                &failed_head,
+                &failed_head,
+                "failed",
+            ),
+            published("no_head_is_not_a_failed_head", "success", "", "", "failed"),
+        ];
+        let inputs = crate::Inputs {
+            grant_capabilities: record.capabilities.clone(),
+            catalog,
+            record: record.clone(),
+            markdown: markdown.clone(),
+            facts: facts.clone(),
+            facts_version: "settings-1".into(),
+            previous: None,
+        };
+        let saved = crate::check_saved(&draft, &cases, &inputs, &Default::default())
+            .unwrap_or_else(|refusal| panic!("{refusal:?}"));
+        assert_eq!(saved.artifact.content.playbook.id.as_str(), "aq.delivery");
+    }
+
     /// Spec 0017: catalog 2.5.0 adds the environment commands and the base
-    /// event, and keeps every 2.8.0 contract the record used.
+    /// event, and keeps every 2.9.0 contract the record used.
     #[cfg(feature = "project_environments")]
     #[test]
     fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
@@ -299,12 +468,12 @@ mod tests {
         }
         assert!(!record.capabilities.contains("work.route"));
         let catalog = crate::request::pinned_catalog(&record).unwrap();
-        let v2_8: aq_playbooks_model::Registry =
-            serde_json::from_str(crate::request::CATALOG_2_8_REGISTRY).unwrap();
+        let v2_9: aq_playbooks_model::Registry =
+            serde_json::from_str(crate::request::CATALOG_2_9_REGISTRY).unwrap();
         let v2_5: aq_playbooks_model::Registry =
             serde_json::from_str(crate::request::CATALOG_2_5_REGISTRY).unwrap();
         for name in &record.commands {
-            let expected = v2_8.commands.get(name).unwrap_or(&v2_5.commands[name]);
+            let expected = v2_9.commands.get(name).unwrap_or(&v2_5.commands[name]);
             assert_eq!(&catalog.commands[name], expected, "{name}");
         }
         let kept = crate::request::catalog_for(&record, &catalog).unwrap();

@@ -152,7 +152,7 @@ async fn assert_delivery_authoring_request(pool: &sqlx::PgPool, environments: bo
     };
     assert_eq!(record["events"], events);
     let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
-    assert_eq!(catalog["commands"]["work.read"]["version"], "2.8.0");
+    assert_eq!(catalog["commands"]["work.read"]["version"], "2.9.0");
     for command in [
         "judgment.assess",
         "work.complete",

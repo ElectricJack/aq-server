@@ -1763,7 +1763,7 @@ mod delivery {
         }
     }
 
-    /// Catalogs 2.6.0, 2.7.0 and 2.8.0, vendored and pinned byte for byte.
+    /// Catalogs 2.6.0 to 2.9.0, vendored and pinned byte for byte.
     fn vendored_delivery_catalog(version: &str) -> (Value, aq_playbook_host::model::Registry) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../vendor/aq-host-catalog-{version}"));
@@ -1797,12 +1797,13 @@ mod delivery {
         (manifest, registry)
     }
 
-    /// The delivery record is authored against catalog 2.8.0 (2.7.0 with the
-    /// head the pull request's checks were evaluated on): a Host10 namespace
-    /// accepts its contracts, its work.read and 2.7.0's and 2.6.0's (artifacts
-    /// sealed before 2.8.0 keep theirs) included, beside routing's 2.2.0 one.
+    /// The delivery record is authored against catalog 2.9.0 (2.8.0 with the
+    /// head whose checks failed as a plain fact): a Host10 namespace accepts
+    /// its contracts, its work.read and 2.8.0's, 2.7.0's and 2.6.0's
+    /// (artifacts sealed before 2.9.0 keep theirs) included, beside routing's
+    /// 2.2.0 one.
     #[test]
-    fn host10_accepts_the_delivery_records_catalogs_2_6_0_2_7_0_and_2_8_0() {
+    fn host10_accepts_the_delivery_records_catalogs_2_6_0_to_2_9_0() {
         let registry = CatalogProfile::Host10.registry();
         let (v2_6_manifest, v2_6) = vendored_delivery_catalog("2.6.0");
         assert_eq!(
@@ -1819,26 +1820,33 @@ mod delivery {
             v2_8_manifest["supersedes"]["fingerprint"],
             v2_7_manifest["fingerprint"]
         );
-        // 2.8.0 changes work.read and nothing else.
-        for (name, contract) in &v2_7.commands {
-            assert_eq!(
-                name == "work.read",
-                &v2_8.commands[name] != contract,
-                "{name}"
-            );
+        let (v2_9_manifest, v2_9) = vendored_delivery_catalog("2.9.0");
+        assert_eq!(
+            v2_9_manifest["supersedes"]["fingerprint"],
+            v2_8_manifest["fingerprint"]
+        );
+        // 2.8.0 and 2.9.0 each change work.read and nothing else.
+        for (older, newer) in [(&v2_7, &v2_8), (&v2_8, &v2_9)] {
+            for (name, contract) in &older.commands {
+                assert_eq!(
+                    name == "work.read",
+                    &newer.commands[name] != contract,
+                    "{name}"
+                );
+            }
+            assert_eq!(older.events, newer.events);
         }
-        assert_eq!(v2_7.events, v2_8.events);
         // Without environments (spec 0017, see playbook_environments) the
-        // record's catalog is 2.8.0 whole.
+        // record's catalog is 2.9.0 whole.
         {
             let record = aq_playbook_authoring::builtin::delivery(false);
             let pinned = aq_playbook_authoring::request::pinned_catalog(&record).unwrap();
-            assert_eq!(pinned, v2_8);
+            assert_eq!(pinned, v2_9);
             let kept = aq_playbook_authoring::request::catalog_for(&record, &pinned).unwrap();
             assert!(kept.commands.contains_key("judgment.assess"));
         }
         let host9 = CatalogProfile::Host9.registry();
-        for catalog in [&v2_6, &v2_7, &v2_8] {
+        for catalog in [&v2_6, &v2_7, &v2_8, &v2_9] {
             for contract in catalog.commands.values() {
                 assert!(
                     aq_playbook_host::accepts_command(&registry, contract),
@@ -2652,6 +2660,70 @@ mod delivery {
         let seen = read("read-2-7-head", &v2_7).await;
         assert!(seen.get("checks_head").is_none());
         assert_eq!(seen["checks"]["state"], "failed");
+    }
+
+    /// Catalog 2.9.0's work.read gives the head whose checks were last
+    /// evaluated and failed as the plain fact `failed_checks_head`, `""` when
+    /// there is none; the 2.8.0 answer on the same namespace keeps its shape.
+    #[tokio::test]
+    async fn work_read_2_9_0_gives_the_failed_checks_head_or_an_empty_string() {
+        let h = delivery(false).await;
+        let own = h.scope.project_id;
+        h.routing.on_router.lock().unwrap().insert(own);
+        let (task, _) = h.stopped(own, "success");
+        let fresh = h.graph.task("Not run yet", json!({}));
+        let v2_8: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.8.0/registry.json"
+        ))
+        .unwrap();
+        let v2_9: aq_playbook_host::model::Registry = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.9.0/registry.json"
+        ))
+        .unwrap();
+        let read = |name: &str, task: Uuid, catalog: &aq_playbook_host::model::Registry| {
+            let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+            let mut intent = h.intent(name, "work.read", input);
+            intent.command = catalog.commands["work.read"].clone();
+            let h = &h;
+            async move {
+                let read = h.try_run(&intent).await.unwrap();
+                intent.command.outcomes["observed"]
+                    .validate(&read.output)
+                    .unwrap();
+                read.output["facts"].clone()
+            }
+        };
+        // A task without a result, and one without a pull request: "".
+        assert_eq!(
+            read("read-2-9-fresh", fresh, &v2_9).await["failed_checks_head"],
+            ""
+        );
+        assert_eq!(
+            read("read-2-9-no-pr", task, &v2_9).await["failed_checks_head"],
+            ""
+        );
+        // Checks failed on a head the host did not record (as before the column): "".
+        h.pull_request(task, "failed", json!(["tests"])).await;
+        let seen = read("read-2-9-null", task, &v2_9).await;
+        assert_eq!(seen["failed_checks_head"], "");
+        assert!(seen["pull_request"]["checks_head"].is_null());
+        // Checks failed on a recorded head: that head.
+        let head = "4".repeat(40);
+        let sql = "UPDATE delivery_pull_requests SET checks_head=$2 WHERE task_id=$1";
+        let update = sqlx::query(sql).bind(task).bind(&head);
+        update.execute(&h.pool().await).await.unwrap();
+        let seen = read("read-2-9-head", task, &v2_9).await;
+        assert_eq!(seen["failed_checks_head"], head);
+        assert_eq!(seen["pull_request"]["checks_head"], head);
+        // 2.8.0 does not carry it, and keeps its checks_head.
+        let seen = read("read-2-8-head", task, &v2_8).await;
+        assert!(seen.get("failed_checks_head").is_none());
+        assert_eq!(seen["pull_request"]["checks_head"], head);
+        // The same head's checks pass: "" again.
+        h.pull_request(task, "passed", json!([])).await;
+        let seen = read("read-2-9-passed", task, &v2_9).await;
+        assert_eq!(seen["failed_checks_head"], "");
+        assert_eq!(seen["pull_request"]["checks_head"], head);
     }
 
     #[tokio::test]
