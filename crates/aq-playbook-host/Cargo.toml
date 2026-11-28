@@ -9,9 +9,9 @@ publish.workspace = true
 project_environments = []
 
 [dependencies]
-aq-playbooks-model = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-model", version = "=0.2.0" }
-aq-playbooks-runner = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-runner", version = "=0.2.0" }
-aq-playbooks-postgres = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-postgres", version = "=0.2.0" }
+aq-playbooks-model = { path = "../../vendor/aq-playbooks-c6c3f18/crates/aq-playbooks-model", version = "=0.2.0" }
+aq-playbooks-runner = { path = "../../vendor/aq-playbooks-c6c3f18/crates/aq-playbooks-runner", version = "=0.2.0" }
+aq-playbooks-postgres = { path = "../../vendor/aq-playbooks-c6c3f18/crates/aq-playbooks-postgres", version = "=0.2.0" }
 postgres = "0.19"
 nix = { workspace = true, features = ["process", "signal"] }
 hex.workspace = true

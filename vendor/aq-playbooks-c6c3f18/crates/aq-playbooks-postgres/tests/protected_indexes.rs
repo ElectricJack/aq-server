@@ -1282,3 +1282,50 @@ fn mixed_existing_and_new_catalog_batches_commit_without_lock_inversion() {
         }
     }
 }
+
+/// The owner's hot path: a warm handle parses and verifies an artifact only
+/// when its stored bytes change, so a commit or load costs no verification
+/// however many artifacts the namespace keeps, and changed bytes still fail.
+#[test]
+fn warm_handle_verifies_no_unchanged_artifact_whatever_their_number() {
+    for extra in [0, 12] {
+        let n = namespace("warm-artifacts");
+        let mut state = boundary(&n);
+        for i in 0..extra {
+            let a = artifact(&format!("{n}-extra-{i}"));
+            state.artifacts.insert(a.digest.clone(), a);
+        }
+        let count = state.artifacts.len() as u64;
+        let s = protected("old", false);
+        s.acquire(&n, "owner").unwrap();
+        s.compare_and_swap(&n, "owner", 0, &state).unwrap();
+        s.set_profiling(true);
+        s.compare_and_swap(&n, "owner", 1, &state).unwrap();
+        let cold = s.profiling_snapshot().unwrap().operations["cas"].artifact_verifications;
+        assert_eq!(cold, count, "the first read verifies each artifact");
+        s.set_profiling(true);
+        for revision in 2..6 {
+            assert_same(&s.load(&n).unwrap().state, &state);
+            s.compare_and_swap(&n, "owner", revision, &state).unwrap();
+        }
+        let warm = s.profiling_snapshot().unwrap();
+        for operation in ["cas", "load"] {
+            assert_eq!(warm.operations[operation].completed, 4);
+            assert_eq!(
+                warm.operations[operation].artifact_verifications, 0,
+                "{operation} with {count} artifacts"
+            );
+        }
+        // Changed bytes under an unchanged address are read, verified and refused.
+        let digest = state.artifacts.keys().next().unwrap();
+        let mut db = client();
+        let r=db.query_one("SELECT nonce,ciphertext FROM aq_playbooks.encrypted_artifacts WHERE namespace=$1 AND digest=$2",&[&n,digest]).unwrap();
+        let (nonce, mut ciphertext): (Vec<u8>, Vec<u8>) = (r.get(0), r.get(1));
+        let original = ciphertext.clone();
+        ciphertext[0] ^= 1;
+        db.execute("UPDATE aq_playbooks.encrypted_artifacts SET ciphertext=$3 WHERE namespace=$1 AND digest=$2",&[&n,digest,&ciphertext]).unwrap();
+        assert!(s.load(&n).is_err());
+        db.execute("UPDATE aq_playbooks.encrypted_artifacts SET nonce=$3,ciphertext=$4 WHERE namespace=$1 AND digest=$2",&[&n,digest,&nonce,&original]).unwrap();
+        assert_same(&s.load(&n).unwrap().state, &state);
+    }
+}

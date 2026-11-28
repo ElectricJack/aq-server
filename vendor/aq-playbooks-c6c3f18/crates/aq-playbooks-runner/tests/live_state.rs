@@ -7982,3 +7982,16 @@ fn a_second_lapse_rejudges_from_the_earliest_change() {
     }
     assert_eq!(joined, [0, 10, 20, 30, 30]);
 }
+
+/// Storage writes `to_value_without_artifacts` on every commit: it is the
+/// State's own serialization with an empty `artifacts` map, and it decodes.
+#[test]
+fn stored_value_is_the_state_without_its_artifacts() {
+    let mut state = vendored_fixture();
+    assert!(!state.artifacts.is_empty());
+    let stored = state.to_value_without_artifacts().unwrap();
+    state.artifacts.clear();
+    assert_eq!(stored, serde_json::to_value(&state).unwrap());
+    let decoded: State = serde_json::from_value(stored).unwrap();
+    assert!(decoded.artifacts.is_empty());
+}
