@@ -28,8 +28,14 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
         .unwrap();
     sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,machine_key,slot) VALUES($1,'second','test-sibling','0.5.1',1,now(),'managed-pc',2)")
         .bind(sibling).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms) VALUES($1,1,'[]',$2)")
-        .bind(node).bind(chrono::Utc::now().timestamp_millis()).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO manual_worker_reports(node_id,max_slots,observed_at_ms) VALUES($1,1,$2)",
+    )
+    .bind(node)
+    .bind(chrono::Utc::now().timestamp_millis())
+    .execute(&pool)
+    .await
+    .unwrap();
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
     let node_path = format!("/api/worker-management/node/{node}");
@@ -233,7 +239,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .execute(&pool)
         .await
         .unwrap();
-    let poll = json!({"max_slots":4,"repositories":[repo],"reports":[]});
+    let poll = json!({"max_slots":4,"reports":[]});
     assert_eq!(
         call(
             &worker,
@@ -246,6 +252,9 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .0,
         StatusCode::UNAUTHORIZED
     );
+    // The worker takes every repository from the server, so its poll carries
+    // no repository list; the report still refreshes.
+    let before = chrono::Utc::now().timestamp_millis();
     assert_eq!(
         call(
             &worker,
@@ -258,6 +267,15 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .0,
         StatusCode::OK
     );
+    let (max_slots, observed): (i32, i64) = sqlx::query_as(
+        "SELECT max_slots,observed_at_ms FROM manual_worker_reports WHERE node_id=$1",
+    )
+    .bind(node)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(max_slots, 4);
+    assert!(observed >= before, "the poll refreshes the worker report");
     selected_launch_pins_snapshot(&f, &admin, &worker, &pool, &snapshot_digest, &poll).await;
     let id = Uuid::new_v4();
     let launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
@@ -312,7 +330,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     assert_eq!(response["sessions"][0]["status"], "preparing");
     assert_eq!(response["pending_count"], 1, "a new launch gets priority");
     let running = json!({"id":id,"status":"running","stage":"Ready to connect","snapshot":"real fixture screen","acknowledged":[]});
-    let report = json!({"max_slots":4,"repositories":[repo],"reports":[running]});
+    let report = json!({"max_slots":4,"reports":[running]});
     let (status, leased) = call(
         &worker,
         "/v1/worker/manual-agents",
@@ -2088,7 +2106,7 @@ async fn swarm_manual_poll_explains_zero_limit_and_rejects_report_admission_bypa
         .await
         .unwrap();
     let worker = build_worker_router(f.state.clone());
-    let report = json!({"max_slots":2,"repositories":[],"providers":["openai"],"reports":[{"id":id,"status":"preparing","stage":"Bypass"}]});
+    let report = json!({"max_slots":2,"providers":["openai"],"reports":[{"id":id,"status":"preparing","stage":"Bypass"}]});
     let (status, body) = call(
         &worker,
         "/v1/worker/manual-agents",
@@ -2117,7 +2135,7 @@ async fn swarm_manual_poll_explains_zero_limit_and_rejects_report_admission_bypa
         .execute(&pool)
         .await
         .unwrap();
-    let poll = json!({"max_slots":2,"repositories":[],"providers":["openai"],"reports":[]});
+    let poll = json!({"max_slots":2,"providers":["openai"],"reports":[]});
     let (status, body) = call(
         &worker,
         "/v1/worker/manual-agents",

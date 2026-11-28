@@ -20,6 +20,16 @@ delegated attempt credentials are refused. Worker mutations are bound to the
 original node, and revocation is checked while its row is locked. A stopped
 project/worker stops rolling authorization; drain preserves running sessions.
 
+The worker poll reports `max_slots`, `providers`, `busy` and session `reports`;
+it carries no repository list (2026-11-28: workers take every repository from
+the server, aq-worker PR #135). Each poll refreshes `manual_worker_reports`.
+Setting slots needs a report fresher than 15 s, and starting a session needs a
+fresh report that names the session's provider: any live worker with the
+provider can start a session for any bound project the owner allows, and the
+session's repository comes from the project binding. Migration 191 drops the
+former repository column, so a server older than format 191 cannot use the
+database.
+
 The worker's optional `[manual]` service configuration names an absolute
 operator-installed Podman client, hard slot bound (1–8), and optional
 `source_slugs` mapping installed repository IDs to explicit GitHub slugs. No
