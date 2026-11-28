@@ -426,6 +426,7 @@ mod tests {
             facts: facts.clone(),
             facts_version: "settings-1".into(),
             previous: None,
+            previous_cases: vec![],
         };
         let saved = crate::check_saved(&draft, &cases, &inputs, &Default::default())
             .unwrap_or_else(|refusal| panic!("{refusal:?}"));
@@ -597,6 +598,7 @@ mod tests {
             facts: serde_json::from_str(&read("facts.json")).unwrap(),
             facts_version: "settings-7".into(),
             previous: None,
+            previous_cases: vec![],
         };
         let draft = serde_json::from_str(&read("draft.json")).unwrap();
         let saved = crate::check_saved(&draft, &cases, &inputs, &Default::default())
