@@ -200,10 +200,10 @@ async fn reserve_launch(conn: &mut sqlx::PgConnection, node: Uuid, spec: &Value)
             "There are already 256 pending or running manual agents",
         ));
     }
-    let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN manual_worker_reports r ON r.node_id=n.id WHERE n.id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2 AND r.repositories @> $3::jsonb AND r.providers @> $4::jsonb)").bind(node).bind(now()-15000).bind(json!([spec["repository_id"]])).bind(json!([spec["provider"]])).fetch_one(&mut *conn).await?;
+    let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN manual_worker_reports r ON r.node_id=n.id WHERE n.id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2 AND r.providers @> $3::jsonb)").bind(node).bind(now()-15000).bind(json!([spec["provider"]])).fetch_one(&mut *conn).await?;
     if !available {
         return Err(conflict(
-            "This worker has not reported interactive support for the project",
+            "This worker has not reported interactive support for the provider",
         ));
     }
     if aq_machine_control::management::capacity(&mut *conn, node)

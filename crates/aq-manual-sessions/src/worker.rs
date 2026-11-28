@@ -10,7 +10,6 @@ use scheduler::Scheduler;
 #[serde(deny_unknown_fields)]
 struct Poll {
     max_slots: u32,
-    repositories: Vec<Uuid>,
     #[serde(default = "legacy_providers")]
     providers: Vec<String>,
     #[serde(default)]
@@ -69,7 +68,7 @@ async fn poll(
     if desired.as_deref() == Some("stopped") || limits.removed {
         sqlx::query("UPDATE manual_agent_sessions SET desired_running=false WHERE node_id=$1 AND stopped_at_ms IS NULL").bind(node).execute(&mut *tx).await?;
     }
-    sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms,providers) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET max_slots=EXCLUDED.max_slots,repositories=EXCLUDED.repositories,observed_at_ms=EXCLUDED.observed_at_ms,providers=EXCLUDED.providers").bind(node).bind(v.max_slots as i32).bind(json!(v.repositories)).bind(at).bind(json!(v.providers)).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,observed_at_ms,providers) VALUES($1,$2,$3,$4) ON CONFLICT(node_id) DO UPDATE SET max_slots=EXCLUDED.max_slots,observed_at_ms=EXCLUDED.observed_at_ms,providers=EXCLUDED.providers").bind(node).bind(v.max_slots as i32).bind(at).bind(json!(v.providers)).execute(&mut *tx).await?;
     let owned = update_reports(&v.reports, &mut tx, node, at).await?;
     // A stopped/disabled project revokes the session's rolling lease.
     sqlx::query("UPDATE manual_agent_sessions m SET desired_running=false WHERE node_id=$1 AND stopped_at_ms IS NULL AND NOT EXISTS(SELECT 1 FROM project_execution_bindings p WHERE p.project_id=m.project_id AND p.binding->>'enabled'='true')").bind(node).execute(&mut *tx).await?;
@@ -111,9 +110,7 @@ async fn poll(
 
 impl Poll {
     fn validate(&self) -> Result<()> {
-        let valid_limits = (1..=8).contains(&self.max_slots)
-            && self.repositories.len() <= 16
-            && self.reports.len() <= 32;
+        let valid_limits = (1..=8).contains(&self.max_slots) && self.reports.len() <= 32;
         let providers = self.providers.len() <= 2
             && self
                 .providers
