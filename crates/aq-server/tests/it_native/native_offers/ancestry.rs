@@ -579,7 +579,10 @@ async fn a_completed_blocker_whose_pushed_result_is_not_merged_keeps_its_depende
     let reason = f.refusal().await.unwrap();
     assert_eq!(reason["code"], "delivery_ancestry_wait");
     assert_eq!(reason["wait"]["reason"], "prerequisite_not_delivered");
-    assert_eq!(reason["wait"]["prerequisite"], json!(first));
+    // Both blockers are undelivered; the wait names the lowest task id
+    // (`undelivered` orders by `task_id`, and PostgreSQL and `Uuid` both
+    // order UUIDs bytewise). The ids are random, so `first` alone is flaky.
+    assert_eq!(reason["wait"]["prerequisite"], json!(first.min(second)));
     assert!(
         f.operations("contains").is_empty(),
         "no ancestry check runs for an undelivered result"

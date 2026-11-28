@@ -3,7 +3,7 @@
 //! are `aq_playbook_domain::host9`.
 use super::*;
 use aq_playbook_domain::host9::{self, Provenance, WorkFacts};
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 use aq_playbook_domain::host10;
 use aq_playbook_domain::route_effect::{RouteTarget, RoutingFailure};
 use aq_routing::{Route, Source, Written, classify::Options};
@@ -21,7 +21,7 @@ pub trait RoutingPort: Send + Sync {
     /// Writes the router's route for the task at `version`, or clears it.
     async fn write(&self, at: (Uuid, Uuid, u64), route: Option<&Route>) -> Result<Written>;
     /// The project's environments (spec 0017 §5.4).
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     async fn environments(&self, project: Uuid) -> Result<host10::Environments>;
 }
 
@@ -77,7 +77,7 @@ impl RoutingPort for ServerRouting {
         };
         written.map_err(|_| Error::Unknown)
     }
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     async fn environments(&self, project: Uuid) -> Result<host10::Environments> {
         let (state, unknown) = (&self.0, |_| Error::Unknown);
         let binding = (crate::project_bindings::current(state, project).await).map_err(unknown)?;
@@ -142,7 +142,6 @@ impl Service {
         intent: &Intent,
     ) -> Result<HostResult> {
         let (input, name) = (&intent.input, intent.command.name.as_str());
-        #[cfg(feature = "delivery_playbook")]
         if name == "work.read" && self.profile.is_delivery() && intent.command.version != "1.0.0" {
             return self.read_delivery(tx, input, &intent.command.version).await;
         }
@@ -207,10 +206,7 @@ impl Service {
         ))
     }
 
-    #[cfg_attr(
-        not(all(feature = "delivery_playbook", feature = "project_environments")),
-        allow(unused_variables)
-    )]
+    #[cfg_attr(not(feature = "project_environments"), allow(unused_variables))]
     async fn write_route(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -240,7 +236,7 @@ impl Service {
         };
         // Spec 0017 §5.4: a routed environment is one the project allows
         // that provides every need; a refusal says which and why.
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         if let Some(environment) = route.environment.as_deref() {
             let environments = routing.environments(target.project).await?;
             let needs = host10::needs(metadata);
@@ -276,7 +272,6 @@ impl Service {
     /// and 2.7.0 ones add the task's acceptance criteria and the result's
     /// conclusion (2.7.0's up to 4096 bytes), and 2.8.0's adds the head the
     /// pull request's checks were evaluated on.
-    #[cfg(feature = "delivery_playbook")]
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -336,7 +331,6 @@ impl Service {
 
     /// The whole final message the worker posted as a task comment for the
     /// attempt of `latest` (the report's conclusion is bounded to 512 bytes).
-    #[cfg(feature = "delivery_playbook")]
     async fn final_message(
         &self,
         task: Uuid,
@@ -435,7 +429,7 @@ impl Service {
     /// What a `not_offered` task is asked about again on: the Settings
     /// offers and, on catalog 2.5.0, the project's environments.
     pub(crate) async fn offers_digest(&self, options: &Options, project: Uuid) -> Result<String> {
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         if self.profile.has_environments() {
             let environments = self.ports()?.routing.environments(project).await?;
             return Ok(environments.offers_digest(options));

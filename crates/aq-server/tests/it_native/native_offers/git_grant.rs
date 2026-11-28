@@ -1,4 +1,4 @@
-//! Spec 0016 §5.2 (feature `delivery_playbook`): an offer carries a git
+//! Spec 0016 §5.2: an offer carries a git
 //! grant, and a git client holding only the node credential clones and
 //! pushes the task ref through the worker route `/v1/git`. The server derives
 //! the grant from the attempt and enforces it: the attempt's node and

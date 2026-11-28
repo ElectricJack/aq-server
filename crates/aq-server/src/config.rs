@@ -41,7 +41,7 @@ pub struct Config {
     #[serde(default, deserialize_with = "aq_environment_templates::deserialize")]
     pub templates: Option<std::sync::Arc<aq_environment_templates::Allowlist>>,
     /// Spec 0017 §6.4: the AQ base template, recorded at startup.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     #[serde(default)]
     pub environment_base: Option<aq_environments::commands::Base>,
     #[serde(default)]
@@ -83,7 +83,6 @@ pub struct Config {
     #[serde(default)]
     pub supervisor_attachments: aq_supervisor_control::attachments::Limits,
     /// Epic 0 (spec 0016) `[delivery]`; without `[delivery.github]` the adapter is unavailable.
-    #[cfg(feature = "delivery_playbook")]
     #[serde(default, deserialize_with = "aq_delivery::github::deserialize")]
     pub delivery: Option<aq_delivery::github::DeliveryConfig>,
 }
@@ -375,7 +374,6 @@ fn validate_services(c: &Config) -> Result<(), (String, String)> {
             .validate()
             .map_err(|reason| ("result_media".into(), reason.into()))?;
     }
-    #[cfg(feature = "delivery_playbook")]
     if c.delivery.as_ref().is_some_and(|d| d.has_enrollment()) && c.source_retention.is_none() {
         return invalid(
             "delivery.project_allowlist",
@@ -467,7 +465,7 @@ mod tests {
             notifications: None,
             profiled_execution: None,
             templates: None,
-            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            #[cfg(feature = "project_environments")]
             environment_base: None,
             format_version: 1,
             environment: env,
@@ -508,7 +506,6 @@ mod tests {
             internal_work: None,
             playbook_authoring: Default::default(),
             supervisor_attachments: Default::default(),
-            #[cfg(feature = "delivery_playbook")]
             delivery: None,
         }
     }

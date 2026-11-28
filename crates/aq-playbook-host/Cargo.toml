@@ -5,15 +5,13 @@ edition.workspace = true
 publish.workspace = true
 
 [features]
-# Epic 0 (spec 0016): admits the delivery commands of host catalog 2.3.0.
-delivery_playbook = []
-# Spec 0017: admits the environment commands of host catalog 2.5.0 (with `delivery_playbook`).
+# Spec 0017: admits the environment commands of host catalog 2.5.0.
 project_environments = []
 
 [dependencies]
-aq-playbooks-model = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-model", version = "=0.2.0" }
-aq-playbooks-runner = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-runner", version = "=0.2.0" }
-aq-playbooks-postgres = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-postgres", version = "=0.2.0" }
+aq-playbooks-model = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-model", version = "=0.2.0" }
+aq-playbooks-runner = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-runner", version = "=0.2.0" }
+aq-playbooks-postgres = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-postgres", version = "=0.2.0" }
 postgres = "0.19"
 nix = { workspace = true, features = ["process", "signal"] }
 hex.workspace = true

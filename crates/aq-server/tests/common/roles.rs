@@ -86,6 +86,19 @@ async fn stored(pool: &sqlx::PgPool) -> bool {
         .await
         .unwrap()
 }
+/// Give a store whose `role_settings` predates migration 0142 that
+/// migration's delivery columns: the role store reads them with the rest of
+/// its settings row. Only the columns, not the format stamp, so the store's
+/// format stays at its prefix.
+pub async fn add_delivery_settings(pool: &sqlx::PgPool) {
+    let migration = include_str!("../../migrations/0142_delivery_settings.sql");
+    let (columns, stamp) = migration.split_once("UPDATE meta").unwrap();
+    assert!(stamp.contains("state_format_version"));
+    sqlx::raw_sql(columns)
+        .execute(pool)
+        .await
+        .expect("delivery settings columns on a historical fixture store");
+}
 /// Drop the role tables [`install`] gave a historical fixture store, so the
 /// store can be upgraded by its registered migrations.
 pub async fn remove_from_historical_store(pool: &sqlx::PgPool) {
@@ -174,6 +187,7 @@ pub async fn install(pool: &sqlx::PgPool, actor: Uuid) -> Snapshot {
             .execute(pool)
             .await
             .expect("role tables on a historical fixture store");
+        add_delivery_settings(pool).await;
         aq_role_settings::startup(pool, 0)
             .await
             .expect("install the shipped roles and profiles");

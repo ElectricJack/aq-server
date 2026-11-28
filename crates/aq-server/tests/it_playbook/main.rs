@@ -25,9 +25,8 @@ mod playbook_authoring;
 mod playbook_bridge;
 mod playbook_coding;
 mod playbook_contract;
-#[cfg(feature = "delivery_playbook")]
 mod playbook_delivery_document;
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 mod playbook_environments;
 mod playbook_findings_triggers;
 mod playbook_fixtures;
@@ -40,7 +39,7 @@ mod playbook_isolation;
 mod playbook_review_contract;
 // Authors the catalog 2.2.0 routing example on Host9/Host10, which the
 // routing record pinned to 2.5.0 (spec 0017) no longer is.
-#[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+#[cfg(not(feature = "project_environments"))]
 mod playbook_routing;
 mod playbook_work_completion;
 mod project_bindings;

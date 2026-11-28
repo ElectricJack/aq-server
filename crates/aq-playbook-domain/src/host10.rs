@@ -1,7 +1,7 @@
 //! Host catalog 2.3.0 (Host10), pure parts (Epic 0, spec 0016 section 6):
 //! the facts of a task's latest result for `work.read`, and the
 //! `aq.work.result_ready` event with its level-triggered emission rule. No
-//! I/O. Compiled in only with the cargo feature `delivery_playbook`.
+//! I/O.
 //!
 //! Code provides facts and events; a playbook decides. Nothing here says what
 //! a result is worth.
@@ -259,13 +259,13 @@ impl ResultReady {
 /// A project's environments as a routing document chooses among them (spec
 /// 0017 §5.4): the binding's default (`""` for none) and each allowed
 /// environment with what it provides.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Environments {
     pub default: String,
     pub allowed: Vec<(String, Vec<String>)>,
 }
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 impl Environments {
     /// Why a route may not choose `environment` (it is refused
     /// `not_offered`), if it may not: `{environment, allowed: false}` when the
@@ -302,7 +302,7 @@ impl Environments {
 
 /// What a task needs: its `aq:needs` labels, sorted and distinct (as
 /// `aq_project_policy::environments::needs` reads them for placement).
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub fn needs(metadata: &Value) -> Vec<String> {
     let needs = metadata["aq:needs"].as_array().into_iter().flatten();
     let needs: std::collections::BTreeSet<&str> = needs.filter_map(Value::as_str).collect();
@@ -310,7 +310,7 @@ pub fn needs(metadata: &Value) -> Vec<String> {
 }
 
 /// Catalog 2.5.0 (spec 0017 §6.4): `aq.environment.base_changed {project}`.
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 pub fn base_changed_event(
     event_id: Uuid,
     project: Uuid,

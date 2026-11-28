@@ -121,7 +121,6 @@ impl TaskWork<'_> {
         }
         crate::role_settings::level_hold(self.state, self.pool, &self.record.binding, node).await
     }
-    #[cfg(feature = "delivery_playbook")]
     async fn delivery_hold(
         &self,
         hold: Option<&aq_human_work::Hold>,
@@ -182,7 +181,6 @@ pub(super) async fn work(
         (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
         _ => None,
     };
-    #[cfg(feature = "delivery_playbook")]
     let graph_wait = aq_human_work::delivery::completion_wait(
         graph_wait,
         task.delivery_hold(hold.as_ref(), open, a.requested).await,
@@ -228,7 +226,6 @@ pub(super) async fn work(
     )
     .await
     .map_err(|_| unavailable())?;
-    #[cfg(feature = "delivery_playbook")]
     aq_human_work::delivery::show_followup(&r.pool, p, id, &mut readiness).await;
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],

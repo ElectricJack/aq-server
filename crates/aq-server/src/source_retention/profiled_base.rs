@@ -473,5 +473,4 @@ mod tests;
 #[cfg(all(test, feature = "test-support"))]
 mod actual_git_test;
 
-#[cfg(feature = "delivery_playbook")]
 pub(crate) mod workspace;

@@ -108,12 +108,9 @@ Your final answer is published automatically to this conversation with any confi
         code = code_access(harness),
     )
 }
-/// Code access needs the supervisor git route, which also needs delivery_playbook.
+/// Code access needs the supervisor git route.
 #[cfg(feature = "supervisor_full_access")]
 fn code_access(harness: &str) -> &'static str {
-    if !cfg!(feature = "delivery_playbook") {
-        return "";
-    }
     if harness == "claude" {
         r#"To sync a project's code, use mcp__aq__repo_sync with {"project_id":"PROJECT_ID"}, then use mcp__aq__repo_read with {"project_id":"PROJECT_ID","path":"RELATIVE_PATH"}. An empty path lists the checkout root. Code access is read-only: delegate changes to worker tasks.
 "#

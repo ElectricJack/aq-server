@@ -37,7 +37,6 @@ enum Client {
         base: String,
         token: Option<String>,
     },
-    #[cfg(feature = "delivery_playbook")]
     App {
         client: crate::github::GitHubClient,
         token: crate::github::InstallationToken,
@@ -75,7 +74,6 @@ impl Client {
                     .await
                     .map_err(|_| "github metadata is not JSON".into())
             }
-            #[cfg(feature = "delivery_playbook")]
             Self::App { client, token } => client
                 .send(
                     crate::github::ApiRequest::new(reqwest::Method::GET, path),
@@ -211,7 +209,6 @@ impl Adoption<'_> {
         config: &OnboardingConfig,
         repo: &GithubRepository,
     ) -> Result<Client, AdoptionError> {
-        #[cfg(feature = "delivery_playbook")]
         if let Some(settings) = self.github_app.filter(|app| {
             app.installations
                 .iter()
@@ -228,8 +225,6 @@ impl Adoption<'_> {
                 token,
             });
         }
-        #[cfg(not(feature = "delivery_playbook"))]
-        let _ = repo;
         Github {
             config,
             token: None,

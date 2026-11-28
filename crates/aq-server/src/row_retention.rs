@@ -13,8 +13,7 @@ pub async fn run(state: crate::AppState, mut stop: tokio::sync::watch::Receiver<
             break;
         }
         tokio::select! {
-            _ = notices.tick(), if cfg!(feature = "delivery_playbook") => {
-                #[cfg(feature = "delivery_playbook")]
+            _ = notices.tick() => {
                 if let Err(error) = aq_playbook_domain::scheduling_notices::notify_with_graph(
                     &state.store.pool,
                     (state.clock)().timestamp_millis(),

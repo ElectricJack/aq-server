@@ -1,4 +1,4 @@
-//! Spec 0016 §5.2 (feature `delivery_playbook`): the offer's git grant and the
+//! Spec 0016 §5.2: the offer's git grant and the
 //! worker route `/v1/git/<repository>/…` to central aq-git, behind the node
 //! credential and the `AQ-Attempt` header. See `aq_delivery::git_grant`.
 use crate::{AppState, error::AppError, profiled_execution::source::Observation};

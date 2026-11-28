@@ -37,19 +37,16 @@ pub trait Server: Host + Deployer {
     fn config(&self) -> Config;
     /// The catalog this server uses for this source.
     fn catalog(&self, source: &crate::SourceRecord) -> Result<aq_playbooks_model::Registry> {
-        #[cfg(feature = "delivery_playbook")]
         if source.id == crate::builtin::ROUTING && self.routing_host10().is_some() {
             return crate::request::catalog_2_3();
         }
         crate::request::pinned_catalog(source)
     }
-    #[cfg(feature = "delivery_playbook")]
     fn routing_host10(&self) -> Option<crate::continuity::Target> {
         None
     }
     /// The built-in delivery record for the namespace the engine runs
     /// ([`crate::builtin::delivery`]); none while the engine is closed.
-    #[cfg(feature = "delivery_playbook")]
     fn delivery(&self) -> Option<crate::SourceRecord> {
         Some(crate::builtin::delivery(false))
     }

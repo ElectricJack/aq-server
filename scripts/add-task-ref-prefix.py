@@ -4,8 +4,7 @@
   scripts/add-task-ref-prefix.py PROJECT_ID            # show what would change
   scripts/add-task-ref-prefix.py PROJECT_ID --apply    # change it
 
-One-off migration. A server built with the `delivery_playbook` feature onboards
-a repository with `allowed_target_prefixes: ["refs/heads/aq/"]`, so each task's
+One-off migration. The server onboards a repository with `allowed_target_prefixes: ["refs/heads/aq/"]`, so each task's
 branch `refs/heads/aq/<task-id>` may be pushed to central aq-git and published.
 Bindings registered before that lack the prefix. For one project this script:
 

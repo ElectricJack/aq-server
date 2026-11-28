@@ -44,7 +44,6 @@ impl Selected {
         };
         // Spec 0016 §4: a named ref follows the head central aq-git last synced
         // from the remote and retained, synced now when older than Settings allow.
-        #[cfg(feature = "delivery_playbook")]
         if enrolled {
             let synced = sync_current(reader, &reference, _offer).await?;
             return self.apply_sync(reader, synced);
@@ -181,7 +180,6 @@ impl Selected {
             bytes,
         })
     }
-    #[cfg(feature = "delivery_playbook")]
     fn apply_sync(
         &mut self,
         reader: Observer<'_>,
@@ -200,7 +198,6 @@ impl Selected {
         );
         Ok(sha1(synced.head))
     }
-    #[cfg(feature = "delivery_playbook")]
     pub(super) async fn verify_ancestry(
         &mut self,
         reader: Observer<'_>,
@@ -257,7 +254,6 @@ fn sha1(hex: String) -> ObjectId {
         hex,
     }
 }
-#[cfg(feature = "delivery_playbook")]
 async fn sync_current(
     reader: Observer<'_>,
     reference: &str,

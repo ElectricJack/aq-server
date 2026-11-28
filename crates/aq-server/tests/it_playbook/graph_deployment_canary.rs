@@ -70,9 +70,7 @@ struct Canary {
     plugin: PathBuf,
     container: String,
     bindings: PathBuf,
-    #[cfg(feature = "delivery_playbook")]
     scope: GrantScope,
-    #[cfg(feature = "delivery_playbook")]
     artifact: String,
 }
 
@@ -333,9 +331,7 @@ async fn prepare() -> Canary {
         plugin,
         container,
         bindings,
-        #[cfg(feature = "delivery_playbook")]
         scope,
-        #[cfg(feature = "delivery_playbook")]
         artifact: artifact.digest,
     }
 }
@@ -423,6 +419,5 @@ async fn merged_graph_rolls_out_by_verified_digest() {
     canary.driver.stop().await.unwrap();
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[path = "graph_deployment_automatic.rs"]
 mod automatic;

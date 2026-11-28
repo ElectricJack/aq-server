@@ -1,8 +1,7 @@
 //! The asynchronous delivery commands of host catalog 2.3.0 (Epic 0, spec 0016
 //! section 6.2): `main.sync`, `branch.publish`, `pull_request.open`,
 //! `pull_request.await_checks`, `pull_request.merge` and `pull_request.close`,
-//! over the GitHub App adapter and aq-git. Compiled in only with the cargo
-//! feature `delivery_playbook`.
+//! over the GitHub App adapter and aq-git.
 //!
 //! Code provides operations, facts and events; a playbook decides. Each
 //! method makes the calls its command needs and reports a catalog outcome and
@@ -111,8 +110,9 @@ pub struct CheckLog {
 pub struct Completion {
     pub outcome: &'static str,
     pub output: Value,
-    /// The pull request as this command left it, when it touched one.
-    pub pull_request: Option<PullRequestObserved>,
+    /// The pull request as this command left it, when it touched one. Boxed
+    /// so that a completion stays small inside [`Step`].
+    pub pull_request: Option<Box<PullRequestObserved>>,
     /// Diagnostic retained with the operation, outside the versioned catalog response.
     pub diagnostic: Option<&'static str>,
 }
@@ -139,7 +139,7 @@ impl Completion {
         Self::new("closed", json!({}))
     }
     fn with(mut self, pull_request: PullRequestObserved) -> Self {
-        self.pull_request = Some(pull_request);
+        self.pull_request = Some(Box::new(pull_request));
         self
     }
 }

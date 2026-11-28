@@ -80,7 +80,6 @@ async fn gather_source_locked(
     if !enrolled {
         return gather_confirmed_source_locked(tx, r).await;
     }
-    #[cfg(feature = "delivery_playbook")]
     if let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
         .await
         .map_err(db)?
@@ -92,7 +91,6 @@ async fn gather_source_locked(
     Ok(SourceFacts::default())
 }
 
-#[cfg(feature = "delivery_playbook")]
 pub(crate) async fn retained_bundle_head(
     tx: &mut Transaction<'_, Postgres>,
     result: &results::RecordedResult,
@@ -207,7 +205,6 @@ impl Gathered {
 /// lock it stores what [`gather_locked`] reads as the result's facts (replaced
 /// on a duplicate record) and returns them. No settlement row, publication,
 /// rework or completion: the result waits for a playbook's decision.
-#[cfg(feature = "delivery_playbook")]
 pub async fn record_facts(state: &AppState, report_id: Uuid) -> Result<Value> {
     let mut tx = super::automatic::begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;

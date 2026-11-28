@@ -47,7 +47,7 @@ async fn run() -> Result<()> {
     if args.len() == 2 && args[1] == "mcp" {
         return aq_supervisor_host::mcp::run().await;
     }
-    #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+    #[cfg(feature = "supervisor_full_access")]
     if args.len() == 4 && args[1] == "repo" && args[2] == "sync" {
         let project = args[3]
             .parse()

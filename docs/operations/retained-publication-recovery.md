@@ -6,7 +6,7 @@ change, acceptance, release, merge or deployment. An operator must separately
 authorize use of the recovery command after ordinary review and release checks.
 No command in this procedure sends `publish` or `operation.resolve`.
 
-The commands are available in a server built with `delivery_playbook`. An owner,
+The commands are available in every server build. An owner,
 or a supervisor with the existing owner bridge (`supervisor_full_access`), may
 inspect/reconcile. A project supervisor is restricted to its own project path.
 Agent grants are unchanged. The configured `source_retention.git_socket` must

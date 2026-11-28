@@ -271,7 +271,6 @@ pub async fn adopt(state: &AppState, actor: Uuid, request: AdoptRequest) -> Resu
         pool: &state.store.pool,
         socket: git_socket(state),
         onboarding: state.config.onboarding.as_ref(),
-        #[cfg(feature = "delivery_playbook")]
         github_app: state
             .config
             .delivery

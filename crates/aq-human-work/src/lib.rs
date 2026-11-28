@@ -4,7 +4,6 @@
 //!
 //! The all-project task list joins Graph's page to AQ's current owner and project bindings.
 pub mod attribution;
-#[cfg(feature = "delivery_playbook")]
 pub mod delivery;
 pub mod epic_retirement;
 pub mod history;
@@ -134,7 +133,6 @@ pub use holds::{
     holding_executions, launch_retry_wait, owner_retry_wait, recorded_hold,
     show_no_change_settlement, task_hold,
 };
-#[cfg(feature = "delivery_playbook")]
 pub use holds::{delivery_hold, result_waiting};
 mod readiness;
 pub use readiness::{TaskDependencies, readiness};
@@ -168,7 +166,7 @@ pub use execution::{
 mod downstream;
 pub use downstream::blocked_by;
 
-#[cfg(all(test, feature = "delivery_playbook"))]
+#[cfg(test)]
 mod delivery_tests {
     #[test]
     fn a_waiting_result_names_the_missing_delivery_policy() {

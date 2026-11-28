@@ -88,17 +88,15 @@ impl Driver {
             "asking for routes",
             self.service.collect_route_needed(&self.runtime, 8).await,
         );
-        #[cfg(feature = "delivery_playbook")]
         partial.defer(
             "announcing results",
             self.service.collect_result_ready(&self.runtime, 8).await,
         );
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        #[cfg(feature = "project_environments")]
         partial.defer(
             "announcing base changes",
             self.service.collect_base_changes(&self.runtime, 8).await,
         );
-        #[cfg(feature = "delivery_playbook")]
         partial.defer(
             "running delivery operations",
             self.service
@@ -208,7 +206,6 @@ impl Driver {
         let cancelled = cancel.await.map_err(host_error);
         partial.defer("cancelling effects", cancelled.clone());
         cancelled?;
-        #[cfg(feature = "delivery_playbook")]
         if self.service.profile.is_delivery() {
             let recovery = self.delivery_recovery.tick(
                 &self.service.pool,
@@ -293,7 +290,6 @@ impl Driver {
         };
         let complete = match status {
             Ok(status) => {
-                #[cfg(feature = "delivery_playbook")]
                 if event.contract.name == "aq.work.result_ready" {
                     self.service
                         .record_delivery_runs(&self.runtime, id, event, &status["runs"])

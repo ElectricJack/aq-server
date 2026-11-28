@@ -7,10 +7,9 @@ description = "Spec 0017: environment versions in the database and the one catal
 
 [features]
 # Spec 0017: the whole crate, off by default (aq-server's `project_environments`).
-project_environments = ["dep:aq-project-policy", "dep:aq-role-settings", "dep:aq-protocol", "dep:aq-selection", "dep:axum"]
-# With spec 0016's `/v1/git` route: the builder's fetch-only job grant.
-# And `aq environment try`'s checkpoint, `refs/heads/aq-try/<attempt>`.
-delivery_playbook = ["project_environments", "dep:aq-delivery", "aq-delivery/delivery_playbook", "aq-delivery/environment_try", "dep:tokio", "dep:async-trait"]
+# With spec 0016's `/v1/git` route: the builder's fetch-only job grant, and
+# `aq environment try`'s checkpoint, `refs/heads/aq-try/<attempt>`.
+project_environments = ["dep:aq-project-policy", "dep:aq-role-settings", "dep:aq-protocol", "dep:aq-selection", "dep:axum", "dep:aq-delivery", "aq-delivery/environment_try", "dep:tokio", "dep:async-trait"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }

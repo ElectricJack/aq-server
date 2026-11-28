@@ -1,4 +1,4 @@
-//! Git grants (spec 0016 §5.2, feature `delivery_playbook`). An offer carries
+//! Git grants (spec 0016 §5.2). An offer carries
 //! a grant, and the attempt's node fetches from and pushes to central aq-git
 //! through the server's `/v1/git/<repository>/…` route with its own node
 //! credential, naming the attempt in the `AQ-Attempt` header. This module

@@ -1,4 +1,3 @@
-#[cfg(feature = "delivery_playbook")]
 use crate::delivery;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
@@ -135,18 +134,16 @@ impl Hold {
 
 /// Format the current scheduling hold and any recorded result for that same attempt.
 pub async fn recorded_hold(
-    _pool: &PgPool,
-    _project: Uuid,
-    _task: Uuid,
+    pool: &PgPool,
+    project: Uuid,
+    task: Uuid,
     current: Option<&aq_machine_control::holds::Current>,
 ) -> Option<Value> {
     let h = current?;
     let phrase = aq_machine_control::holds::phrase(&h.reason);
     let shown = task_hold(h.attempt_id, &h.status, &h.reason, &phrase);
-    #[cfg(feature = "delivery_playbook")]
     if aq_machine_control::holds::is_budget_hold(&h.reason)
-        && let Some(evidence) =
-            delivery::budget_evidence(_pool, _project, _task, h.attempt_id).await
+        && let Some(evidence) = delivery::budget_evidence(pool, project, task, h.attempt_id).await
     {
         let mut shown = shown;
         if let Some(Value::String(message)) = shown.get_mut("message") {
@@ -174,7 +171,6 @@ pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Va
 }
 
 /// A delivery hold has a result and reason even after the playbook has ended.
-#[cfg(feature = "delivery_playbook")]
 pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&str>) -> Value {
     let why = match reason {
         "returns_exhausted" => "the delivery playbook reached its repair-return limit",
@@ -215,7 +211,6 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
 /// while no delivery playbook is active, the result waits and nothing else
 /// completes, publishes or reworks it. `delivery_policy` says whether a
 /// delivery playbook is active for the task's project.
-#[cfg(feature = "delivery_playbook")]
 pub fn result_waiting(attempt: Uuid, result: Uuid, delivery_policy: bool) -> Value {
     let (code, owner, wake, message) = match delivery_policy {
         false => (

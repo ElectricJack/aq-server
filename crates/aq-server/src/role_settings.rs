@@ -64,7 +64,6 @@ async fn write(
     if saved.is_ok() {
         // The routing document or what the levels offer may have changed.
         crate::routing::author(&state).await;
-        #[cfg(feature = "delivery_playbook")]
         aq_playbook_authoring::author_saved(&state, uri.path()).await;
     }
     http::respond(saved, error)
@@ -96,7 +95,7 @@ pub(crate) async fn install(state: &AppState) -> Result<(), AppError> {
     let started = aq_role_settings::startup(&state.store.pool, now_ms)
         .await
         .map_err(error)?;
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[cfg(feature = "project_environments")]
     if let Some(base) = &state.config.environment_base {
         let recorded = aq_environments::commands::record_base(&state.store.pool, base).await;
         recorded.map_err(crate::error::db)?;

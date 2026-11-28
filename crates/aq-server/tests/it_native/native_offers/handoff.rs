@@ -463,7 +463,6 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     assert_eq!(rows[0].3.as_deref(), Some("task_closed"), "{rows:?}");
 }
 
-#[cfg(feature = "delivery_playbook")]
 async fn workspace_poll(c: &Case) -> Value {
     use axum::body::Body;
     use http_body_util::BodyExt;
@@ -485,7 +484,7 @@ async fn workspace_poll(c: &Case) -> Value {
         .unwrap()
 }
 
-#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[cfg(feature = "project_environments")]
 #[tokio::test]
 async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
     use super::environments::{TEMPLATE, definition_of, on_web, ready, republish};
@@ -605,7 +604,6 @@ async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
     assert_eq!(delivery.original.grant.binding.attempt_id, attempt);
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
     let c = native_offer::setup().await;

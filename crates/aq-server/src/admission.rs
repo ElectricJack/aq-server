@@ -72,7 +72,6 @@ pub enum Class {
     AgentCommand,
     /// `/v1/git/…` (spec 0016 §5.2): the bulk slots, but the transfer's own
     /// deadline is Settings `git_transfer_timeout_ms`, not this gate's.
-    #[cfg(feature = "delivery_playbook")]
     GitTransfer,
 }
 pub(crate) fn execution_cancel_path(path: &str) -> bool {
@@ -100,7 +99,6 @@ pub fn classify(path: &str) -> Class {
     {
         return Class::AgentCommand;
     }
-    #[cfg(feature = "delivery_playbook")]
     if path.starts_with("/v1/git/") || path.starts_with("/v1/supervisor/git/") {
         return Class::GitTransfer;
     }
@@ -298,7 +296,6 @@ pub async fn gate(
         Class::TerminalInteractive => (&admission.terminal_interactive, Duration::from_secs(5)),
         Class::TerminalRead => (&admission.terminal_read, Duration::from_secs(5)),
         Class::AgentCommand => (&admission.agent_command, Duration::from_secs(20)),
-        #[cfg(feature = "delivery_playbook")]
         Class::GitTransfer => (&admission.bulk, Duration::MAX),
     };
     let Ok(_permit) = slots.try_acquire() else {
@@ -339,7 +336,6 @@ mod output_poll_tests {
         ));
         assert_eq!(classify("/v1/supervisor/owner/a"), Class::AgentCommand);
     }
-    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn git_transfers_take_their_own_lane_outside_the_bulk_deadline() {
         assert_eq!(classify("/v1/git/r/git-receive-pack"), Class::GitTransfer);

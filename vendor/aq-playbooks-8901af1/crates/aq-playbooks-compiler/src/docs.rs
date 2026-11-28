@@ -50,12 +50,10 @@ fn contract_notes<'a>(all: &'a Value, kind: &str, name: &str) -> Option<&'a Valu
     all.get(kind)?.get(name)
 }
 
-/// Catalog 2.3.0 (Epic 0, delivery by playbook), not yet the pinned catalog.
-#[cfg(feature = "delivery_playbook")]
+/// Catalog 2.3.0 (Epic 0, delivery by playbook).
 pub const CATALOG_2_3_REGISTRY: &str =
     include_str!("../../../contracts/aq-host-2.3.0/registry.json");
 /// What the host says about each contract of catalog 2.3.0.
-#[cfg(feature = "delivery_playbook")]
 pub const CATALOG_2_3_NOTES: &str = include_str!("../../../contracts/aq-host-2.3.0/notes.json");
 
 /// Catalog 2.4.0, the host profile with decision notes and subtree activation.
@@ -84,7 +82,6 @@ pub fn published_notes(kind: &str, name: &str, contract: &Value) -> Option<Value
 }
 
 /// [`catalog`] for catalog 2.3.0 and its notes.
-#[cfg(feature = "delivery_playbook")]
 pub fn catalog_2_3(
     commands: &BTreeSet<String>,
     events: &BTreeSet<String>,

@@ -462,8 +462,8 @@ join, never through `operation.get`.
 ## AQ host catalog 2.3.0 (delivery by playbook, Epic 0)
 
 The [2.3.0 bundle](../contracts/aq-host-2.3.0/README.md) is published beside
-the earlier ones and replaces none of them. It is compiled in only with the
-cargo feature `delivery_playbook` (`catalog_v2_3`). It adds the event
+the earlier ones and replaces none of them. It is part of ordinary builds
+(`catalog_v2_3`). It adds the event
 `aq.work.result_ready`, the delivery commands (`work.complete`, `work.return`,
 `work.hold`, `supervisor.notify`, `main.sync`, `branch.publish`,
 `pull_request.open`, `pull_request.await_checks`, `pull_request.merge`,

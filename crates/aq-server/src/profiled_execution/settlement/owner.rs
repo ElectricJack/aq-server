@@ -267,7 +267,6 @@ impl Service {
             },
         )?;
         let eligible = plan.disposition == Disposition::Eligible;
-        #[cfg(feature = "delivery_playbook")]
         if eligible
             && !crate::task_workspace_delivery::gate(&self.state, &mut tx, &result, true).await?
         {

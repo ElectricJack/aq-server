@@ -2,8 +2,7 @@
 //! side in PostgreSQL: which results wait for a playbook's decision, the facts
 //! of a task's latest result, and the emission state of
 //! `aq.work.result_ready`. The rules are in [`crate::host10`]; this module
-//! only reads and writes rows. Compiled in only with the cargo feature
-//! `delivery_playbook`.
+//! only reads and writes rows.
 //!
 //! Nothing here decides anything about a result. `delivery_decisions`,
 //! `delivery_main_heads` and `delivery_pull_requests` are written by the

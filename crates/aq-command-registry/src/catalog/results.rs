@@ -2,7 +2,6 @@
 use super::*;
 
 pub(super) const COMMANDS: &[CommandSpec] = &[
-    #[cfg(feature = "delivery_playbook")]
     read(
         "result.publication.show",
         op::RESULT_READ,
@@ -13,7 +12,6 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/publication",
         &[],
     ))),
-    #[cfg(feature = "delivery_playbook")]
     owner_write(
         "result.publication.reconcile",
         "result.publication.reconcile",

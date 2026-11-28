@@ -40,7 +40,6 @@ pub async fn assess_task_in(
     now: u64,
 ) -> Result<Assessment, AppError> {
     let assessment = assess_on(conn, task, now, assess).await?;
-    #[cfg(feature = "delivery_playbook")]
     if let Assessment::Replace(_) = assessment
         && let Some(held) =
             (aq_delivery::git_grant::held_gate(conn, task).await).map_err(internal)?
@@ -203,7 +202,6 @@ pub async fn fresh_predecessor(
 }
 
 /// The stamped owner must finish this release before normal scheduling can offer it.
-#[cfg(feature = "delivery_playbook")]
 pub(super) async fn pending_publication_owner(
     db: &mut sqlx::PgConnection,
     attempt: Uuid,
@@ -243,7 +241,6 @@ pub async fn release_as(
     sql::lock_release(&mut tx, task, replacement.predecessor)
         .await
         .map_err(db)?;
-    #[cfg(feature = "delivery_playbook")]
     if let Some(required) = pending_publication_owner(&mut tx, replacement.predecessor).await?
         && owner_operation != Some(required)
     {

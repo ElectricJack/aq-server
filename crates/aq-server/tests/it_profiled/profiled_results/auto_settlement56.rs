@@ -42,7 +42,6 @@ pub(crate) struct AutoEnv {
     bodies: Arc<Mutex<Vec<Value>>>,
     recovery: Arc<GraphRecovery>,
     _directory: tempfile::TempDir,
-    #[cfg(feature = "delivery_playbook")]
     _task_ref: Option<super::pushed_ref::TaskRef>,
 }
 
@@ -119,19 +118,13 @@ pub(crate) async fn auto_env_source(
 }
 
 enum ReportSource {
-    Legacy {
-        changed: bool,
-    },
-    #[cfg(feature = "delivery_playbook")]
-    Pushed {
-        changed: bool,
-    },
+    Legacy { changed: bool },
+    Pushed { changed: bool },
 }
 impl ReportSource {
     fn changed(&self) -> bool {
         match self {
             Self::Legacy { changed } => *changed,
-            #[cfg(feature = "delivery_playbook")]
             Self::Pushed { changed } => *changed,
         }
     }
@@ -144,7 +137,6 @@ async fn finish_auto_env(
 ) -> AutoEnv {
     let changed = report_source.changed();
     let auth = context(&f).await;
-    #[cfg(feature = "delivery_playbook")]
     let task_ref = match report_source {
         ReportSource::Pushed { changed } => {
             Some(record_push(&mut f, &mut report, &auth, changed).await)
@@ -153,7 +145,6 @@ async fn finish_auto_env(
     };
     let source = match report_source {
         ReportSource::Legacy { .. } => record_legacy(&f, &mut report, &auth).await,
-        #[cfg(feature = "delivery_playbook")]
         ReportSource::Pushed { .. } => report.report_id,
     };
 
@@ -190,12 +181,10 @@ async fn finish_auto_env(
         bodies: graph.bodies,
         recovery: graph.recovery,
         _directory: graph.directory,
-        #[cfg(feature = "delivery_playbook")]
         _task_ref: task_ref,
     }
 }
 
-#[cfg(feature = "delivery_playbook")]
 async fn record_push(
     f: &mut Fixture,
     report: &mut ResultReport,
@@ -315,7 +304,6 @@ async fn settlement_row(f: &Fixture, report: Uuid) -> (String, Option<String>) {
 }
 
 /// How many settlement rows the report has (0 or 1).
-#[cfg(feature = "delivery_playbook")]
 async fn settlement_rows(f: &Fixture, report: Uuid) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM profiled_auto_settlements WHERE report_id=$1")
         .bind(report)
@@ -325,7 +313,6 @@ async fn settlement_rows(f: &Fixture, report: Uuid) -> i64 {
 }
 
 /// The facts the result path recorded for the report (spec 0016 section 7).
-#[cfg(feature = "delivery_playbook")]
 async fn result_facts(f: &Fixture, report: Uuid) -> Option<Value> {
     sqlx::query_scalar("SELECT facts FROM delivery_result_facts WHERE report_id=$1")
         .bind(report)
@@ -400,6 +387,5 @@ pub(crate) use publication::{admitted, evidence_rows, head_of, ready_candidate};
 /// is asked for, only that the result is the attempt's current report head,
 /// that the attempt still holds the task, that its stop is proven and that it
 /// was neither revoked nor cancelled.
-#[cfg(feature = "delivery_playbook")]
 #[path = "auto_settlement56/playbook.rs"]
 mod playbook;

@@ -755,7 +755,6 @@ async fn offers(
                             }
                             _ => hold_memo::forget(task),
                         }
-                        #[cfg(feature = "delivery_playbook")]
                         if let Some(replacement) = a.replacement() {
                             let mut connection = pool.acquire().await.map_err(db)?;
                             if replacement::pending_publication_owner(

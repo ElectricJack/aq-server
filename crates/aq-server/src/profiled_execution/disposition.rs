@@ -256,10 +256,7 @@ async fn settle_closed(
     let (pool, mc) = (&state.store.pool, crate::machine_api::mapped);
     let retention = state.source_retention.as_deref();
     let socket = retention.map(|r| r.config.git_socket.as_path());
-    #[cfg(feature = "delivery_playbook")]
     let head = aq_delivery::git_grant::granted_ref_head(pool, socket, attempt).await;
-    #[cfg(not(feature = "delivery_playbook"))]
-    let head = socket.and(None);
     let actor = (actor.id, actor.email);
     let a = Attestation::new(r.operation_id, r.reason, project, actor, head);
     admit(pool, attempt, &a).await.map_err(mc)?;

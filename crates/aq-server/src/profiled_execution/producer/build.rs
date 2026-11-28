@@ -42,7 +42,6 @@ pub struct Built {
     pub supports_git_author: bool,
     pub workspace: crate::task_workspace_resume::Scope,
     /// Spec 0016 §5.2: recorded with the attempt and served by `/v1/git/grants`.
-    #[cfg(feature = "delivery_playbook")]
     pub git: Option<aq_delivery::git_grant::GitGrant>,
 }
 fn scope(p: &aq_session_api::Permission) -> Result<wire::Scope, AppError> {
@@ -312,7 +311,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         &canonical(&(decision.decision_id, node, generation))?,
     );
     // The persisted grant and the review requirement are published together.
-    #[cfg(feature = "delivery_playbook")]
     let git = if enrolled {
         Some(super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?)
     } else {
@@ -749,7 +747,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         deadline,
         supports_git_author,
         workspace: workspace.clone(),
-        #[cfg(feature = "delivery_playbook")]
         git,
     })
 }

@@ -28,7 +28,7 @@ where
     O: FromRequestParts<S> + Into<Uuid> + Send + 'static,
     E: From<Error> + IntoResponse + 'static,
 {
-    let routes = Router::new()
+    Router::new()
         .route(
             "/api/playbooks/sources",
             get(list::<S, O, E>).post(register::<S, O, E>),
@@ -46,16 +46,13 @@ where
             "/api/playbooks/sources/{id}/rollback",
             post(rollback::<S, O, E>),
         )
-        .layer(DefaultBodyLimit::max(BODY_BYTES));
-    #[cfg(feature = "delivery_playbook")]
-    let routes = routes.route(
-        "/api/playbooks/sources/routing/recompile",
-        post(recompile_routing::<S, O, E>),
-    );
-    routes
+        .layer(DefaultBodyLimit::max(BODY_BYTES))
+        .route(
+            "/api/playbooks/sources/routing/recompile",
+            post(recompile_routing::<S, O, E>),
+        )
 }
 
-#[cfg(feature = "delivery_playbook")]
 async fn recompile_routing<S: Server, O: Into<Uuid>, E: From<Error>>(
     State(s): State<S>,
     owner: O,

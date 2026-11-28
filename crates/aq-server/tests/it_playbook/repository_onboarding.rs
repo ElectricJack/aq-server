@@ -210,7 +210,6 @@ async fn rows(o: &Onboarding) -> i64 {
         .await
         .unwrap()
 }
-#[cfg(feature = "delivery_playbook")]
 async fn delivery_target(
     o: &Onboarding,
     generation: u64,

@@ -6,7 +6,6 @@ publish = false
 description = "The AQ command registry (spec 0006 §4): command specs, per-principal dispatch, discovery, commands.json and the route classification"
 
 [features]
-delivery_playbook = []
 # Supervisors get full access (owner scope and registry); off by default.
 supervisor_full_access = []
 # Spec 0017: the agent's `environment.try` commands. Off by default.
