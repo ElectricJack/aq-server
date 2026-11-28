@@ -264,13 +264,8 @@ mod tests {
     }
 
     /// Spec 0017: catalog 2.5.0 adds the environment commands and the base
-<<<<<<< HEAD
-    /// event, and keeps every 2.7.0 contract the record used.
-    #[cfg(feature = "project_environments")]
-=======
     /// event, and keeps every 2.8.0 contract the record used.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
->>>>>>> refs/remotes/central/main
+    #[cfg(feature = "project_environments")]
     #[test]
     fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
         let record = delivery(true);

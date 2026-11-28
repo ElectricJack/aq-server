@@ -270,13 +270,8 @@ impl Service {
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
     /// those of its latest result, for a task of any bound project. The 2.6.0
     /// and 2.7.0 ones add the task's acceptance criteria and the result's
-<<<<<<< HEAD
-    /// conclusion (2.7.0's up to 4096 bytes).
-=======
     /// conclusion (2.7.0's up to 4096 bytes), and 2.8.0's adds the head the
     /// pull request's checks were evaluated on.
-    #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,
