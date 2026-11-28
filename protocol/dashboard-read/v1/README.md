@@ -193,6 +193,11 @@ Its message is `Project <id>: <n> task(s) held (<reason code> <count>, ...)`. It
 exactly the tasks whose work view shows a `task_held` reason (human-graph-1): both read the
 same current holds. A hold clears when the task gets a new attempt, its claim is released,
 or AQ observes it closed or retired in Graph (its work view, or a sweep every 10 minutes).
+`launch_overdue` (`waiting.reasons` only) names one granted attempt whose agent did not start
+within the launch deadline (Settings › Selection defaults `launch_deadline_ms`, from the grant)
+or before its grant expired: `Launch overdue on <node name>: task <title> has not started its
+agent (attempt <id>)`. It shows until the server ends the attempt as not started (fenced, so it
+can never start later) and releases its task for another node, within one settlement sweep.
 Each hold is named in one system comment.
 A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.

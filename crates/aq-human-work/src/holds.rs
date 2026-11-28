@@ -398,6 +398,32 @@ pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Optio
     )
 }
 
+/// A granted attempt whose agent has not started within its launch deadline (Settings ›
+/// Selection defaults `launch_deadline_ms`), or whose grant expired first: "launch overdue on
+/// <node>" until the server ends it as not started and offers the task again.
+pub async fn launch_overdue_wait(pool: &PgPool, hold: &Hold, now_ms: i64) -> Option<Value> {
+    if !matches!(hold.status.as_str(), "granted" | "cancelling") || hold.stopped {
+        return None;
+    }
+    let mut conn = pool.acquire().await.ok()?;
+    let settings = aq_role_settings::selection_defaults(&mut conn).await.ok()?;
+    let deadline = settings.launch_deadline_ms;
+    let overdue =
+        aq_machine_control::lapse::overdue_attempt(&mut conn, hold.attempt_id, now_ms, deadline);
+    let overdue = overdue.await.ok()??;
+    Some(launch_overdue_reason(&overdue))
+}
+
+pub(crate) fn launch_overdue_reason(o: &aq_machine_control::lapse::Overdue) -> Value {
+    let node: String = o.node_name.chars().take(128).collect();
+    let message = format!(
+        "Launch overdue on {node}: the agent has not started within its launch deadline. AQ ends the attempt as not started, so it can never start later, and offers the task to another node."
+    );
+    json!({"code":"launch_overdue","attempt_id":o.attempt_id,"node_id":o.node_id,
+        "blocker_owner":"aq_scheduler","wake_condition":"launch_overdue_settlement",
+        "message":message})
+}
+
 /// The derived wake for repeated worker interruptions or verified nonstarts.
 pub async fn launch_retry_wait(pool: &PgPool, task: Uuid, now_ms: i64) -> Option<Value> {
     use aq_profiled_state::{replacement, replacement_sql};

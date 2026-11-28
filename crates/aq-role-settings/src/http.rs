@@ -161,9 +161,10 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
             let settings = store::settings(pool).await?;
             let mut defaults =
                 serde_json::to_value(&settings.selection_defaults).map_err(|_| Error::Internal)?;
-            // A default-valued backoff can be absent in the stored document.
+            // A default-valued backoff or launch deadline can be absent in the stored document.
             defaults["launch_retry_backoff"] =
                 json!(settings.selection_defaults.launch_retry_backoff);
+            defaults["launch_deadline_ms"] = json!(settings.selection_defaults.launch_deadline_ms);
             Ok(json!({
                 "revision": settings.selection_defaults_revision.to_string(),
                 "selection_defaults": defaults,

@@ -79,7 +79,31 @@ fn hold_text(code: HoldCode) -> (&'static str, Option<&'static str>) {
             "Tasks are held",
             Some("Open a held task to see how it can resume"),
         ),
+        LaunchOverdue => (
+            "Launch overdue",
+            Some("AQ ends the attempt as not started and offers its task to another node"),
+        ),
     }
+}
+
+/// One reason per granted attempt whose agent did not start within its launch deadline:
+/// `Launch overdue on <node>: task <title> has not started its agent`.
+pub fn launch_overdue_reasons(overdue: &[aq_machine_control::lapse::Overdue]) -> Vec<HoldReason> {
+    (overdue.iter())
+        .map(|o| {
+            let mut reason = hold(HoldCode::LaunchOverdue);
+            let node: String = o.node_name.chars().take(128).collect();
+            let task: String = crate::agents::title_or_id(o.task_id)
+                .chars()
+                .take(256)
+                .collect();
+            reason.message = format!(
+                "Launch overdue on {node}: task {task} has not started its agent (attempt {})",
+                o.attempt_id
+            );
+            reason
+        })
+        .collect()
 }
 
 /// R6: one reason per project with held tasks, counted by hold reason code.

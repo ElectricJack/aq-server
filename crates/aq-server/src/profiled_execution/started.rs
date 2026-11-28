@@ -146,6 +146,17 @@ pub async fn record(
     // never compared to wall time or used to extend a central execution lease.
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| conflict())?;
     view.active_at(now)?;
+    // Past its launch deadline an attempt whose agent has not started is ended by the server
+    // as not started (`closure::settlement`); from that instant on it may not start.
+    let launch_deadline = super::closure::settlement::launch_deadline_ms(&mut tx).await?;
+    let attempt = request.binding.attempt_id;
+    let overdue =
+        aq_machine_control::lapse::launch_overdue(&mut tx, attempt, now as i64, launch_deadline);
+    if overdue.await.map_err(crate::machine_api::mapped)? {
+        return Err(AppError::Conflict(format!(
+            "the launch deadline ({launch_deadline} ms after the grant) passed before the agent started; the server ends this attempt as not started"
+        )));
+    }
     let authority_revision = row
         .get::<i64, _>("authority_revision")
         .checked_add(1)

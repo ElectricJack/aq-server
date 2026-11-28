@@ -150,6 +150,7 @@ The selection policy has one set of defaults for all profiles
 | `max_wake_lineage_elapsed_ms` | `86400000`: time since a task's first offer within which a waiting session is still woken (defaults only) |
 | `max_never_granted_offers` | `8`: offers of a task that may expire without ever being granted before the task is held (defaults only) |
 | `launch_retry_backoff` | `{"initial_delay_ms": 30000, "max_delay_ms": 300000}` (defaults only) |
+| `launch_deadline_ms` | `300000`: time after its grant within which a granted attempt's agent must start; past it the server ends the attempt as not started and offers its task again (defaults only, current Settings apply) |
 
 `max_attempts` and `max_uncharged_continuations` are a task's retry budget.
 Each attempt has its own time window, the execution profile's `wall_time_ms`;

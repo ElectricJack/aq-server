@@ -817,7 +817,7 @@ mod never_started {
         );
         let refused = abandon(&c).await;
         assert!(
-            refused.contains("may still start until its grant expires at")
+            refused.contains("may still start until its launch deadline or grant expiry at")
                 && refused.contains("granted_never_started"),
             "{refused}"
         );
@@ -883,6 +883,138 @@ mod never_started {
         );
         assert!(started_owner::record(state, &auth, &late).await.is_err());
         assert_eq!(released, 1);
+    }
+
+    /// The grant instant and grant expiry of the case's attempt (server milliseconds).
+    async fn granted(c: &Prepared) -> (i64, i64) {
+        sqlx::query_as(
+            "SELECT (h.state->>'execution_deadline_ms')::BIGINT\
+             -(a.state#>>'{offer,manifest,resources,wall_time_ms}')::BIGINT,\
+             (h.state#>>'{grant,expires_at_ms}')::BIGINT FROM execution_attempts a \
+             JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1",
+        )
+        .bind(c.request.binding.attempt_id)
+        .fetch_one(&c.case.env.env.pool)
+        .await
+        .unwrap()
+    }
+    async fn overdue_wait(c: &Prepared) -> Option<serde_json::Value> {
+        let pool = &c.case.env.env.pool;
+        let attempt = serde_json::json!(c.request.binding.attempt_id);
+        let hold = aq_human_work::attempt_hold(pool, &attempt).await.unwrap()?;
+        let now = (c.case.env.env.state.clock)().timestamp_millis();
+        aq_human_work::launch_overdue_wait(pool, &hold, now).await
+    }
+
+    /// The node accepts the grant and never starts the agent (incident 2026-11-28): past the
+    /// launch deadline (a Setting) readiness and the swarm show the overdue launch, a Started
+    /// report is refused, the settlement sweep ends the attempt as not started and fenced, and
+    /// its task is released and offered again, long before the grant would have expired.
+    #[tokio::test]
+    async fn a_granted_agent_that_never_starts_is_ended_at_its_launch_deadline_and_reoffered() {
+        const DEADLINE: u64 = 1_000;
+        let mut c = closure::setup().await;
+        let r = request(&c).await;
+        // Settings › Selection defaults: the launch deadline applies at once, as the owner set it.
+        common::native_offer::pin_policy(&mut c.case, |d| d.launch_deadline_ms = DEADLINE).await;
+        let (state, pool) = (&c.case.env.env.state, &c.case.env.env.pool);
+        let (attempt, node) = (r.binding.attempt_id, c.case.env.env.node);
+        let (granted_at, expires) = granted(&c).await;
+        assert!(
+            granted_at + (DEADLINE as i64) < expires,
+            "the grant outlives the deadline"
+        );
+        // Within the launch deadline it may still start: nothing is overdue or closed.
+        c.clock
+            .store(granted_at + DEADLINE as i64 - 1, Ordering::SeqCst);
+        assert!(overdue_wait(&c).await.is_none());
+        assert_eq!(settle(&c).await, ClosureSettlement::Unchanged);
+        assert!(held(&c).await);
+        // Past it: readiness and the swarm show "launch overdue on <node>" before it is ended.
+        let now = granted_at + DEADLINE as i64;
+        c.clock.store(now, Ordering::SeqCst);
+        let shown = overdue_wait(&c).await.expect("the overdue launch is shown");
+        assert_eq!(shown["code"], "launch_overdue");
+        assert_eq!(shown["attempt_id"], serde_json::json!(attempt));
+        assert_eq!(shown["node_id"], serde_json::json!(node));
+        assert!(
+            shown["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Launch overdue on "),
+            "{shown}"
+        );
+        let mut conn = pool.acquire().await.unwrap();
+        let nodes = [node];
+        let on_nodes = aq_machine_control::lapse::overdue_on(&mut conn, &nodes, now, DEADLINE);
+        let on_nodes = on_nodes.await.unwrap();
+        drop(conn);
+        assert_eq!(on_nodes.len(), 1);
+        assert_eq!(
+            (on_nodes[0].attempt_id, on_nodes[0].node_id),
+            (attempt, node)
+        );
+        assert!(on_nodes[0].headline().starts_with("Launch overdue on "));
+        // From this instant on the original attempt cannot start ...
+        let auth = closure::auth(&c).await;
+        let late = started(&r, c.request.journal_revision);
+        let refused = started_owner::record(state, &auth, &late)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{refused:?}").contains("launch deadline"),
+            "{refused:?}"
+        );
+        assert_eq!(stop_kind(&c).await, "unknown");
+        // ... and the settlement sweep ends it as not started on the server's own evidence,
+        // fenced (revoked and finished), and releases its task claim.
+        let progress = ClosureSweep::default().tick(state).await.unwrap();
+        assert_eq!((progress.inspected, progress.closed), (1, 1));
+        assert!(!held(&c).await, "the task claim is released");
+        let hot: serde_json::Value =
+            sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+                .bind(attempt)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(hot["status"], "finished");
+        assert_eq!(hot["revoked"], true);
+        assert_eq!(hot["stop"]["kind"], "not_started");
+        assert_eq!(
+            hot["stop"]["receipt"]["id"],
+            format!("aq.granted-never-started/{attempt}")
+        );
+        assert!(
+            overdue_wait(&c).await.is_none(),
+            "no longer overdue once ended"
+        );
+        assert!(started_owner::record(state, &auth, &late).await.is_err());
+        // The task is replaceable at once and is offered to the next polling node.
+        let task: Uuid =
+            sqlx::query_scalar("SELECT task_id FROM execution_attempts WHERE attempt_id=$1")
+                .bind(attempt)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let assessed = replacement::assess_task(state, task, now as u64)
+            .await
+            .unwrap();
+        let replace = assessed.replacement().expect("{assessed:?}");
+        assert_eq!(replace.predecessor, attempt);
+        let (status, body) = common::native_offer::poll_offered(&c.case).await;
+        assert_eq!(status, 200, "{body}");
+        let offers = body["body"]["offers"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(offers.len(), 1, "{body}");
+        let successor = &offers[0]["offered"]["offer"]["binding"];
+        assert_ne!(successor["attempt_id"], serde_json::json!(attempt));
+        assert_eq!(
+            offers[0]["offered"]["offer"]["manifest"]["bindings"]["task_id"],
+            serde_json::json!(task),
+            "{body}"
+        );
     }
 
     #[tokio::test]

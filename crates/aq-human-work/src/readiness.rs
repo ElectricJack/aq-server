@@ -53,7 +53,11 @@ pub fn readiness(
     let closed_launch = held.iter().any(|reason| {
         matches!(
             reason["code"].as_str(),
-            Some("closure_does_not_prove_nonstart" | "closed_launch_settlement_pending")
+            Some(
+                "closure_does_not_prove_nonstart"
+                    | "closed_launch_settlement_pending"
+                    | "launch_overdue"
+            )
         )
     });
     let running = !closed_launch && hold.is_some_and(Hold::running);

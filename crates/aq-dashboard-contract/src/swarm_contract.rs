@@ -308,6 +308,8 @@ pub enum HoldCode {
     HistoryCapReached,
     // R6: a project has tasks a server-side hold keeps from being offered.
     TasksHeld,
+    // A granted attempt's agent did not start within its launch deadline (`waiting.reasons`).
+    LaunchOverdue,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

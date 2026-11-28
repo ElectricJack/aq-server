@@ -117,6 +117,7 @@ fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
         agents: Vec::new(),
         history: Vec::new(),
         task_holds: Vec::new(),
+        launch_overdue: Vec::new(),
     }
 }
 fn extra(n: u128, measurement: Option<HoldCode>) -> NodeExtra {
