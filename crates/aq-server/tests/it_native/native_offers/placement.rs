@@ -1,7 +1,9 @@
 //! Owner request 2026-11-24: changing which nodes may run a project (`allowed_node_ids`,
 //! `allow_enrolled_nodes`, `allowed_worker_groups`) does not strand its held tickets. After
 //! placement edits or an additive environment allow-list change, a failed attempt's replacement
-//! continues from its retained commit under the current binding. Other changes hold it with
+//! continues from its retained commit under the current binding, as it does after a change of
+//! which other projects' tasks may share this one's workspace (`workspace.share.*` entries
+//! scoped to another project). Other changes hold it with
 //! `replacement_project_revision_changed`. The actual mounted poll,
 //! export admission and publication run; the failure owner facts are synthetic.
 use crate::common::native_offer::{Case, assembled, fail_and_release, poll, poll_offered, setup};
@@ -155,6 +157,56 @@ async fn a_ceiling_change_still_holds_the_replacement() {
     })
     .await;
     assert!(replaces(&assess(&c, revision).await, predecessor));
+}
+
+/// A cross-project workspace grant: what the target project's owner adds to its ceilings.
+fn share(operation: &str, home: Uuid) -> Value {
+    json!({"operation": operation, "scope_reference": format!("project:{home}")})
+}
+
+#[tokio::test]
+async fn a_workspace_share_for_another_project_does_not_hold_the_replacement() {
+    let (c, predecessor) = failed().await;
+    let home = Uuid::new_v4();
+    let granted = edit(&c, |b| {
+        let permissions = b["ceilings"]["permissions"].as_array_mut().unwrap();
+        permissions.push(share("workspace.share.read", home));
+        permissions.push(share("workspace.share.request", home));
+    })
+    .await;
+    assert!(replaces(&assess(&c, granted).await, predecessor));
+    // Removing one, and adding a write grant for another project, change nothing either.
+    let changed = edit(&c, |b| {
+        let permissions = b["ceilings"]["permissions"].as_array_mut().unwrap();
+        permissions.retain(|p| p["operation"] != "workspace.share.request");
+        permissions.push(share("workspace.share.write", Uuid::new_v4()));
+    })
+    .await;
+    assert!(replaces(&assess(&c, changed).await, predecessor));
+    let next = offered(&c).await;
+    continues(&c, predecessor, next, changed).await;
+}
+
+#[tokio::test]
+async fn other_permission_changes_still_hold_the_replacement() {
+    let (c, _) = failed().await;
+    let home = Uuid::new_v4();
+    // The project's own scope, another operation for another project, and a share
+    // that is not scoped to a project are all part of how its tasks run.
+    for permission in [
+        share("workspace.share.read", c.env.lineage.project_id),
+        share("task.read", home),
+        json!({"operation": "workspace.share.read", "scope_reference": "task:any"}),
+    ] {
+        let revision = edit(&c, |b| {
+            b["ceilings"]["permissions"]
+                .as_array_mut()
+                .unwrap()
+                .push(permission.clone());
+        })
+        .await;
+        assert_eq!(assess(&c, revision).await, Assessment::Blocked(HOLD));
+    }
 }
 
 #[tokio::test]

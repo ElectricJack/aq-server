@@ -248,10 +248,29 @@ pub const PLACEMENT_FIELDS: [&str; 3] = [
     "allowed_worker_groups",
 ];
 
+/// SQL for `binding` (a jsonb expression of the project `e.project_id`) without the
+/// cross-project workspace grants in `ceilings.permissions`: `workspace.share.read`,
+/// `workspace.share.write` and `workspace.share.request` entries whose `scope_reference` is
+/// `project:<another project>`. Such an entry decides what other projects' tasks may read of
+/// this repository and changes nothing about how this project's own tasks run. Every other
+/// permission keeps its place, so any other ceilings change still differs.
+fn without_workspace_shares(binding: &str) -> String {
+    format!(
+        "(CASE WHEN jsonb_typeof({binding}#>'{{ceilings,permissions}}')='array' THEN jsonb_set({binding},'{{ceilings,permissions}}',\
+           COALESCE((SELECT jsonb_agg(r.perm ORDER BY r.ord) \
+                     FROM jsonb_array_elements({binding}#>'{{ceilings,permissions}}') WITH ORDINALITY AS r(perm,ord) \
+                     WHERE (r.perm->>'operation' IN ('workspace.share.read','workspace.share.write','workspace.share.request') \
+                                AND r.perm->>'scope_reference' LIKE 'project:%' \
+                                AND r.perm->>'scope_reference' <> 'project:' || e.project_id::text) IS NOT TRUE),'[]'::jsonb)) \
+         ELSE {binding} END)"
+    )
+}
+
 /// Compare the export's pinned binding to the current project binding. Node
-/// placement can change and the environment allow-list can grow. The next
-/// offer still resolves and validates its environment under current policy.
-/// All other fields stay exact. Missing export or historical binding refuses.
+/// placement can change, the environment allow-list can grow, and workspace
+/// grants to other projects can change. The next offer still resolves and
+/// validates its environment under current policy. All other fields stay
+/// exact. Missing export or historical binding refuses.
 pub async fn pinned_binding_current<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
     attempt: uuid::Uuid,
@@ -259,10 +278,12 @@ pub async fn pinned_binding_current<'e>(
 ) -> Result<bool, aq_machine_control::Error> {
     let revision = i64::try_from(project_revision)
         .map_err(|_| aq_machine_control::Error::Invalid("project revision"))?;
-    let current: Option<Option<bool>> = sqlx::query_scalar(
+    let pinned_binding = without_workspace_shares("(h.record->'binding')");
+    let current_binding = without_workspace_shares("b.binding");
+    let current: Option<Option<bool>> = sqlx::query_scalar(&format!(
         "SELECT p.revision=b.revision OR (
-           (h.record->'binding') - ($3::text[] || ARRAY['allowed_environments'])
-                = b.binding - ($3::text[] || ARRAY['allowed_environments'])
+           {pinned_binding} - ($3::text[] || ARRAY['allowed_environments'])
+                = {current_binding} - ($3::text[] || ARRAY['allowed_environments'])
            AND (pinned.environments IS NOT DISTINCT FROM current.environments
              OR (jsonb_typeof(pinned.environments)='array' AND jsonb_typeof(current.environments)='array'
                  AND current.environments @> pinned.environments))
@@ -271,10 +292,10 @@ pub async fn pinned_binding_current<'e>(
          JOIN project_execution_bindings b ON b.project_id=e.project_id AND b.revision=$2
          CROSS JOIN LATERAL (SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT AS revision) p
          LEFT JOIN project_execution_binding_history h ON h.project_id=e.project_id AND h.revision=p.revision
-         CROSS JOIN LATERAL (SELECT h.record#>'{binding,allowed_environments}' AS environments) pinned
+         CROSS JOIN LATERAL (SELECT h.record#>'{{binding,allowed_environments}}' AS environments) pinned
          CROSS JOIN LATERAL (SELECT b.binding->'allowed_environments' AS environments) current
-         WHERE x.attempt_id=$1",
-    )
+         WHERE x.attempt_id=$1"
+    ))
     .bind(attempt)
     .bind(revision)
     .bind(&PLACEMENT_FIELDS[..])
