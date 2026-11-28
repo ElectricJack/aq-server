@@ -273,7 +273,6 @@ mod tests {
     /// the delivery record's catalog 2.9.0, and the document's cases run as
     /// written. Catalog 2.8.0 has no such fact, and its `checks_head` cannot be
     /// referenced through the nullable `pull_request`.
-    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_failed_checks_head_rule_checks_on_catalog_2_9_0() {
         use serde_json::{Value, json};
@@ -290,7 +289,7 @@ mod tests {
             serde_json::from_str(&fenced("\n```json\n", "\n```\n")).unwrap();
         let rule = fenced("\n````markdown\n", "\n````\n");
         assert!(rule.contains("failed_checks_head") && !rule.contains("pull_request."));
-        const DIR: &str = "../../vendor/aq-playbooks-c744301/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
+        const DIR: &str = "../../vendor/aq-playbooks-8901af1/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
         let read = |name: &str| std::fs::read_to_string(format!("{root}/{DIR}/{name}")).unwrap();
         let mut draft: Value = serde_json::from_str(&read("draft.json")).unwrap();
         assert_eq!(draft["steps"]["read"]["edges"]["observed"], "publish");
@@ -434,13 +433,8 @@ mod tests {
     }
 
     /// Spec 0017: catalog 2.5.0 adds the environment commands and the base
-<<<<<<< HEAD
     /// event, and keeps every 2.9.0 contract the record used.
-    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-=======
-    /// event, and keeps every 2.8.0 contract the record used.
     #[cfg(feature = "project_environments")]
->>>>>>> refs/remotes/central/main
     #[test]
     fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
         let record = delivery(true);
